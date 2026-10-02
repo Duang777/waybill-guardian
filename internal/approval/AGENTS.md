@@ -2,39 +2,47 @@
 
 ## 职责
 
-人工确认闸。**所有写操作（改派 / 赔付 / 通知）在真正执行前必须经过这里**，
-这是本项目区别于"普通客服 Agent"的核心，也是评委必问 Q2（"怎么防 Agent 改错"）的正面回答。
+人工审批状态机和事件投影。改派、赔付和通知在执行前都必须有 confirmed 审批。
 
 ## 状态机
 
 ```
 pending → confirmed → executed
-   ├────→ rejected（需填写驳回原因）
-   └────→ expired（超时未处理，默认拒绝；超时时长可配，演示用 10 分钟）
+   ├────→ rejected
+   └────→ expired
 ```
 
-## 审批单字段
+`rejected` 需要非空原因。`expired` 由系统产生，并按 reject resolution 恢复 Agent。
+审批有效期通过 `APPROVAL_TTL` 配置，默认 10 分钟。
 
-- `id` / `run_id`（关联哪次 agent run）/ `waybill_id`
-- `action`：reassign / create_claim / send_sms
-- `params`：完整写操作参数（含 `idempotency_key`，审批通过后原样放行）
-- `reason`：agent 生成的处置理由（展示给审批人）
-- `evidence`：归因证据链摘要（轨迹异常点、司机状态、天气结论）
-- `status` / `decided_by` / `decided_at` / `reject_reason`
+## 审批单
 
-## 设计决策
+一次 hastekit pause 中的所有写调用组成一个不可变审批批次。主要字段包括：
 
-- **同步阻塞而非事后审计**：写操作先挂起，agent run 等待；确认后才真正调用 platform。
-  事后审计拦不住已经发出的改派指令 —— 这句话就是 Q2 的答案。
-- **审批单携带完整证据链**：审批人（演示时是评委）在卡片上能看到"为什么这么判"，
-  而不是盲点确认。
-- **默认拒绝**：超时未处理按拒绝计，避免"没人看就自动执行"的灾难。
-- 与 hastekit HITL 的关系：若 SDK 的 HITL 支持持久化 pause/resume，直接对接；
-  若只是同步回调，则本状态机为权威（审批单落盘，run 挂起等待，前端确认后恢复）。
-  结论待源码验证后记到 `internal/agent/AGENTS.md`。
+- `id`、`run_id`、`sdk_run_id`、`waybill_id` 和 `plan_version`。
+- `items[]`：`call_id`、action、wire name、完整参数、参数哈希和幂等键。
+- `reason` 和 `evidence`。
+- `status`、`requested_at`、`expires_at`、`decided_by`、`decided_at` 和 `reject_reason`。
 
-## TODO
+审批 ID 从 `run_id` 和排序后的 `call_id` 派生。重复创建同一个批次时，store 返回已有审批。
 
-- [ ] 审批单存储（初期内存 + JSONL 落盘，后续 SQLite）
-- [ ] 与 agent middleware 的对接：挂起 / 恢复 / 驳回三条路径
-- [ ] SSE 推送新审批单到前端（`cmd/server` 配合）
+## 持久化和并发
+
+审批 store 不维护独立文件。它把 `approval_requested`、`approval_decided` 和
+`approval_executed` 追加到 `internal/audit` 的 run JSONL，并在启动时重建内存投影。
+
+`guardian.Service` 按 run 串行决定和恢复。相同决定重复提交时返回当前状态，相反决定返回
+`ErrDecisionConflict`。确认、驳回和过期定时器竞争同一个 run 锁，因此只会有一种决定落盘。
+
+## 与 hastekit 的关系
+
+hastekit v0.0.24 会在 `RequiresApproval` 工具执行前持久化 pending calls 并暂停 run。
+人工决定先写入业务日志，`guardian` 再用同一个 namespace、thread 和 SDK run ID 提交
+approve 或 reject resolution。
+
+确认后，`ApprovalGuard` 还会比较 `call_id` 和参数哈希。只有完整匹配审批批次的写调用才能
+进入幂等 middleware。所有 effect 成功后，状态才变为 `executed`。
+
+## 验证
+
+测试覆盖合法迁移、非法跳转、重复决定、驳回原因、超时、参数绑定、恢复和已成功 effect 对账。

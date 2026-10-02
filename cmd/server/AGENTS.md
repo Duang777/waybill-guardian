@@ -2,34 +2,44 @@
 
 ## 职责
 
-HTTP + SSE 服务入口。薄层：只做协议转换与事件推送，业务逻辑全部下沉到 `internal/`。
+HTTP 和 SSE 服务入口。handler 只做请求校验、协议转换和错误映射。业务流程由
+`internal/guardian.Service` 协调。
 
 ## 端点设计
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/demo/trigger` | 触发演示剧本（杭州→成都延误运单），启动一次 agent run |
-| GET | `/api/runs/:id/timeline` | SSE：推送审计事件与审批请求 |
-| POST | `/api/approvals/:id/confirm` | 人工确认（改派 / 赔付 / 通知） |
-| POST | `/api/approvals/:id/reject` | 人工驳回（需填写原因，记入审计） |
-| GET | `/api/waybills/:id` | 运单详情（供前端地图初渲染） |
+| GET | `/healthz` | 健康检查，返回 200 |
+| POST | `/api/demo/trigger` | 启动杭州到成都演示 run，返回 202 |
+| GET | `/api/runs/:id/timeline` | 先回放再推送审计事件 |
+| POST | `/api/approvals/:id/confirm` | 记录确认并恢复 run，返回 202 |
+| POST | `/api/approvals/:id/reject` | 记录驳回原因并恢复 run，返回 202 |
+| GET | `/api/waybills/:id` | 返回运单、轨迹、司机、天气和风险数据 |
 
 ## 设计决策
 
-- **SSE 而非 WebSocket**：事件流单向（server→web），SSE 足够且断线重连简单；审批确认走普通 POST。
-- **无状态**：审批状态在 `internal/approval`，审计在 `internal/audit`；server 重启不丢状态（TODO：approval/audit 落盘后）。
-- 演示触发端点与真实异常接入端点分离：初赛先跑剧本，`platform` adapter 就绪后把真实异常 webhook 接到同一 run 启动逻辑。
+- 时间线是单向事件流，因此使用 SSE。审批决定使用普通 POST。
+- SSE 帧的 `id` 等于持久化事件的 `seq`。客户端发送 `Last-Event-ID` 后，服务端回放所有
+  `seq > cursor` 的事件，再继续推送 live 事件。
+- 服务端每 15 秒发送无 ID 的 heartbeat。慢订阅者会断开，客户端随后按游标恢复。
+- handler 不持有审批或审计状态。服务重启时，`guardian.Recover` 从 JSONL 和 hastekit
+  file history 恢复可证明安全的状态。
+- 请求返回后，已经接受的 run 使用服务生命周期 context 继续执行。浏览器断开不会取消 run。
 
-## hastekit 接线点
+## 请求约束
 
-- server 持有 `internal/agent` 构建的 agent 实例；`/api/demo/trigger` 创建 run 并返回 run_id。
-- agent 的流式事件 → 转写为 `internal/audit` 事件 → SSE 推送。
+- confirm 请求体必须为空。重复 confirm 返回当前决定或执行结果，不会重复调用 platform。
+- reject 请求体为 `{"reason":"..."}`，拒绝未知字段，且 `reason` 不能为空。
+- `X-Actor` 可指定审批人；缺省值为 `demo-reviewer`。
+- 非数字 `Last-Event-ID` 返回 400。游标超过当前末尾返回 409。
+- 错误响应统一为 `{"error":{"code":"...","message":"..."}}`。
 
-## 参考方案
+## 启动配置
 
-- `logistics-tracker` 的 `backend/simulator.js`：用"定时推送模拟位置"的思路做 SSE 事件推送（仅思路，未复制代码）。
+`main.go` 读取 `HTTP_ADDR`、`DATA_DIR`、`APPROVAL_TTL`、`DEMO_STEP_DELAY`、`PLATFORM` 和
+Agent 模型变量。`PLATFORM=real` 在真实 adapter 未实现时返回启动错误。
 
-## TODO
+## 验证
 
-- [ ] 审批确认接口的幂等（前端重复点击只产生一次 confirm）
-- [ ] SSE 断线续传（Last-Event-ID → audit 回放补齐）
+`http_test.go` 覆盖触发、确认、驳回、错误映射、重复决定、SSE 游标续传和
+`PLATFORM=real` fail-fast。
