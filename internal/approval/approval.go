@@ -57,7 +57,9 @@ type Item struct {
 type Approval struct {
 	ID           domain.ApprovalID `json:"id"`
 	RunID        domain.RunID      `json:"run_id"`
+	SDKRunID     string            `json:"sdk_run_id"`
 	WaybillID    domain.WaybillID  `json:"waybill_id"`
+	PlanVersion  int               `json:"plan_version"`
 	Items        []Item            `json:"items"`
 	Reason       string            `json:"reason"`
 	Evidence     []Evidence        `json:"evidence"`
@@ -243,6 +245,19 @@ func (s *Store) Get(id domain.ApprovalID) (Approval, error) {
 		return Approval{}, ErrNotFound
 	}
 	return clone(value), nil
+}
+
+func (s *Store) List() []Approval {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]Approval, 0, len(s.approvals))
+	for _, value := range s.approvals {
+		result = append(result, clone(value))
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].RequestedAt.Before(result[j].RequestedAt)
+	})
+	return result
 }
 
 func (s *Store) Allows(runID domain.RunID, callID, argumentsHash string) bool {
