@@ -113,3 +113,36 @@ func TestMissingAndConflictingKeysAreRejected(t *testing.T) {
 		t.Fatalf("conflict error = %v", err)
 	}
 }
+
+func TestSucceededMatchesDurableCommand(t *testing.T) {
+	journal, err := audit.Open(t.TempDir(), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := Command{
+		RunID:         "run-1",
+		CallID:        "call-1",
+		Action:        domain.ActionReassign,
+		Key:           "key-1",
+		ArgumentsHash: "args-hash",
+	}
+	if store.Succeeded(command) {
+		t.Fatal("missing command reported as succeeded")
+	}
+	if _, err := store.Execute(context.Background(), command, func(context.Context) (json.RawMessage, error) {
+		return json.RawMessage(`{"ok":true}`), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !store.Succeeded(command) {
+		t.Fatal("successful command was not found")
+	}
+	command.ArgumentsHash = "different"
+	if store.Succeeded(command) {
+		t.Fatal("mismatched command reported as succeeded")
+	}
+}

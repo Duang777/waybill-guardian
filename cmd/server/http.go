@@ -71,7 +71,7 @@ func (a *api) confirm(w http.ResponseWriter, r *http.Request) {
 		a.writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, value)
+	writeJSON(w, http.StatusAccepted, value)
 }
 
 func (a *api) reject(w http.ResponseWriter, r *http.Request) {
@@ -91,7 +91,7 @@ func (a *api) reject(w http.ResponseWriter, r *http.Request) {
 		a.writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, value)
+	writeJSON(w, http.StatusAccepted, value)
 }
 
 func (a *api) timeline(w http.ResponseWriter, r *http.Request) {

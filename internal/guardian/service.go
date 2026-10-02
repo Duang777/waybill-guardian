@@ -28,6 +28,7 @@ type Config struct {
 	Clock       func() time.Time
 	ApprovalTTL time.Duration
 	StepDelay   time.Duration
+	Model       agentkit.ModelConfig
 }
 
 type RunView struct {
@@ -73,12 +74,15 @@ type Service struct {
 	clients   platform.Clients
 	journal   *audit.Store
 	approvals *approval.Store
+	effects   *idempotency.Store
 	engine    *agentkit.Engine
 
-	mu    sync.Mutex
-	runs  map[domain.RunID]RunView
-	locks map[domain.RunID]*sync.Mutex
-	wg    sync.WaitGroup
+	mu     sync.Mutex
+	runs   map[domain.RunID]RunView
+	locks  map[domain.RunID]*sync.Mutex
+	timers map[domain.ApprovalID]chan struct{}
+	closed bool
+	wg     sync.WaitGroup
 }
 
 func Open(config Config) (*Service, error) {
@@ -124,6 +128,7 @@ func Open(config Config) (*Service, error) {
 		registry,
 		middlewares,
 		config.StepDelay,
+		config.Model,
 	)
 	if err != nil {
 		return nil, err
@@ -137,9 +142,11 @@ func Open(config Config) (*Service, error) {
 		clients:   config.Clients,
 		journal:   journal,
 		approvals: approvals,
+		effects:   idempotencyStore,
 		engine:    engine,
 		runs:      make(map[domain.RunID]RunView),
 		locks:     make(map[domain.RunID]*sync.Mutex),
+		timers:    make(map[domain.ApprovalID]chan struct{}),
 	}
 	if err := service.rebuildRuns(); err != nil {
 		_ = engine.Close()
@@ -222,6 +229,7 @@ func (s *Service) Decide(
 	if err != nil {
 		return approval.Approval{}, err
 	}
+	s.cancelExpiration(id)
 	if decided.Status == approval.StatusExecuted {
 		return decided, nil
 	}
@@ -231,29 +239,19 @@ func (s *Service) Decide(
 	}
 
 	approved := decided.Status == approval.StatusConfirmed
-	planVersion := decided.PlanVersion
-	if !approved {
-		planVersion++
+	runStatus := s.run(current.RunID).Status
+	if approved && isTerminal(runStatus) {
+		if runStatus == domain.RunCompleted && s.approvalEffectsSucceeded(decided) {
+			return s.approvals.MarkExecuted(ctx, id)
+		}
+		return approval.Approval{}, fmt.Errorf("cannot resume approval for terminal run %q", runStatus)
 	}
-	s.updateRunStatus(current.RunID, domain.RunExecuting)
-	outcome, err := s.engine.Resume(ctx, domain.RunContext{
-		RunID:       current.RunID,
-		IncidentID:  s.run(current.RunID).IncidentID,
-		WaybillID:   current.WaybillID,
-		PlanVersion: planVersion,
-	}, current.SDKRunID, interruptsFromApproval(current), approved)
+	result, err := s.resumeApproval(s.ctx, decided, approved)
 	if err != nil {
-		s.recordFailure(current.RunID, err)
+		s.recordFailure(decided.RunID, err)
 		return approval.Approval{}, err
 	}
-	if err := s.handleOutcome(ctx, s.run(current.RunID), planVersion, outcome, !approved); err != nil {
-		s.recordFailure(current.RunID, err)
-		return approval.Approval{}, err
-	}
-	if approved {
-		return s.approvals.MarkExecuted(ctx, id)
-	}
-	return decided, nil
+	return result, nil
 }
 
 func (s *Service) Timeline(
@@ -327,31 +325,243 @@ func (s *Service) GetWaybill(ctx context.Context, id domain.WaybillID) (WaybillV
 }
 
 func (s *Service) Recover(ctx context.Context) error {
-	expired, err := s.approvals.ExpireDue(ctx)
-	if err != nil {
-		return err
+	values := s.approvals.List()
+	latestPlan := make(map[domain.RunID]int)
+	runsWithApproval := make(map[domain.RunID]bool)
+	for _, value := range values {
+		runsWithApproval[value.RunID] = true
+		if value.PlanVersion > latestPlan[value.RunID] {
+			latestPlan[value.RunID] = value.PlanVersion
+		}
 	}
-	for _, value := range expired {
-		lock := s.lockFor(value.RunID)
+
+	for _, value := range values {
+		switch value.Status {
+		case approval.StatusPending:
+			if value.ExpiresAt.After(s.clock().UTC()) {
+				s.scheduleExpiration(value)
+				continue
+			}
+			if err := s.expireApproval(ctx, value.ID); err != nil {
+				return err
+			}
+		case approval.StatusConfirmed:
+			run := s.run(value.RunID)
+			if isTerminal(run.Status) {
+				if run.Status == domain.RunCompleted && s.approvalEffectsSucceeded(value) {
+					if _, err := s.approvals.MarkExecuted(ctx, value.ID); err != nil {
+						return err
+					}
+				} else if run.Status == domain.RunCompleted {
+					return fmt.Errorf("completed run %q has incomplete approval effects", run.RunID)
+				}
+				continue
+			}
+			if err := s.recoverDecision(value, true); err != nil {
+				return err
+			}
+		case approval.StatusRejected, approval.StatusExpired:
+			if value.PlanVersion < latestPlan[value.RunID] || isTerminal(s.run(value.RunID).Status) {
+				continue
+			}
+			if err := s.recoverDecision(value, false); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, run := range s.runSnapshot() {
+		if runsWithApproval[run.RunID] || isTerminal(run.Status) {
+			continue
+		}
+		lock := s.lockFor(run.RunID)
 		lock.Lock()
-		outcome, resumeErr := s.engine.Resume(ctx, domain.RunContext{
-			RunID:       value.RunID,
-			IncidentID:  s.run(value.RunID).IncidentID,
-			WaybillID:   value.WaybillID,
-			PlanVersion: value.PlanVersion + 1,
-		}, value.SDKRunID, interruptsFromApproval(value), false)
-		if resumeErr == nil {
-			resumeErr = s.handleOutcome(ctx, s.run(value.RunID), value.PlanVersion+1, outcome, true)
-		}
+		s.recordFailure(run.RunID, errors.New("run stopped before a durable approval checkpoint"))
 		lock.Unlock()
-		if resumeErr != nil {
-			return resumeErr
-		}
 	}
 	return nil
 }
 
+func (s *Service) recoverDecision(value approval.Approval, approved bool) error {
+	lock := s.lockFor(value.RunID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	current, err := s.approvals.Get(value.ID)
+	if err != nil {
+		return err
+	}
+	if !approved {
+		if current.Status != approval.StatusRejected && current.Status != approval.StatusExpired {
+			return nil
+		}
+	} else if current.Status != approval.StatusConfirmed {
+		return nil
+	}
+	if isTerminal(s.run(value.RunID).Status) {
+		if approved && s.run(value.RunID).Status == domain.RunCompleted &&
+			s.approvalEffectsSucceeded(current) {
+			_, err = s.approvals.MarkExecuted(s.ctx, current.ID)
+		}
+		return err
+	}
+	if _, err := s.resumeApproval(s.ctx, current, approved); err != nil {
+		if !errors.Is(err, context.Canceled) {
+			s.recordFailure(current.RunID, err)
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Service) resumeApproval(
+	ctx context.Context,
+	value approval.Approval,
+	approved bool,
+) (approval.Approval, error) {
+	planVersion := value.PlanVersion
+	if !approved {
+		planVersion++
+	}
+	s.updateRunStatus(value.RunID, domain.RunExecuting)
+	outcome, err := s.engine.Resume(ctx, domain.RunContext{
+		RunID:       value.RunID,
+		IncidentID:  s.run(value.RunID).IncidentID,
+		WaybillID:   value.WaybillID,
+		PlanVersion: planVersion,
+	}, value.SDKRunID, interruptsFromApproval(value), approved)
+	if err != nil {
+		return approval.Approval{}, err
+	}
+	if err := s.handleOutcome(ctx, s.run(value.RunID), planVersion, outcome, !approved); err != nil {
+		return approval.Approval{}, err
+	}
+	if approved {
+		return s.approvals.MarkExecuted(ctx, value.ID)
+	}
+	return value, nil
+}
+
+func (s *Service) expireApproval(ctx context.Context, id domain.ApprovalID) error {
+	current, err := s.approvals.Get(id)
+	if err != nil {
+		return err
+	}
+	lock := s.lockFor(current.RunID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	current, err = s.approvals.Get(id)
+	if err != nil {
+		return err
+	}
+	if current.Status != approval.StatusPending {
+		return nil
+	}
+	expired, err := s.approvals.Decide(ctx, id, approval.Decision{Kind: approval.DecisionExpire})
+	if err != nil {
+		return err
+	}
+	s.cancelExpiration(id)
+	if _, err := s.resumeApproval(s.ctx, expired, false); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) scheduleExpiration(value approval.Approval) {
+	if value.Status != approval.StatusPending {
+		return
+	}
+	cancel := make(chan struct{})
+	s.mu.Lock()
+	if s.closed || s.timers[value.ID] != nil {
+		s.mu.Unlock()
+		return
+	}
+	s.timers[value.ID] = cancel
+	s.wg.Add(1)
+	s.mu.Unlock()
+
+	delay := value.ExpiresAt.Sub(s.clock().UTC())
+	if delay < 0 {
+		delay = 0
+	}
+	go func() {
+		defer s.wg.Done()
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			s.removeExpiration(value.ID, cancel)
+			if err := s.expireApproval(s.ctx, value.ID); err != nil &&
+				!errors.Is(err, context.Canceled) {
+				s.recordFailure(value.RunID, err)
+			}
+		case <-cancel:
+		case <-s.ctx.Done():
+		}
+	}()
+}
+
+func (s *Service) cancelExpiration(id domain.ApprovalID) {
+	s.mu.Lock()
+	cancel := s.timers[id]
+	delete(s.timers, id)
+	s.mu.Unlock()
+	if cancel != nil {
+		close(cancel)
+	}
+}
+
+func (s *Service) removeExpiration(id domain.ApprovalID, cancel chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.timers[id] == cancel {
+		delete(s.timers, id)
+	}
+}
+
+func (s *Service) approvalEffectsSucceeded(value approval.Approval) bool {
+	if len(value.Items) == 0 {
+		return false
+	}
+	for _, item := range value.Items {
+		if !s.effects.Succeeded(idempotency.Command{
+			RunID:         value.RunID,
+			CallID:        item.CallID,
+			Action:        item.Action,
+			Key:           item.IdempotencyKey,
+			ArgumentsHash: item.ArgumentsHash,
+		}) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Service) runSnapshot() []RunView {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]RunView, 0, len(s.runs))
+	for _, run := range s.runs {
+		result = append(result, run)
+	}
+	return result
+}
+
+func isTerminal(status domain.RunStatus) bool {
+	return status == domain.RunCompleted || status == domain.RunRejected || status == domain.RunFailed
+}
+
 func (s *Service) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	s.mu.Unlock()
 	s.cancel()
 	s.wg.Wait()
 	return s.engine.Close()
@@ -457,7 +667,12 @@ func (s *Service) createApproval(
 		},
 		ExpiresAt: s.clock().UTC().Add(s.ttl),
 	}
-	return s.approvals.Create(ctx, value)
+	created, err := s.approvals.Create(ctx, value)
+	if err != nil {
+		return approval.Approval{}, err
+	}
+	s.scheduleExpiration(created)
+	return created, nil
 }
 
 func (s *Service) rebuildRuns() error {

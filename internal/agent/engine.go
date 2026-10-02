@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
@@ -13,14 +15,32 @@ import (
 	"github.com/hastekit/agent-sdk-go/pkg/agents"
 	"github.com/hastekit/agent-sdk-go/pkg/agents/agentstate"
 	"github.com/hastekit/agent-sdk-go/pkg/agents/history"
+	agentmiddleware "github.com/hastekit/agent-sdk-go/pkg/agents/middleware"
+	"github.com/hastekit/agent-sdk-go/pkg/gateway/llm"
 	"github.com/hastekit/agent-sdk-go/pkg/gateway/llm/responses"
 )
 
 const Namespace = "waybill-demo"
 
+const (
+	ModeDemo   = "demo"
+	ModeOnline = "online"
+
+	APIStyleResponses       = "responses"
+	APIStyleChatCompletions = "chat_completions"
+)
+
 const SystemPrompt = `你是物流异常处置专家。先读取运单、轨迹、司机和天气，再形成证据链。
 所有写操作必须携带系统可校验的 idempotency_key，并等待人工审批。一次只提出一个审批批次。
 如果首个改派方案被驳回，使用第二候选运力提出替代方案。`
+
+type ModelConfig struct {
+	Mode     string
+	APIStyle string
+	BaseURL  string
+	APIKey   string
+	Model    string
+}
 
 type Interrupt struct {
 	CallID    string
@@ -48,24 +68,96 @@ func NewEngine(
 	registry *guardtools.Registry,
 	middlewares []agents.Middleware,
 	stepDelay time.Duration,
+	modelConfig ModelConfig,
 ) (*Engine, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("tool registry is required")
+	}
+	mode := strings.ToLower(strings.TrimSpace(modelConfig.Mode))
+	if mode == "" {
+		mode = ModeDemo
+	}
+	var onlineModel llm.Provider
+	if mode == ModeOnline {
+		var err error
+		onlineModel, err = newOnlineModel(modelConfig)
+		if err != nil {
+			return nil, err
+		}
+	} else if mode != ModeDemo {
+		return nil, fmt.Errorf("AGENT_MODE must be demo or online")
 	}
 	fileHistory, err := hastekit.OpenFileHistory(historyDir)
 	if err != nil {
 		return nil, fmt.Errorf("open hastekit history: %w", err)
 	}
 	maxLoops := 12
-	sdkAgent := agents.NewAgent(&agents.AgentOptions{
+	options := &agents.AgentOptions{
 		Name:        "waybill-guardian",
 		Instruction: hastekit.NewPrompt(SystemPrompt),
 		History:     fileHistory,
 		Tools:       registry.Tools(),
-		Middlewares: middlewares,
 		MaxLoops:    &maxLoops,
-	}).WithLLM(NewScenarioModel(registry, stepDelay))
+	}
+	var sdkAgent *agents.Agent
+	if mode == ModeOnline {
+		options.LLM = onlineModel
+		options.Middlewares = append(
+			append([]agents.Middleware(nil), middlewares...),
+			agentmiddleware.NewRetry(agentmiddleware.RetryConfig{MaxAttempts: 3}),
+		)
+		sdkAgent = agents.NewAgent(options)
+	} else {
+		options.Middlewares = middlewares
+		sdkAgent = agents.NewAgent(options).WithLLM(NewScenarioModel(registry, stepDelay))
+	}
 	return &Engine{agent: sdkAgent, registry: registry, history: fileHistory}, nil
+}
+
+func newOnlineModel(config ModelConfig) (llm.Provider, error) {
+	baseURL := strings.TrimSpace(config.BaseURL)
+	apiKey := strings.TrimSpace(config.APIKey)
+	model := strings.TrimSpace(config.Model)
+	apiStyle := strings.ToLower(strings.TrimSpace(config.APIStyle))
+	if apiStyle == "" {
+		apiStyle = APIStyleResponses
+	}
+	if baseURL == "" || apiKey == "" || model == "" {
+		return nil, fmt.Errorf("LLM_BASE_URL, LLM_API_KEY, and LLM_MODEL are required in online mode")
+	}
+	parsed, err := url.ParseRequestURI(baseURL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, fmt.Errorf("LLM_BASE_URL must be an absolute HTTP(S) API root")
+	}
+	lowerPath := strings.ToLower(parsed.EscapedPath())
+	if strings.HasSuffix(baseURL, "/") ||
+		strings.HasSuffix(lowerPath, "/responses") ||
+		strings.HasSuffix(lowerPath, "/chat/completions") {
+		return nil, fmt.Errorf("LLM_BASE_URL must not include a trailing slash or endpoint path")
+	}
+
+	provider := hastekit.ProviderOpenAI
+	modelPrefix := "OpenAI/"
+	switch apiStyle {
+	case APIStyleResponses:
+	case APIStyleChatCompletions:
+		// The SDK's DeepSeek provider is its generic openaicompat bridge and
+		// accepts an arbitrary OpenAI-compatible API root.
+		provider = hastekit.ProviderDeepSeek
+		modelPrefix = "DeepSeek/"
+	default:
+		return nil, fmt.Errorf("LLM_API_STYLE must be responses or chat_completions")
+	}
+	client := hastekit.NewLLMClient([]hastekit.ProviderConfig{{
+		ProviderName: provider,
+		BaseURL:      baseURL,
+		ApiKeys: []*hastekit.APIKeyConfig{{
+			Name:   "primary",
+			APIKey: apiKey,
+		}},
+	}})
+	return client.Model(modelPrefix + model), nil
 }
 
 func (e *Engine) Start(ctx context.Context, runContext domain.RunContext) (Outcome, error) {

@@ -242,6 +242,17 @@ func (s *Store) Execute(
 	}
 }
 
+func (s *Store) Succeeded(command Command) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current := s.entries[command.Key]
+	return current != nil &&
+		current.state == StateSucceeded &&
+		current.RunID == command.RunID &&
+		current.Action == command.Action &&
+		current.ArgumentsHash == command.ArgumentsHash
+}
+
 func (s *Store) finish(key domain.IdempotencyKey, state State, result json.RawMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

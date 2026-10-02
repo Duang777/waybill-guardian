@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/approval"
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
+	"github.com/Duang777/waybill-guardian/internal/platform"
 	"github.com/Duang777/waybill-guardian/internal/tools"
 )
 
@@ -74,7 +76,7 @@ func TestHTTPDemoFlowAndSSECursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if confirmResponse.StatusCode != http.StatusOK {
+	if confirmResponse.StatusCode != http.StatusAccepted {
 		body, _ := io.ReadAll(confirmResponse.Body)
 		t.Fatalf("confirm status = %d body=%s", confirmResponse.StatusCode, body)
 	}
@@ -163,6 +165,13 @@ func TestParseLastEventID(t *testing.T) {
 	}
 	if _, err := parseLastEventID("-1"); err == nil {
 		t.Fatal("negative cursor was accepted")
+	}
+}
+
+func TestRealPlatformFailsFast(t *testing.T) {
+	t.Setenv("PLATFORM", "real")
+	if _, err := platformClients(); !errors.Is(err, platform.ErrNotImplemented) {
+		t.Fatalf("platformClients error = %v, want ErrNotImplemented", err)
 	}
 }
 

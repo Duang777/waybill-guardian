@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	agentkit "github.com/Duang777/waybill-guardian/internal/agent"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
 	"github.com/Duang777/waybill-guardian/internal/platform"
 	"github.com/Duang777/waybill-guardian/internal/tools"
@@ -33,6 +34,13 @@ func run() error {
 		Clients:     clients,
 		ApprovalTTL: durationEnv("APPROVAL_TTL", 10*time.Minute),
 		StepDelay:   durationEnv("DEMO_STEP_DELAY", 220*time.Millisecond),
+		Model: agentkit.ModelConfig{
+			Mode:     envOr("AGENT_MODE", agentkit.ModeDemo),
+			APIStyle: envOr("LLM_API_STYLE", agentkit.APIStyleResponses),
+			BaseURL:  strings.TrimSpace(os.Getenv("LLM_BASE_URL")),
+			APIKey:   strings.TrimSpace(os.Getenv("LLM_API_KEY")),
+			Model:    strings.TrimSpace(os.Getenv("LLM_MODEL")),
+		},
 	})
 	if err != nil {
 		return err
@@ -69,8 +77,7 @@ func platformClients() (platform.Clients, error) {
 		clients, _, err := tools.NewDemoClients()
 		return clients, err
 	case "real":
-		adapter := platform.RealAdapter{}
-		return platform.Clients{TMS: adapter, Weather: adapter, Notification: adapter}, nil
+		return platform.Clients{}, platform.ErrNotImplemented
 	default:
 		return platform.Clients{}, errors.New("PLATFORM must be mock or real")
 	}
