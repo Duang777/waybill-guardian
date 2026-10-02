@@ -1,0 +1,31 @@
+# 工具契约（冻结版，2026-10-03）
+#
+# 设计原则：
+# - 查询类工具可自动执行，无需人工确认
+# - 改派 / 赔付 / 通知三类写操作：必须经过人工确认闸，且强制携带 idempotency_key
+# - mock 实现与未来真实平台 adapter 实现同一契约，切换时 agent 代码零改动
+
+read:
+  tms.get_waybill:
+    args: [waybill_id]
+    returns: 运单基础信息（起止点、货物、承运商、状态、时效要求）
+  tms.get_tracking:
+    args: [waybill_id]
+    returns: 轨迹点序列（时间、经纬度、速度、停留事件）
+  tms.get_driver:
+    args: [driver_id]
+    returns: 司机信息（姓名、电话、驾驶时长、疲劳预警）
+  ext.get_road_weather:
+    args: [route]
+    returns: 沿途路段天气（路段、天气现象、预警等级）
+
+write:
+  tms.reassign:
+    args: [waybill_id, carrier_id, idempotency_key]
+    gate: 人工确认（approval pending → confirmed）
+  tms.create_claim:
+    args: [waybill_id, claim_type, idempotency_key]
+    gate: 人工确认（approval pending → confirmed）
+  notify.send_sms:
+    args: [phone, template_id, params]
+    gate: 人工确认（与改派 / 赔付同一审批单，可选）
