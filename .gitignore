@@ -1,0 +1,22 @@
+# Go
+*.exe
+*.test
+/bin/
+/dist/
+*.log
+
+# web
+web/node_modules/
+web/dist/
+web/.env
+web/.env.local
+
+# local data
+*.db
+*.sqlite
+data/
+
+# IDE
+.idea/
+.vscode/
+.DS_Store
