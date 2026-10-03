@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -14,28 +16,29 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
+	"github.com/Duang777/waybill-guardian/internal/httpauth"
 	"github.com/Duang777/waybill-guardian/internal/platform"
 )
 
 type api struct {
 	service  *guardian.Service
+	access   *httpauth.Boundary
 	mux      *http.ServeMux
 	sseSlots chan struct{}
 }
 
 const (
-	trustedLocalActor   = "local-demo-reviewer"
 	sseWriteTimeout     = 5 * time.Second
 	maxSSESubscriptions = 32
 )
 
-func newHandler(service *guardian.Service) http.Handler {
+func newHandler(service *guardian.Service, access *httpauth.Boundary) http.Handler {
 	server := &api{
 		service:  service,
+		access:   access,
 		mux:      http.NewServeMux(),
 		sseSlots: make(chan struct{}, maxSSESubscriptions),
 	}
-	server.mux.HandleFunc("GET /healthz", server.health)
 	server.mux.HandleFunc("POST /api/demo/trigger", server.triggerDemo)
 	server.mux.HandleFunc("GET /api/runs", server.listRuns)
 	server.mux.HandleFunc("GET /api/runs/{id}", server.runSnapshot)
@@ -44,7 +47,36 @@ func newHandler(service *guardian.Service) http.Handler {
 	server.mux.HandleFunc("POST /api/approvals/{id}/confirm", server.confirm)
 	server.mux.HandleFunc("POST /api/approvals/{id}/reject", server.reject)
 	server.mux.HandleFunc("GET /api/waybills/{id}", server.waybill)
-	return loopbackHostOnly(server.mux)
+	root := http.NewServeMux()
+	root.HandleFunc("GET /healthz", server.health)
+	root.Handle("/api/", authenticateAPI(access, server.mux))
+	if access.Mode() == httpauth.ModeLocal {
+		return loopbackHostOnly(root)
+	}
+	return root
+}
+
+func authenticateAPI(access *httpauth.Boundary, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authenticated, err := access.Authenticate(r)
+		if err != nil {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			writeProblem(w, http.StatusUnauthorized, "unauthenticated", "valid authentication is required")
+			return
+		}
+		principal, err := httpauth.PrincipalFrom(authenticated.Context())
+		if err != nil {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			writeProblem(w, http.StatusUnauthorized, "unauthenticated", "valid authentication is required")
+			return
+		}
+		if deadline, ok := principal.CredentialDeadline(); ok {
+			ctx, cancel := context.WithDeadline(authenticated.Context(), deadline)
+			defer cancel()
+			authenticated = authenticated.WithContext(ctx)
+		}
+		next.ServeHTTP(w, authenticated)
+	})
 }
 
 func loopbackHostOnly(next http.Handler) http.Handler {
@@ -62,6 +94,10 @@ func (a *api) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *api) triggerDemo(w http.ResponseWriter, r *http.Request) {
+	_, grant, ok := a.grant(w, r, httpauth.StartRun)
+	if !ok || !a.requireWaybill(w, grant, guardian.DemoWaybillID) {
+		return
+	}
 	if err := requireEmptyBody(r.Body); err != nil {
 		writeProblem(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
@@ -75,6 +111,10 @@ func (a *api) triggerDemo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) listRuns(w http.ResponseWriter, r *http.Request) {
+	_, grant, ok := a.grant(w, r, httpauth.Read)
+	if !ok {
+		return
+	}
 	if err := requireFilter(r, "active"); err != nil {
 		writeProblem(w, http.StatusBadRequest, "invalid_filter", err.Error())
 		return
@@ -84,11 +124,22 @@ func (a *api) listRuns(w http.ResponseWriter, r *http.Request) {
 		a.writeServiceError(w, err)
 		return
 	}
+	runs = slices.DeleteFunc(runs, func(run guardian.RunSummary) bool {
+		return !grant.Allows(run.WaybillID)
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
 }
 
 func (a *api) runSnapshot(w http.ResponseWriter, r *http.Request) {
-	snapshot, err := a.service.Snapshot(r.Context(), domain.RunID(r.PathValue("id")))
+	_, grant, ok := a.grant(w, r, httpauth.Read)
+	if !ok {
+		return
+	}
+	runID := domain.RunID(r.PathValue("id"))
+	if _, ok := a.authorizeRun(w, grant, runID); !ok {
+		return
+	}
+	snapshot, err := a.service.Snapshot(r.Context(), runID)
 	if err != nil {
 		a.writeServiceError(w, err)
 		return
@@ -97,6 +148,10 @@ func (a *api) runSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) listApprovals(w http.ResponseWriter, r *http.Request) {
+	_, grant, ok := a.grant(w, r, httpauth.Read)
+	if !ok {
+		return
+	}
 	if err := requireFilter(r, "pending"); err != nil {
 		writeProblem(w, http.StatusBadRequest, "invalid_filter", err.Error())
 		return
@@ -106,11 +161,23 @@ func (a *api) listApprovals(w http.ResponseWriter, r *http.Request) {
 		a.writeServiceError(w, err)
 		return
 	}
+	approvals = slices.DeleteFunc(approvals, func(value guardian.PendingApprovalSummary) bool {
+		return !grant.Allows(value.WaybillID)
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"approvals": approvals})
 }
 
 func (a *api) waybill(w http.ResponseWriter, r *http.Request) {
-	view, err := a.service.GetWaybill(r.Context(), domain.WaybillID(r.PathValue("id")))
+	id := domain.WaybillID(r.PathValue("id"))
+	if err := domain.ValidateWaybillID(id); err != nil {
+		a.writeServiceError(w, err)
+		return
+	}
+	_, grant, ok := a.grant(w, r, httpauth.Read)
+	if !ok || !a.requireWaybill(w, grant, id) {
+		return
+	}
+	view, err := a.service.GetWaybill(r.Context(), id)
 	if err != nil {
 		a.writeServiceError(w, err)
 		return
@@ -119,13 +186,21 @@ func (a *api) waybill(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) confirm(w http.ResponseWriter, r *http.Request) {
+	principal, grant, ok := a.grant(w, r, httpauth.DecideApproval)
+	if !ok {
+		return
+	}
 	if err := requireEmptyBody(r.Body); err != nil {
 		writeProblem(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
-	value, err := a.service.Decide(r.Context(), domain.ApprovalID(r.PathValue("id")), guardian.DecisionRequest{
+	id := domain.ApprovalID(r.PathValue("id"))
+	if _, ok := a.authorizeApproval(w, grant, id); !ok {
+		return
+	}
+	value, err := a.service.Decide(r.Context(), id, guardian.DecisionRequest{
 		Kind:      approval.DecisionConfirm,
-		DecidedBy: trustedLocalActor,
+		DecidedBy: principal.Subject(),
 	})
 	if err != nil {
 		a.writeServiceError(w, err)
@@ -135,6 +210,10 @@ func (a *api) confirm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) reject(w http.ResponseWriter, r *http.Request) {
+	principal, grant, ok := a.grant(w, r, httpauth.DecideApproval)
+	if !ok {
+		return
+	}
 	var body struct {
 		Reason string `json:"reason"`
 	}
@@ -142,9 +221,13 @@ func (a *api) reject(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
-	value, err := a.service.Decide(r.Context(), domain.ApprovalID(r.PathValue("id")), guardian.DecisionRequest{
+	id := domain.ApprovalID(r.PathValue("id"))
+	if _, ok := a.authorizeApproval(w, grant, id); !ok {
+		return
+	}
+	value, err := a.service.Decide(r.Context(), id, guardian.DecisionRequest{
 		Kind:         approval.DecisionReject,
-		DecidedBy:    trustedLocalActor,
+		DecidedBy:    principal.Subject(),
 		RejectReason: strings.TrimSpace(body.Reason),
 	})
 	if err != nil {
@@ -155,6 +238,14 @@ func (a *api) reject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) timeline(w http.ResponseWriter, r *http.Request) {
+	_, grant, ok := a.grant(w, r, httpauth.Read)
+	if !ok {
+		return
+	}
+	runID := domain.RunID(r.PathValue("id"))
+	if _, ok := a.authorizeRun(w, grant, runID); !ok {
+		return
+	}
 	if !a.acquireSSESlot() {
 		writeProblem(w, http.StatusTooManyRequests, "too_many_streams", "too many active timeline streams")
 		return
@@ -166,7 +257,7 @@ func (a *api) timeline(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusBadRequest, "invalid_cursor", err.Error())
 		return
 	}
-	subscription, err := a.service.Timeline(r.Context(), domain.RunID(r.PathValue("id")), after)
+	subscription, err := a.service.Timeline(r.Context(), runID, after)
 	if err != nil {
 		a.writeServiceError(w, err)
 		return
@@ -178,7 +269,10 @@ func (a *api) timeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	controller := http.NewResponseController(w)
-	if err := setSSEWriteDeadline(controller); err != nil {
+	if err := prepareSSEWrite(r.Context(), controller); err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
 		writeProblem(w, http.StatusInternalServerError, "stream_unsupported", "response writer cannot set deadlines")
 		return
 	}
@@ -194,11 +288,14 @@ func (a *api) timeline(w http.ResponseWriter, r *http.Request) {
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 	for {
+		if r.Context().Err() != nil {
+			return
+		}
 		select {
 		case <-r.Context().Done():
 			return
 		case <-heartbeat.C:
-			if err := setSSEWriteDeadline(controller); err != nil {
+			if err := prepareSSEWrite(r.Context(), controller); err != nil {
 				return
 			}
 			if _, err := io.WriteString(w, ": heartbeat\n\n"); err != nil {
@@ -215,7 +312,7 @@ func (a *api) timeline(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
-			if err := setSSEWriteDeadline(controller); err != nil {
+			if err := prepareSSEWrite(r.Context(), controller); err != nil {
 				return
 			}
 			if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", event.Seq, event.Type, raw); err != nil {
@@ -225,6 +322,78 @@ func (a *api) timeline(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+}
+
+func (a *api) grant(
+	w http.ResponseWriter,
+	r *http.Request,
+	capability httpauth.Capability,
+) (httpauth.Principal, httpauth.Grant, bool) {
+	principal, err := httpauth.PrincipalFrom(r.Context())
+	if err != nil {
+		a.writeAccessError(w, err)
+		return httpauth.Principal{}, httpauth.Grant{}, false
+	}
+	grant, err := a.access.Grant(principal, capability)
+	if err != nil {
+		a.writeAccessError(w, err)
+		return httpauth.Principal{}, httpauth.Grant{}, false
+	}
+	return principal, grant, true
+}
+
+func (a *api) authorizeRun(
+	w http.ResponseWriter,
+	grant httpauth.Grant,
+	id domain.RunID,
+) (guardian.RunView, bool) {
+	run, err := a.service.GetRun(id)
+	if err != nil {
+		a.writeServiceError(w, err)
+		return guardian.RunView{}, false
+	}
+	if !a.requireWaybill(w, grant, run.WaybillID) {
+		return guardian.RunView{}, false
+	}
+	return run, true
+}
+
+func (a *api) authorizeApproval(
+	w http.ResponseWriter,
+	grant httpauth.Grant,
+	id domain.ApprovalID,
+) (approval.Approval, bool) {
+	value, err := a.service.GetApproval(id)
+	if err != nil {
+		a.writeServiceError(w, err)
+		return approval.Approval{}, false
+	}
+	if !a.requireWaybill(w, grant, value.WaybillID) {
+		return approval.Approval{}, false
+	}
+	return value, true
+}
+
+func (a *api) requireWaybill(
+	w http.ResponseWriter,
+	grant httpauth.Grant,
+	id domain.WaybillID,
+) bool {
+	if err := grant.Require(id); err != nil {
+		a.writeAccessError(w, err)
+		return false
+	}
+	return true
+}
+
+func (a *api) writeAccessError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, httpauth.ErrUnauthenticated):
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		writeProblem(w, http.StatusUnauthorized, "unauthenticated", "valid authentication is required")
+	default:
+		writeProblem(w, http.StatusForbidden, "forbidden", "access is forbidden")
 	}
 }
 
@@ -246,8 +415,22 @@ func (a *api) releaseSSESlot() {
 	}
 }
 
-func setSSEWriteDeadline(controller *http.ResponseController) error {
-	return controller.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+func prepareSSEWrite(ctx context.Context, controller *http.ResponseController) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := setSSEWriteDeadline(ctx, controller); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+func setSSEWriteDeadline(ctx context.Context, controller *http.ResponseController) error {
+	deadline := time.Now().Add(sseWriteTimeout)
+	if requestDeadline, ok := ctx.Deadline(); ok && requestDeadline.Before(deadline) {
+		deadline = requestDeadline
+	}
+	return controller.SetWriteDeadline(deadline)
 }
 
 func (a *api) writeServiceError(w http.ResponseWriter, err error) {

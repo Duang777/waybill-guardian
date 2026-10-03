@@ -18,6 +18,7 @@ import (
 
 	agentkit "github.com/Duang777/waybill-guardian/internal/agent"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
+	"github.com/Duang777/waybill-guardian/internal/httpauth"
 	"github.com/Duang777/waybill-guardian/internal/idempotency"
 	"github.com/Duang777/waybill-guardian/internal/platform"
 	"github.com/Duang777/waybill-guardian/internal/storage"
@@ -37,7 +38,11 @@ func main() {
 
 func run() error {
 	httpAddr := envOr("HTTP_ADDR", defaultHTTPAddr)
-	if err := validateHTTPAddr(httpAddr); err != nil {
+	authMode, err := httpauth.ParseMode(os.Getenv("AUTH_MODE"))
+	if err != nil {
+		return err
+	}
+	if err := validateHTTPAddr(httpAddr, authMode); err != nil {
 		return err
 	}
 	platformMode := strings.ToLower(envOr("PLATFORM", "mock"))
@@ -45,7 +50,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if err := validateRuntimeModes(platformMode, storageMode); err != nil {
+	if err := validateRuntimeModes(platformMode, storageMode, authMode); err != nil {
+		return err
+	}
+	tenantID, err := tenantIDFromEnv(authMode)
+	if err != nil {
+		return err
+	}
+	access, err := httpAccessFromEnv(authMode, tenantID)
+	if err != nil {
 		return err
 	}
 	var database *postgresstore.DB
@@ -89,11 +102,10 @@ func run() error {
 		if keyErr != nil {
 			return keyErr
 		}
-		tenantID := envOr("TENANT_ID", "local-demo")
 		repository, repositoryErr := postgresstore.NewRepository(
 			database,
 			postgresstore.RepositoryConfig{
-				TenantID: tenantID,
+				TenantID: string(tenantID),
 				WorkerID: envOr("INSTANCE_ID", uuid.NewString()),
 				LeaseTTL: durationEnv("RUN_LEASE_TTL", 30*time.Second),
 				EffectLookup: func(
@@ -128,7 +140,7 @@ func run() error {
 			historyCtx,
 			database,
 			postgresstore.HistoryConfig{
-				TenantID:  tenantID,
+				TenantID:  string(tenantID),
 				KeyID:     envOr("CHECKPOINT_KEY_ID", "local-v1"),
 				Key:       key,
 				Retention: historyRetention,
@@ -164,7 +176,7 @@ func run() error {
 	defer stop()
 	server := &http.Server{
 		Addr:              httpAddr,
-		Handler:           newHandler(service),
+		Handler:           newHandler(service, access),
 		ReadHeaderTimeout: 5 * time.Second,
 		BaseContext: func(net.Listener) context.Context {
 			return ctx
@@ -186,17 +198,62 @@ func checkpointKeyFromEnv() ([]byte, error) {
 	return key, nil
 }
 
-func validateRuntimeModes(platformMode string, storageMode storage.Mode) error {
+func validateRuntimeModes(
+	platformMode string,
+	storageMode storage.Mode,
+	authMode httpauth.Mode,
+) error {
 	switch platformMode {
 	case "mock":
 	case "real":
 		if storageMode != storage.ModePostgres {
 			return fmt.Errorf("PLATFORM=real requires STORAGE=postgres")
 		}
+		if authMode != httpauth.ModeJWT {
+			return fmt.Errorf("PLATFORM=real requires AUTH_MODE=jwt")
+		}
 	default:
 		return fmt.Errorf("PLATFORM must be mock or real")
 	}
 	return nil
+}
+
+func tenantIDFromEnv(authMode httpauth.Mode) (httpauth.TenantID, error) {
+	value := strings.TrimSpace(os.Getenv("TENANT_ID"))
+	if value == "" {
+		if authMode == httpauth.ModeJWT {
+			return "", fmt.Errorf("TENANT_ID is required for JWT authentication")
+		}
+		value = "local-demo"
+	}
+	return httpauth.TenantID(value), nil
+}
+
+func httpAccessFromEnv(
+	mode httpauth.Mode,
+	tenantID httpauth.TenantID,
+) (*httpauth.Boundary, error) {
+	config := httpauth.Config{
+		Mode:     mode,
+		TenantID: tenantID,
+	}
+	if mode == httpauth.ModeJWT {
+		keyPath := strings.TrimSpace(os.Getenv("AUTH_JWT_PUBLIC_KEY_FILE"))
+		if keyPath == "" {
+			return nil, fmt.Errorf("AUTH_JWT_PUBLIC_KEY_FILE is required for JWT authentication")
+		}
+		publicKey, err := os.ReadFile(keyPath)
+		if err != nil {
+			return nil, fmt.Errorf("read AUTH_JWT_PUBLIC_KEY_FILE: %w", err)
+		}
+		config.JWT = &httpauth.JWTConfig{
+			Issuer:       strings.TrimSpace(os.Getenv("AUTH_JWT_ISSUER")),
+			Audience:     strings.TrimSpace(os.Getenv("AUTH_JWT_AUDIENCE")),
+			PublicKeyPEM: publicKey,
+			Leeway:       30 * time.Second,
+		}
+	}
+	return httpauth.New(config)
 }
 
 func postgresConfigFromEnv() (postgresstore.Config, error) {
@@ -271,12 +328,12 @@ func serve(ctx context.Context, server *http.Server, listener net.Listener) erro
 	}
 }
 
-func validateHTTPAddr(addr string) error {
+func validateHTTPAddr(addr string, authMode httpauth.Mode) error {
 	parsed, err := netip.ParseAddrPort(addr)
 	if err != nil {
 		return fmt.Errorf("invalid HTTP_ADDR %q: %w", addr, err)
 	}
-	if !parsed.Addr().IsLoopback() {
+	if authMode == httpauth.ModeLocal && !parsed.Addr().IsLoopback() {
 		return fmt.Errorf("HTTP_ADDR must use a loopback IP address")
 	}
 	return nil

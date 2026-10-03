@@ -19,6 +19,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/approval"
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
+	"github.com/Duang777/waybill-guardian/internal/httpauth"
 	"github.com/Duang777/waybill-guardian/internal/platform"
 	"github.com/Duang777/waybill-guardian/internal/tools"
 )
@@ -37,7 +38,7 @@ func TestHTTPDemoFlowAndSSECursor(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	server := httptest.NewServer(newHandler(service))
+	server := httptest.NewServer(newHandler(service, newLocalAccess(t)))
 	defer server.Close()
 
 	response, err := http.Post(server.URL+"/api/demo/trigger", "application/json", http.NoBody)
@@ -95,8 +96,8 @@ func TestHTTPDemoFlowAndSSECursor(t *testing.T) {
 	if confirmed.Status != approval.StatusExecuted {
 		t.Fatalf("approval status = %q", confirmed.Status)
 	}
-	if confirmed.DecidedBy != trustedLocalActor {
-		t.Fatalf("decided_by = %q, want %q", confirmed.DecidedBy, trustedLocalActor)
+	if confirmed.DecidedBy != "local-demo-reviewer" {
+		t.Fatalf("decided_by = %q, want local-demo-reviewer", confirmed.DecidedBy)
 	}
 
 	events, err := service.Replay(context.Background(), run.RunID, 0)
@@ -168,10 +169,12 @@ func TestTimelineStopsWritingToSlowClientAfterDeadline(t *testing.T) {
 		nil,
 	)
 	request.SetPathValue("id", string(run.RunID))
+	access := newLocalAccess(t)
+	request = authenticateRequest(t, access, request)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		(&api{service: service}).timeline(writer, request)
+		(&api{service: service, access: access}).timeline(writer, request)
 	}()
 
 	select {
@@ -189,15 +192,94 @@ func TestTimelineStopsWritingToSlowClientAfterDeadline(t *testing.T) {
 	}
 }
 
+func TestTimelineDoesNotWriteBufferedEventsAfterRequestCancellation(t *testing.T) {
+	clients, _, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := guardian.Open(guardian.Config{
+		DataDir:   t.TempDir(),
+		Clients:   clients,
+		StepDelay: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	run, err := service.StartDemo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	access := newLocalAccess(t)
+	handler := &api{service: service, access: access}
+
+	for range 32 {
+		ctx, cancel := context.WithCancel(context.Background())
+		request := httptest.NewRequestWithContext(
+			ctx,
+			http.MethodGet,
+			"http://127.0.0.1/api/runs/"+string(run.RunID)+"/timeline",
+			nil,
+		)
+		request.SetPathValue("id", string(run.RunID))
+		request = authenticateRequest(t, access, request)
+		writer := &cancelOnFlushWriter{
+			ResponseRecorder: httptest.NewRecorder(),
+			cancel:           cancel,
+		}
+
+		handler.timeline(writer, request)
+
+		if strings.Contains(writer.Body.String(), "event:") {
+			t.Fatal("timeline wrote an event after request cancellation")
+		}
+	}
+}
+
+func TestSSEWriteDeadlineUsesEarlierRequestDeadline(t *testing.T) {
+	requestDeadline := time.Now().Add(time.Second)
+	ctx, cancel := context.WithDeadline(context.Background(), requestDeadline)
+	defer cancel()
+	writer := newDeadlineBlockingWriter()
+	defer writer.release()
+
+	if err := setSSEWriteDeadline(ctx, http.NewResponseController(writer)); err != nil {
+		t.Fatal(err)
+	}
+	if got := writer.writeDeadline(); !got.Equal(requestDeadline) {
+		t.Fatalf("write deadline = %v, want %v", got, requestDeadline)
+	}
+}
+
 func TestTimelineRejectsWhenSubscriptionLimitIsReached(t *testing.T) {
+	clients, _, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := guardian.Open(guardian.Config{
+		DataDir:   t.TempDir(),
+		Clients:   clients,
+		StepDelay: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	run, err := service.StartDemo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	slots := make(chan struct{}, 1)
 	slots <- struct{}{}
-	handler := &api{sseSlots: slots}
+	access := newLocalAccess(t)
+	handler := &api{service: service, access: access, sseSlots: slots}
 	request := httptest.NewRequest(
 		http.MethodGet,
-		"http://127.0.0.1/api/runs/run-1/timeline",
+		"http://127.0.0.1/api/runs/"+string(run.RunID)+"/timeline",
 		nil,
 	)
+	request.SetPathValue("id", string(run.RunID))
+	request = authenticateRequest(t, access, request)
 	response := httptest.NewRecorder()
 
 	handler.timeline(response, request)
@@ -224,7 +306,7 @@ func TestRejectValidationAndUnknownFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	server := httptest.NewServer(newHandler(service))
+	server := httptest.NewServer(newHandler(service, newLocalAccess(t)))
 	defer server.Close()
 
 	request, err := http.NewRequest(http.MethodPost, server.URL+"/api/approvals/missing/reject",
@@ -253,7 +335,7 @@ func TestWaybillErrorContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	server := httptest.NewServer(newHandler(service))
+	server := httptest.NewServer(newHandler(service, newLocalAccess(t)))
 	defer server.Close()
 
 	tests := []struct {
@@ -311,7 +393,7 @@ func TestHTTPRecoveryQueries(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	server := httptest.NewServer(newHandler(service))
+	server := httptest.NewServer(newHandler(service, newLocalAccess(t)))
 	defer server.Close()
 
 	run, err := service.StartDemo(context.Background())
@@ -361,7 +443,7 @@ func TestHTTPRecoveryQueriesReturnEmptyArrays(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	server := httptest.NewServer(newHandler(service))
+	server := httptest.NewServer(newHandler(service, newLocalAccess(t)))
 	defer server.Close()
 
 	var runs struct {
@@ -414,16 +496,19 @@ func TestRealPlatformFailsFast(t *testing.T) {
 }
 
 func TestRuntimeStorageConfiguration(t *testing.T) {
-	if err := validateRuntimeModes("mock", "jsonl"); err != nil {
+	if err := validateRuntimeModes("mock", "jsonl", httpauth.ModeLocal); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateRuntimeModes("mock", "postgres"); err != nil {
+	if err := validateRuntimeModes("mock", "postgres", httpauth.ModeJWT); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateRuntimeModes("real", "jsonl"); err == nil {
+	if err := validateRuntimeModes("real", "jsonl", httpauth.ModeJWT); err == nil {
 		t.Fatal("real platform accepted JSONL storage")
 	}
-	if err := validateRuntimeModes("unknown", "jsonl"); err == nil {
+	if err := validateRuntimeModes("real", "postgres", httpauth.ModeLocal); err == nil {
+		t.Fatal("real platform accepted local authentication")
+	}
+	if err := validateRuntimeModes("unknown", "jsonl", httpauth.ModeLocal); err == nil {
 		t.Fatal("unknown platform mode was accepted")
 	}
 }
@@ -522,7 +607,7 @@ func TestValidateHTTPAddrAllowsOnlyExplicitLoopback(t *testing.T) {
 		"[::1]:8080",
 	}
 	for _, addr := range allowed {
-		if err := validateHTTPAddr(addr); err != nil {
+		if err := validateHTTPAddr(addr, httpauth.ModeLocal); err != nil {
 			t.Errorf("validateHTTPAddr(%q) = %v", addr, err)
 		}
 	}
@@ -537,9 +622,12 @@ func TestValidateHTTPAddrAllowsOnlyExplicitLoopback(t *testing.T) {
 		"127.0.0.1",
 	}
 	for _, addr := range rejected {
-		if err := validateHTTPAddr(addr); err == nil {
+		if err := validateHTTPAddr(addr, httpauth.ModeLocal); err == nil {
 			t.Errorf("validateHTTPAddr(%q) unexpectedly succeeded", addr)
 		}
+	}
+	if err := validateHTTPAddr("0.0.0.0:8080", httpauth.ModeJWT); err != nil {
+		t.Fatalf("JWT listener was rejected: %v", err)
 	}
 }
 
@@ -547,7 +635,7 @@ func TestHandlerRejectsNonLoopbackHost(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "http://attacker.example/healthz", nil)
 	response := httptest.NewRecorder()
 
-	newHandler(nil).ServeHTTP(response, request)
+	newHandler(nil, newLocalAccess(t)).ServeHTTP(response, request)
 
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", response.Code)
@@ -565,7 +653,7 @@ func TestHandlerAcceptsLoopbackHostWithoutPort(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/healthz", nil)
 	response := httptest.NewRecorder()
 
-	newHandler(nil).ServeHTTP(response, request)
+	newHandler(nil, newLocalAccess(t)).ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", response.Code)
@@ -677,6 +765,7 @@ type deadlineBlockingWriter struct {
 
 	mu          sync.Mutex
 	deadlineSet bool
+	deadline    time.Time
 	timeout     chan struct{}
 	unblock     chan struct{}
 	timeoutOnce sync.Once
@@ -708,9 +797,10 @@ func (w *deadlineBlockingWriter) Write(payload []byte) (int, error) {
 
 func (*deadlineBlockingWriter) Flush() {}
 
-func (w *deadlineBlockingWriter) SetWriteDeadline(time.Time) error {
+func (w *deadlineBlockingWriter) SetWriteDeadline(deadline time.Time) error {
 	w.mu.Lock()
 	w.deadlineSet = true
+	w.deadline = deadline
 	w.mu.Unlock()
 	w.timeoutOnce.Do(func() {
 		time.AfterFunc(20*time.Millisecond, func() {
@@ -726,10 +816,30 @@ func (w *deadlineBlockingWriter) deadlineWasSet() bool {
 	return w.deadlineSet
 }
 
+func (w *deadlineBlockingWriter) writeDeadline() time.Time {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.deadline
+}
+
 func (w *deadlineBlockingWriter) release() {
 	w.releaseOnce.Do(func() {
 		close(w.unblock)
 	})
+}
+
+type cancelOnFlushWriter struct {
+	*httptest.ResponseRecorder
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (w *cancelOnFlushWriter) Flush() {
+	w.once.Do(w.cancel)
+}
+
+func (*cancelOnFlushWriter) SetWriteDeadline(time.Time) error {
+	return nil
 }
 
 func waitForHTTPApproval(
@@ -764,4 +874,29 @@ func getJSON(t *testing.T, url string, target any) {
 	if err := json.NewDecoder(response.Body).Decode(target); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func newLocalAccess(t *testing.T) *httpauth.Boundary {
+	t.Helper()
+	access, err := httpauth.New(httpauth.Config{
+		Mode:     httpauth.ModeLocal,
+		TenantID: "local-demo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return access
+}
+
+func authenticateRequest(
+	t *testing.T,
+	access *httpauth.Boundary,
+	request *http.Request,
+) *http.Request {
+	t.Helper()
+	authenticated, err := access.Authenticate(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return authenticated
 }

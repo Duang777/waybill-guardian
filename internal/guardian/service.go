@@ -83,6 +83,8 @@ type runStartedPayload struct {
 
 var ErrServiceClosed = errors.New("guardian service is closed")
 
+const DemoWaybillID domain.WaybillID = "YD2026101001"
+
 type Service struct {
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -282,7 +284,7 @@ func (s *Service) StartDemo(ctx context.Context) (RunView, error) {
 	run := RunView{
 		RunID:      runID,
 		IncidentID: domain.IncidentID("delay-" + string(runID)),
-		WaybillID:  "YD2026101001",
+		WaybillID:  DemoWaybillID,
 		Status:     domain.RunStarted,
 	}
 	event, err := s.journal.Append(ctx, runID, audit.Draft{

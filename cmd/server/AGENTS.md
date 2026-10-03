@@ -32,19 +32,26 @@ HTTP 和 SSE 服务入口。handler 只做请求校验、协议转换和错误�
 
 - confirm 请求体必须为空。重复 confirm 返回当前决定或执行结果，不会重复调用 platform。
 - reject 请求体为 `{"reason":"..."}`，拒绝未知字段，且 `reason` 不能为空。
-- 当前 local 模式没有用户认证，审批人固定为 `local-demo-reviewer`。客户端提供的 `X-Actor`
-  不参与身份判断。
+- `/healthz` 允许匿名访问。其他路由统一经过 `internal/httpauth.Boundary`。
+- `AUTH_MODE=local` 固定使用 `local-demo-reviewer`，客户端提供的 `Authorization` 和
+  `X-Actor` 不参与身份判断。
+- `AUTH_MODE=jwt` 要求 RS256 Bearer JWT，并校验 issuer、audience、时效、tenant、角色和
+  运单范围。审批人只取已验证 JWT 的 `sub`。middleware 将凭据截止时间设为请求 context
+  deadline，SSE 必须在 token 到期后退出。
+- run 和 approval 先从 `guardian.Service` 查询关联的 `waybill_id`，再做对象授权。列表按
+  调用者的运单范围过滤。
 - 非数字 `Last-Event-ID` 返回 400。游标超过当前末尾返回 409。
 - 错误响应统一为 `{"error":{"code":"...","message":"..."}}`。
 
 ## 启动配置
 
-`main.go` 读取 `HTTP_ADDR`、`DATA_DIR`、`APPROVAL_TTL`、`DEMO_STEP_DELAY`、`PLATFORM` 和
-Agent 模型变量。`HTTP_ADDR` 默认是 `127.0.0.1:8080`，只接受 loopback IP 字面量。
-HTTP handler 也拒绝 Host 不是 loopback IP 的请求，避免 DNS rebinding 绕过监听边界。
-`PLATFORM=real` 在真实 adapter 或生产鉴权未实现时返回启动错误。
+`main.go` 读取 `HTTP_ADDR`、`DATA_DIR`、`APPROVAL_TTL`、`DEMO_STEP_DELAY`、`PLATFORM`、
+`AUTH_MODE`、JWT 配置和 Agent 模型变量。`HTTP_ADDR` 默认是 `127.0.0.1:8080`。
+local 模式只接受 loopback IP 字面量，HTTP handler 也拒绝 Host 不是 loopback IP 的请求。
+JWT 模式允许显式非 loopback IP。`PLATFORM=real` 缺少 PostgreSQL 或 JWT 认证时先返回配置
+错误；通过检查后仍会因真实 adapter 未实现而拒绝启动。
 
 ## 验证
 
-`http_test.go` 覆盖触发、确认、驳回、错误映射、重复决定、SSE 游标续传和
-`PLATFORM=real` fail-fast。
+`http_test.go` 覆盖触发、确认、驳回、错误映射、重复决定、SSE 游标续传和启动检查。
+`http_auth_test.go` 覆盖匿名访问、租户和运单越权、角色不足、列表过滤与可信审批主体。
