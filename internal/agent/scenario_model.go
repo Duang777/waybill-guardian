@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
-	"github.com/Duang777/waybill-guardian/internal/idempotency"
 	guardtools "github.com/Duang777/waybill-guardian/internal/tools"
 	"github.com/hastekit/agent-sdk-go/pkg/agents"
 	"github.com/hastekit/agent-sdk-go/pkg/gateway/llm/constants"
@@ -97,11 +96,9 @@ func (m *ScenarioModel) proposal(
 ) *responses.Response {
 	reassignWire, _ := m.registry.WireName(domain.ActionReassign)
 	smsWire, _ := m.registry.WireName(domain.ActionSendSMS)
-	window := fmt.Sprintf("%s/plan-%d", runContext.IncidentID, planVersion)
 	reassign := guardtools.ReassignInput{
-		WaybillID:      string(runContext.WaybillID),
-		CarrierID:      carrierID,
-		IdempotencyKey: string(idempotency.Generate(domain.ActionReassign, runContext.WaybillID, window)),
+		WaybillID: string(runContext.WaybillID),
+		CarrierID: carrierID,
 	}
 	sms := guardtools.SendSMSInput{
 		Phone:      "13800001234",
@@ -110,7 +107,6 @@ func (m *ScenarioModel) proposal(
 			"waybill_id": string(runContext.WaybillID),
 			"carrier_id": carrierID,
 		},
-		IdempotencyKey: string(idempotency.Generate(domain.ActionSendSMS, runContext.WaybillID, window)),
 	}
 	return &responses.Response{Output: []responses.OutputMessageUnion{
 		assistantText(summary),

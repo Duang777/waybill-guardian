@@ -8,14 +8,16 @@
 ## key 生成和校验
 
 ```
-key = sha256(action + "|" + waybill_id + "|" + business_window)
+effect_id = UUIDv5(action + "|" + waybill_id + "|" + business_window + "|" + arguments_hash)
+key = sha256(effect_id)
 ```
 
-`business_window` 使用 `incident_id + "/plan-" + plan_version`。Agent 把 key 放入工具参数，
-但 middleware 不信任该值。middleware 从 `RunContext` 读取 action、运单 ID、异常 ID 和方案版本，
-重算 key 后再比较。缺少或不匹配的 key 会拒绝执行。
+`business_window` 使用 `incident_id + "/plan-" + plan_version`。模型只提交业务参数。
+middleware 从可信 `RunContext` 和 canonical JSON 参数哈希生成 effect ID 与 key，再通过 context
+把 key 传给 platform handler。同方案内目标或参数不同的同类动作具有不同 effect ID；完全相同的
+动作按同一 effect 去重。
 
-参数绑定使用 canonical JSON 的 SHA-256。相同 key 携带不同 action 或参数哈希时返回
+参数绑定使用 canonical JSON 的 SHA-256。相同 key 携带不同 effect ID、action 或参数哈希时返回
 `ErrKeyConflict`。
 
 ## 去重语义
@@ -45,5 +47,5 @@ store 不维护独立 JSONL。它从 `internal/audit` 的事件重建 entry。�
 
 ## 验证
 
-测试覆盖 key 生成、参数哈希、缺键、key 冲突、并发十次只执行一次、成功结果回放、
-失败后重试和 indeterminate 恢复。
+测试覆盖 effect ID 与 key 生成、同类 effect 隔离、参数哈希、缺键、key 冲突、并发十次只执行
+一次、成功结果回放、失败后重试和 indeterminate 恢复。

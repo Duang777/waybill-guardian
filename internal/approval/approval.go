@@ -53,6 +53,7 @@ type Item struct {
 	WireName       string                `json:"wire_name"`
 	Params         json.RawMessage       `json:"params"`
 	ArgumentsHash  string                `json:"arguments_hash"`
+	EffectID       domain.EffectID       `json:"effect_id"`
 	IdempotencyKey domain.IdempotencyKey `json:"idempotency_key"`
 }
 
@@ -92,6 +93,7 @@ const (
 type ItemExecution struct {
 	CallID         string                `json:"call_id"`
 	Action         domain.Action         `json:"action"`
+	EffectID       domain.EffectID       `json:"effect_id"`
 	IdempotencyKey domain.IdempotencyKey `json:"idempotency_key"`
 	Status         ExecutionStatus       `json:"status"`
 }
@@ -159,6 +161,16 @@ func IDFor(runID domain.RunID, callIDs []string) domain.ApprovalID {
 func (s *Store) Create(ctx context.Context, value Approval) (Approval, error) {
 	if value.ID == "" || value.RunID == "" || value.WaybillID == "" || len(value.Items) == 0 {
 		return Approval{}, fmt.Errorf("approval id, run id, waybill id, and items are required")
+	}
+	effectIDs := make(map[domain.EffectID]struct{}, len(value.Items))
+	for _, item := range value.Items {
+		if item.EffectID == "" || item.IdempotencyKey == "" {
+			return Approval{}, fmt.Errorf("approval effect id and idempotency key are required")
+		}
+		if _, exists := effectIDs[item.EffectID]; exists {
+			return Approval{}, fmt.Errorf("duplicate approval effect %q", item.EffectID)
+		}
+		effectIDs[item.EffectID] = struct{}{}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -453,7 +465,10 @@ func validateExecutionFailure(expected []Item, actual []ItemExecution) (Status, 
 	succeeded := 0
 	for _, result := range actual {
 		item, ok := remaining[result.CallID]
-		if !ok || item.Action != result.Action || item.IdempotencyKey != result.IdempotencyKey {
+		if !ok ||
+			item.Action != result.Action ||
+			item.EffectID != result.EffectID ||
+			item.IdempotencyKey != result.IdempotencyKey {
 			return "", fmt.Errorf("execution result does not match approved call %q", result.CallID)
 		}
 		delete(remaining, result.CallID)

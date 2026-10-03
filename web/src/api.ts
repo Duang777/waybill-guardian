@@ -127,6 +127,7 @@ const approvalItemSchema = z
     wire_name: z.string().min(1),
     params: z.record(z.string(), z.unknown()),
     arguments_hash: z.string().min(1),
+    effect_id: z.string().uuid(),
     idempotency_key: z.string().min(1),
   })
   .strict();

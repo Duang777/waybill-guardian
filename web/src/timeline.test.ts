@@ -10,6 +10,8 @@ import {
 } from "./timeline";
 
 const hash = "0".repeat(64);
+const effectID1 = "7cf7fd41-d80d-5c7b-9b24-8a434920d4ec";
+const effectID2 = "0fb0462f-0ca4-5e54-92f3-531ceeea0f4f";
 
 function event(seq: number, type: AuditEventType, payload: unknown) {
   return auditEventSchema.parse({
@@ -44,6 +46,7 @@ describe("timelineReducer", () => {
           {
             call_id: "call-1",
             action: "tms.reassign",
+            effect_id: effectID1,
             idempotency_key: "key-1",
             status: "failed",
           },
@@ -103,9 +106,9 @@ describe("latestApproval", () => {
           params: {
             waybill_id: "YD2026101001",
             carrier_id: "CARRIER-SW-42",
-            idempotency_key: "key-1",
           },
           arguments_hash: "arguments-hash",
+          effect_id: effectID1,
           idempotency_key: "key-1",
         },
       ],
@@ -133,12 +136,14 @@ describe("latestApproval", () => {
         {
           call_id: "call-1",
           action: "tms.reassign",
+          effect_id: effectID1,
           idempotency_key: "key-1",
           status: "succeeded",
         },
         {
           call_id: "call-2",
           action: "notify.send_sms",
+          effect_id: effectID2,
           idempotency_key: "key-2",
           status: "failed",
         },
