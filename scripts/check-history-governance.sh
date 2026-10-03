@@ -6,14 +6,23 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HISTORY_SCAN_DIR="${HISTORY_SCAN_DIR:-${DATA_DIR:-$ROOT_DIR/data}/hastekit}"
 PROHIBITED_PATTERN='13800001234|13961234567|川A8X6Q2|"(shipper_phone|phone|plate|license_plate|longitude|latitude|template_id|params)"[[:space:]]*:'
 failed=0
+history_files=0
 
 if [[ -d "$HISTORY_SCAN_DIR" ]]; then
 	while IFS= read -r -d '' file; do
+		history_files=$((history_files + 1))
 		if grep -En "$PROHIBITED_PATTERN" "$file"; then
 			printf 'Prohibited history data found in %s\n' "$file" >&2
 			failed=1
 		fi
 	done < <(find "$HISTORY_SCAN_DIR" -type f -name '*.jsonl' -print0)
+elif [[ -n "${HISTORY_SCAN_DIR+x}" || -z "${DATABASE_URL:-}" ]]; then
+	printf 'History scan directory does not exist: %s\n' "$HISTORY_SCAN_DIR" >&2
+	exit 1
+fi
+if [[ "$history_files" -eq 0 && -z "${DATABASE_URL:-}" ]]; then
+	printf 'No JSONL history files found in %s\n' "$HISTORY_SCAN_DIR" >&2
+	exit 1
 fi
 
 if [[ -n "${DATABASE_URL:-}" ]]; then
