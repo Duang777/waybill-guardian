@@ -18,14 +18,23 @@ import (
 )
 
 type api struct {
-	service *guardian.Service
-	mux     *http.ServeMux
+	service  *guardian.Service
+	mux      *http.ServeMux
+	sseSlots chan struct{}
 }
 
-const trustedLocalActor = "local-demo-reviewer"
+const (
+	trustedLocalActor   = "local-demo-reviewer"
+	sseWriteTimeout     = 5 * time.Second
+	maxSSESubscriptions = 32
+)
 
 func newHandler(service *guardian.Service) http.Handler {
-	server := &api{service: service, mux: http.NewServeMux()}
+	server := &api{
+		service:  service,
+		mux:      http.NewServeMux(),
+		sseSlots: make(chan struct{}, maxSSESubscriptions),
+	}
 	server.mux.HandleFunc("GET /healthz", server.health)
 	server.mux.HandleFunc("POST /api/demo/trigger", server.triggerDemo)
 	server.mux.HandleFunc("GET /api/runs/{id}/timeline", server.timeline)
@@ -108,6 +117,12 @@ func (a *api) reject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) timeline(w http.ResponseWriter, r *http.Request) {
+	if !a.acquireSSESlot() {
+		writeProblem(w, http.StatusTooManyRequests, "too_many_streams", "too many active timeline streams")
+		return
+	}
+	defer a.releaseSSESlot()
+
 	after, err := parseLastEventID(r.Header.Get("Last-Event-ID"))
 	if err != nil {
 		writeProblem(w, http.StatusBadRequest, "invalid_cursor", err.Error())
@@ -120,9 +135,13 @@ func (a *api) timeline(w http.ResponseWriter, r *http.Request) {
 	}
 	defer subscription.Close()
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	if _, ok := w.(http.Flusher); !ok {
 		writeProblem(w, http.StatusInternalServerError, "stream_unsupported", "response writer cannot stream")
+		return
+	}
+	controller := http.NewResponseController(w)
+	if err := setSSEWriteDeadline(controller); err != nil {
+		writeProblem(w, http.StatusInternalServerError, "stream_unsupported", "response writer cannot set deadlines")
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -130,7 +149,9 @@ func (a *api) timeline(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
+	if err := controller.Flush(); err != nil {
+		return
+	}
 
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
@@ -139,10 +160,15 @@ func (a *api) timeline(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-heartbeat.C:
+			if err := setSSEWriteDeadline(controller); err != nil {
+				return
+			}
 			if _, err := io.WriteString(w, ": heartbeat\n\n"); err != nil {
 				return
 			}
-			flusher.Flush()
+			if err := controller.Flush(); err != nil {
+				return
+			}
 		case event, open := <-subscription.Events():
 			if !open {
 				return
@@ -151,12 +177,39 @@ func (a *api) timeline(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
+			if err := setSSEWriteDeadline(controller); err != nil {
+				return
+			}
 			if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", event.Seq, event.Type, raw); err != nil {
 				return
 			}
-			flusher.Flush()
+			if err := controller.Flush(); err != nil {
+				return
+			}
 		}
 	}
+}
+
+func (a *api) acquireSSESlot() bool {
+	if a.sseSlots == nil {
+		return true
+	}
+	select {
+	case a.sseSlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *api) releaseSSESlot() {
+	if a.sseSlots != nil {
+		<-a.sseSlots
+	}
+}
+
+func setSSEWriteDeadline(controller *http.ResponseController) error {
+	return controller.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
 }
 
 func (a *api) writeServiceError(w http.ResponseWriter, err error) {
