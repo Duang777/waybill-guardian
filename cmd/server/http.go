@@ -21,6 +21,8 @@ type api struct {
 	mux     *http.ServeMux
 }
 
+const trustedLocalActor = "local-demo-reviewer"
+
 func newHandler(service *guardian.Service) http.Handler {
 	server := &api{service: service, mux: http.NewServeMux()}
 	server.mux.HandleFunc("GET /healthz", server.health)
@@ -29,7 +31,17 @@ func newHandler(service *guardian.Service) http.Handler {
 	server.mux.HandleFunc("POST /api/approvals/{id}/confirm", server.confirm)
 	server.mux.HandleFunc("POST /api/approvals/{id}/reject", server.reject)
 	server.mux.HandleFunc("GET /api/waybills/{id}", server.waybill)
-	return server.mux
+	return loopbackHostOnly(server.mux)
+}
+
+func loopbackHostOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := validateHTTPAddr(r.Host); err != nil {
+			writeProblem(w, http.StatusForbidden, "invalid_host", "request host must be a loopback IP address")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (a *api) health(w http.ResponseWriter, _ *http.Request) {
@@ -65,7 +77,7 @@ func (a *api) confirm(w http.ResponseWriter, r *http.Request) {
 	}
 	value, err := a.service.Decide(r.Context(), domain.ApprovalID(r.PathValue("id")), guardian.DecisionRequest{
 		Kind:      approval.DecisionConfirm,
-		DecidedBy: actorFromRequest(r),
+		DecidedBy: trustedLocalActor,
 	})
 	if err != nil {
 		a.writeServiceError(w, err)
@@ -84,7 +96,7 @@ func (a *api) reject(w http.ResponseWriter, r *http.Request) {
 	}
 	value, err := a.service.Decide(r.Context(), domain.ApprovalID(r.PathValue("id")), guardian.DecisionRequest{
 		Kind:         approval.DecisionReject,
-		DecidedBy:    actorFromRequest(r),
+		DecidedBy:    trustedLocalActor,
 		RejectReason: strings.TrimSpace(body.Reason),
 	})
 	if err != nil {
@@ -156,6 +168,8 @@ func (a *api) writeServiceError(w http.ResponseWriter, err error) {
 		writeProblem(w, http.StatusBadRequest, "reject_reason_required", err.Error())
 	case errors.Is(err, audit.ErrCursorAhead):
 		writeProblem(w, http.StatusConflict, "cursor_ahead", err.Error())
+	case errors.Is(err, guardian.ErrServiceClosed):
+		writeProblem(w, http.StatusServiceUnavailable, "service_closing", "service is shutting down")
 	default:
 		writeProblem(w, http.StatusInternalServerError, "internal_error", "request failed")
 	}
@@ -170,13 +184,6 @@ func parseLastEventID(value string) (audit.Seq, error) {
 		return 0, fmt.Errorf("Last-Event-ID must be an unsigned integer")
 	}
 	return audit.Seq(parsed), nil
-}
-
-func actorFromRequest(r *http.Request) string {
-	if actor := strings.TrimSpace(r.Header.Get("X-Actor")); actor != "" {
-		return actor
-	}
-	return "demo-reviewer"
 }
 
 func requireEmptyBody(body io.Reader) error {

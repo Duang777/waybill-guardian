@@ -30,14 +30,17 @@ HTTP 和 SSE 服务入口。handler 只做请求校验、协议转换和错误�
 
 - confirm 请求体必须为空。重复 confirm 返回当前决定或执行结果，不会重复调用 platform。
 - reject 请求体为 `{"reason":"..."}`，拒绝未知字段，且 `reason` 不能为空。
-- `X-Actor` 可指定审批人；缺省值为 `demo-reviewer`。
+- 当前 local 模式没有用户认证，审批人固定为 `local-demo-reviewer`。客户端提供的 `X-Actor`
+  不参与身份判断。
 - 非数字 `Last-Event-ID` 返回 400。游标超过当前末尾返回 409。
 - 错误响应统一为 `{"error":{"code":"...","message":"..."}}`。
 
 ## 启动配置
 
 `main.go` 读取 `HTTP_ADDR`、`DATA_DIR`、`APPROVAL_TTL`、`DEMO_STEP_DELAY`、`PLATFORM` 和
-Agent 模型变量。`PLATFORM=real` 在真实 adapter 未实现时返回启动错误。
+Agent 模型变量。`HTTP_ADDR` 默认是 `127.0.0.1:8080`，只接受 loopback IP 字面量。
+HTTP handler 也拒绝 Host 不是 loopback IP 的请求，避免 DNS rebinding 绕过监听边界。
+`PLATFORM=real` 在真实 adapter 或生产鉴权未实现时返回启动错误。
 
 ## 验证
 

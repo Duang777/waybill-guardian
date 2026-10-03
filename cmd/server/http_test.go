@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -68,11 +69,16 @@ func TestHTTPDemoFlowAndSSECursor(t *testing.T) {
 		t.Fatalf("unmasked shipper phone %q", waybill.Waybill.ShipperPhone)
 	}
 
-	confirmResponse, err := http.Post(
+	confirmRequest, err := http.NewRequest(
+		http.MethodPost,
 		server.URL+"/api/approvals/"+string(pending.ID)+"/confirm",
-		"application/json",
 		http.NoBody,
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmRequest.Header.Set("X-Actor", "forged-reviewer")
+	confirmResponse, err := http.DefaultClient.Do(confirmRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,6 +93,9 @@ func TestHTTPDemoFlowAndSSECursor(t *testing.T) {
 	_ = confirmResponse.Body.Close()
 	if confirmed.Status != approval.StatusExecuted {
 		t.Fatalf("approval status = %q", confirmed.Status)
+	}
+	if confirmed.DecidedBy != trustedLocalActor {
+		t.Fatalf("decided_by = %q, want %q", confirmed.DecidedBy, trustedLocalActor)
 	}
 
 	events, err := service.Replay(context.Background(), run.RunID, 0)
@@ -173,6 +182,104 @@ func TestRealPlatformFailsFast(t *testing.T) {
 	if _, err := platformClients(); !errors.Is(err, platform.ErrNotImplemented) {
 		t.Fatalf("platformClients error = %v, want ErrNotImplemented", err)
 	}
+}
+
+func TestValidateHTTPAddrAllowsOnlyExplicitLoopback(t *testing.T) {
+	allowed := []string{
+		defaultHTTPAddr,
+		"127.0.0.2:9000",
+		"[::1]:8080",
+	}
+	for _, addr := range allowed {
+		if err := validateHTTPAddr(addr); err != nil {
+			t.Errorf("validateHTTPAddr(%q) = %v", addr, err)
+		}
+	}
+
+	rejected := []string{
+		":8080",
+		"0.0.0.0:8080",
+		"[::]:8080",
+		"192.168.1.10:8080",
+		"localhost:8080",
+		"example.com:8080",
+		"127.0.0.1",
+	}
+	for _, addr := range rejected {
+		if err := validateHTTPAddr(addr); err == nil {
+			t.Errorf("validateHTTPAddr(%q) unexpectedly succeeded", addr)
+		}
+	}
+}
+
+func TestHandlerRejectsNonLoopbackHost(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "http://attacker.example/healthz", nil)
+	response := httptest.NewRecorder()
+
+	newHandler(nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", response.Code)
+	}
+	var problem map[string]map[string]string
+	if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+		t.Fatal(err)
+	}
+	if problem["error"]["code"] != "invalid_host" {
+		t.Fatalf("error code = %q, want invalid_host", problem["error"]["code"])
+	}
+}
+
+func TestServeWaitsForActiveHandlerDuringShutdown(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			close(started)
+			<-release
+			close(finished)
+		}),
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- serve(ctx, server, listener)
+	}()
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		response, requestErr := http.Get("http://" + listener.Addr().String())
+		if requestErr == nil {
+			_ = response.Body.Close()
+		}
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not start")
+	}
+
+	cancel()
+	select {
+	case err := <-serveDone:
+		t.Fatalf("serve returned before active handler finished: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not finish")
+	}
+	if err := <-serveDone; err != nil {
+		t.Fatal(err)
+	}
+	<-requestDone
 }
 
 func waitForHTTPApproval(

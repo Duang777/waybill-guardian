@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +19,8 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/tools"
 )
 
+const defaultHTTPAddr = "127.0.0.1:8080"
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error("server stopped", "error", err)
@@ -25,6 +29,10 @@ func main() {
 }
 
 func run() error {
+	httpAddr := envOr("HTTP_ADDR", defaultHTTPAddr)
+	if err := validateHTTPAddr(httpAddr); err != nil {
+		return err
+	}
 	clients, err := platformClients()
 	if err != nil {
 		return err
@@ -51,24 +59,57 @@ func run() error {
 	}
 
 	server := &http.Server{
-		Addr:              envOr("HTTP_ADDR", ":8080"),
+		Addr:              httpAddr,
 		Handler:           newHandler(service),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	listener, err := net.Listen("tcp", httpAddr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", httpAddr, err)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	slog.Info("waybill guardian listening", "addr", listener.Addr())
+	return serve(ctx, server, listener)
+}
+
+func serve(ctx context.Context, server *http.Server, listener net.Listener) error {
+	serveDone := make(chan error, 1)
 	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
+		serveDone <- server.Serve(listener)
 	}()
-	slog.Info("waybill guardian listening", "addr", server.Addr)
-	err = server.ListenAndServe()
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
+
+	select {
+	case err := <-serveDone:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownErr := server.Shutdown(shutdownCtx)
+		cancel()
+		if shutdownErr != nil {
+			shutdownErr = errors.Join(shutdownErr, server.Close())
+		}
+		serveErr := <-serveDone
+		if errors.Is(serveErr, http.ErrServerClosed) {
+			serveErr = nil
+		}
+		return errors.Join(shutdownErr, serveErr)
 	}
-	return err
+}
+
+func validateHTTPAddr(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid HTTP_ADDR %q: %w", addr, err)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("HTTP_ADDR must use a loopback IP address")
+	}
+	return nil
 }
 
 func platformClients() (platform.Clients, error) {

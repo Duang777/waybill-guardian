@@ -27,6 +27,13 @@ go list -m github.com/hastekit/agent-sdk-go
 对账两份记录。完整源码证据见
 [`docs/research/hastekit-v0.0.24.md`](../../docs/research/hastekit-v0.0.24.md)。
 
+项目通过 `secureHistoryPersistence` 包装 SDK file persistence。history 目录权限为 `0700`。
+适配层在 SDK 首次写入前以 `0600` 预创建 conversation 文件，并在启动时修正已有文件权限，
+因为记录可能包含完整工具输入输出。
+
+`Engine` 跟踪所有活动的 `AgentHandle`。调用方取消 context 或关闭 Engine 时，Engine 先发送
+SDK stop 并等待 run 结束，再关闭 history，避免 detached execution 在持久化层关闭后继续写入。
+
 ## 工具注册映射
 
 | 契约工具 | 执行策略 |
