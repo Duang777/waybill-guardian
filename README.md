@@ -63,9 +63,10 @@ cd waybill-guardian
 BACKEND_PORT=18080 WEB_PORT=15173 DATA_DIR=/tmp/waybill-demo ./scripts/demo.sh
 ```
 
-`BACKEND_HOST` 必须是 loopback 地址。直接运行 `go run ./cmd/server` 时，`HTTP_ADDR` 默认是
-`127.0.0.1:8080`，空 host、通配地址、局域网地址和公网地址都会被拒绝。当前版本没有用户
-认证，审批审计主体固定为 `local-demo-reviewer`，不能部署为远程共享服务。
+`BACKEND_HOST` 必须是 loopback IP 字面量。直接运行 `go run ./cmd/server` 时，`HTTP_ADDR`
+默认是 `127.0.0.1:8080`，空 host、主机名、通配地址和非 loopback 地址都会被拒绝。服务也会
+拒绝 Host 不是 loopback IP 的请求。当前版本没有用户认证，审批审计主体固定为
+`local-demo-reviewer`，不能部署为远程共享服务。
 
 ### 使用在线模型
 
@@ -140,9 +141,9 @@ npm run record:demo
 `internal/audit` 是业务事实源，hastekit file history 保存模型消息和 pending tool calls。
 
 本地运行时将 `DATA_DIR` 和 hastekit history 目录权限设为 `0700`，数据文件设为 `0600`。
-它持有 `DATA_DIR/.writer.lock`，第二个使用同一目录的进程会拒绝启动。对于“外部平台成功，
-但本地成功事件还未写入”的窗口，系统不会自动重试未知结果。真实 adapter 必须按幂等键查询
-或重试，否则不能启用真实写模式。
+它对 `DATA_DIR` 的目录文件描述符持有独占锁，第二个使用同一目录的进程会拒绝启动。对于
+“外部平台成功，但本地成功事件还未写入”的窗口，系统不会自动重试未知结果。真实 adapter
+必须按幂等键查询或重试，否则不能启用真实写模式。
 
 - 架构、恢复矩阵和取舍：[`docs/RFC-001.md`](./docs/RFC-001.md)
 - hastekit 源码研究：[`docs/research/hastekit-v0.0.24.md`](./docs/research/hastekit-v0.0.24.md)

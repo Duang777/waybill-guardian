@@ -146,7 +146,32 @@ func TestOpenRejectsSecondWriter(t *testing.T) {
 	defer reopened.Close()
 }
 
-func TestOpenSecuresDataDirectoryAndLockFile(t *testing.T) {
+func TestWriterLockCannotBeBypassedByReplacingLegacyLockPath(t *testing.T) {
+	dir := t.TempDir()
+	first, err := Open(dir, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+
+	legacyLock := filepath.Join(dir, ".writer.lock")
+	if err := os.WriteFile(legacyLock, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(legacyLock); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Open(dir, time.Now)
+	if second != nil {
+		_ = second.Close()
+		t.Fatal("second writer bypassed the directory lock")
+	}
+	if !errors.Is(err, ErrWriterLocked) {
+		t.Fatalf("second Open error = %v, want ErrWriterLocked", err)
+	}
+}
+
+func TestOpenSecuresDataDirectoryAndJournal(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -162,8 +187,50 @@ func TestOpenSecuresDataDirectoryAndLockFile(t *testing.T) {
 	defer store.Close()
 
 	assertMode(t, dir, 0o700)
-	assertMode(t, filepath.Join(dir, ".writer.lock"), 0o600)
 	assertMode(t, journalPath, 0o600)
+}
+
+func TestOpenRejectsLinkedAuditJournals(t *testing.T) {
+	tests := []struct {
+		name string
+		link func(string, string) error
+	}{
+		{name: "symbolic link", link: os.Symlink},
+		{name: "hard link", link: os.Link},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "audit")
+			if err := os.Mkdir(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(root, "target")
+			if err := os.WriteFile(target, []byte("do not touch"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := test.link(target, filepath.Join(dir, "audit-linked.jsonl")); err != nil {
+				t.Fatal(err)
+			}
+
+			store, err := Open(dir, time.Now)
+			if store != nil {
+				_ = store.Close()
+				t.Fatal("Open accepted a linked audit journal")
+			}
+			if err == nil {
+				t.Fatal("Open returned no error")
+			}
+			assertMode(t, target, 0o644)
+			raw, readErr := os.ReadFile(target)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(raw) != "do not touch" {
+				t.Fatalf("linked target was modified: %q", raw)
+			}
+		})
+	}
 }
 
 func TestSubscribeBridgesReplayAndLive(t *testing.T) {

@@ -38,7 +38,8 @@ HTTP 和 SSE 服务入口。handler 只做请求校验、协议转换和错误�
 ## 启动配置
 
 `main.go` 读取 `HTTP_ADDR`、`DATA_DIR`、`APPROVAL_TTL`、`DEMO_STEP_DELAY`、`PLATFORM` 和
-Agent 模型变量。`HTTP_ADDR` 默认是 `127.0.0.1:8080`，只接受显式 loopback host。
+Agent 模型变量。`HTTP_ADDR` 默认是 `127.0.0.1:8080`，只接受 loopback IP 字面量。
+HTTP handler 也拒绝 Host 不是 loopback IP 的请求，避免 DNS rebinding 绕过监听边界。
 `PLATFORM=real` 在真实 adapter 或生产鉴权未实现时返回启动错误。
 
 ## 验证

@@ -29,9 +29,9 @@
 启动时，store 校验序号、`prev_hash` 和 `hash`。最后一条不完整记录可以截断。中间坏行、
 序号倒退或哈希不匹配会使启动失败。
 
-`Open` 将数据目录权限收紧为 `0700`，并以 `0600` 打开 `.writer.lock`。进程使用非阻塞
-exclusive flock 持有单 writer 所有权，直到 `Close`。第二个进程不能同时打开同一数据目录。
-`Close` 同时关闭 live 订阅，所有后续读写返回 `ErrStoreClosed`。
+`Open` 将数据目录权限收紧为 `0700`，并对目录文件描述符获取非阻塞 exclusive flock。
+目录 inode 锁持有到 `Close`，不能通过替换单独的 lock 文件绕过。第二个进程不能同时打开
+同一数据目录。`Close` 同时关闭 live 订阅，所有后续读写返回 `ErrStoreClosed`。
 
 `MaskPhone` 和 `MaskPlate` 处理 API 返回值。递归 payload 脱敏处理手机号、电话和车牌相关字段，
 避免敏感原文进入日志和哈希输入。

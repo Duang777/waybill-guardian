@@ -3,9 +3,11 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
@@ -21,6 +23,8 @@ import (
 )
 
 const Namespace = "waybill-demo"
+
+var ErrEngineClosed = errors.New("agent engine is closed")
 
 const (
 	ModeDemo   = "demo"
@@ -61,6 +65,12 @@ type Engine struct {
 	agent    *agents.Agent
 	registry *guardtools.Registry
 	history  *history.CommonConversationManager
+
+	mu        sync.Mutex
+	handles   map[*agents.AgentHandle]struct{}
+	closing   bool
+	closeDone chan struct{}
+	closeErr  error
 }
 
 func NewEngine(
@@ -111,7 +121,13 @@ func NewEngine(
 		options.Middlewares = middlewares
 		sdkAgent = agents.NewAgent(options).WithLLM(NewScenarioModel(registry, stepDelay))
 	}
-	return &Engine{agent: sdkAgent, registry: registry, history: fileHistory}, nil
+	return &Engine{
+		agent:     sdkAgent,
+		registry:  registry,
+		history:   fileHistory,
+		handles:   make(map[*agents.AgentHandle]struct{}),
+		closeDone: make(chan struct{}),
+	}, nil
 }
 
 func newOnlineModel(config ModelConfig) (llm.Provider, error) {
@@ -207,23 +223,84 @@ func (e *Engine) Resume(
 }
 
 func (e *Engine) Close() error {
-	return e.history.Close()
+	if e == nil {
+		return nil
+	}
+	e.mu.Lock()
+	if e.closing {
+		done := e.closeDone
+		e.mu.Unlock()
+		<-done
+		return e.closeErr
+	}
+	e.closing = true
+	handles := make([]*agents.AgentHandle, 0, len(e.handles))
+	for handle := range e.handles {
+		handles = append(handles, handle)
+	}
+	e.mu.Unlock()
+
+	var closeErrors []error
+	for _, handle := range handles {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := handle.Stop(stopCtx); err != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("stop agent run %q: %w", handle.StreamID, err))
+		}
+		cancel()
+	}
+	for _, handle := range handles {
+		_, _ = handle.Wait()
+	}
+	closeErrors = append(closeErrors, e.history.Close())
+	closeErr := errors.Join(closeErrors...)
+
+	e.mu.Lock()
+	e.closeErr = closeErr
+	close(e.closeDone)
+	e.mu.Unlock()
+	return closeErr
 }
 
 func (e *Engine) execute(ctx context.Context, input *agents.AgentInput) (Outcome, error) {
+	e.mu.Lock()
+	if e.closing {
+		e.mu.Unlock()
+		return Outcome{}, ErrEngineClosed
+	}
 	handle, err := e.agent.Execute(ctx, input)
 	if err != nil {
+		e.mu.Unlock()
 		return Outcome{}, err
 	}
+	e.handles[handle] = struct{}{}
+	e.mu.Unlock()
+
+	stopDone := make(chan error, 1)
+	stopWatch := context.AfterFunc(ctx, func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		stopDone <- handle.Stop(stopCtx)
+	})
 	var chunks []string
 	for chunk := range handle.Chunks {
 		if chunk != nil {
 			chunks = append(chunks, chunk.ChunkType())
 		}
 	}
-	result, err := handle.Wait(ctx)
-	if err != nil {
-		return Outcome{}, err
+	var stopErr error
+	if !stopWatch() {
+		stopErr = <-stopDone
+	}
+	result, waitErr := handle.Wait()
+	e.mu.Lock()
+	delete(e.handles, handle)
+	closing := e.closing
+	e.mu.Unlock()
+	if closing {
+		return Outcome{}, errors.Join(ErrEngineClosed, stopErr, waitErr)
+	}
+	if ctx.Err() != nil || stopErr != nil || waitErr != nil {
+		return Outcome{}, errors.Join(ctx.Err(), stopErr, waitErr)
 	}
 	outcome := Outcome{
 		SDKRunID: result.RunID,

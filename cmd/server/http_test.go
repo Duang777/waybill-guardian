@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -186,7 +187,6 @@ func TestRealPlatformFailsFast(t *testing.T) {
 func TestValidateHTTPAddrAllowsOnlyExplicitLoopback(t *testing.T) {
 	allowed := []string{
 		defaultHTTPAddr,
-		"localhost:8080",
 		"127.0.0.2:9000",
 		"[::1]:8080",
 	}
@@ -201,6 +201,7 @@ func TestValidateHTTPAddrAllowsOnlyExplicitLoopback(t *testing.T) {
 		"0.0.0.0:8080",
 		"[::]:8080",
 		"192.168.1.10:8080",
+		"localhost:8080",
 		"example.com:8080",
 		"127.0.0.1",
 	}
@@ -209,6 +210,76 @@ func TestValidateHTTPAddrAllowsOnlyExplicitLoopback(t *testing.T) {
 			t.Errorf("validateHTTPAddr(%q) unexpectedly succeeded", addr)
 		}
 	}
+}
+
+func TestHandlerRejectsNonLoopbackHost(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "http://attacker.example/healthz", nil)
+	response := httptest.NewRecorder()
+
+	newHandler(nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", response.Code)
+	}
+	var problem map[string]map[string]string
+	if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+		t.Fatal(err)
+	}
+	if problem["error"]["code"] != "invalid_host" {
+		t.Fatalf("error code = %q, want invalid_host", problem["error"]["code"])
+	}
+}
+
+func TestServeWaitsForActiveHandlerDuringShutdown(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			close(started)
+			<-release
+			close(finished)
+		}),
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- serve(ctx, server, listener)
+	}()
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		response, requestErr := http.Get("http://" + listener.Addr().String())
+		if requestErr == nil {
+			_ = response.Body.Close()
+		}
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not start")
+	}
+
+	cancel()
+	select {
+	case err := <-serveDone:
+		t.Fatalf("serve returned before active handler finished: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not finish")
+	}
+	if err := <-serveDone; err != nil {
+		t.Fatal(err)
+	}
+	<-requestDone
 }
 
 func waitForHTTPApproval(

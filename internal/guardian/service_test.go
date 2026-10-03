@@ -412,6 +412,92 @@ func TestOpenReleasesAuditLockAfterInitializationFailure(t *testing.T) {
 	}
 }
 
+func TestConcurrentCloseWaitsForResourceRelease(t *testing.T) {
+	dataDir := t.TempDir()
+	clients, _, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := Open(Config{DataDir: dataDir, Clients: clients})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	service.wg.Add(1)
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- service.Close()
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		service.mu.Lock()
+		closing := service.closed
+		service.mu.Unlock()
+		if closing {
+			break
+		}
+		if time.Now().After(deadline) {
+			service.wg.Done()
+			t.Fatal("first Close did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- service.Close()
+	}()
+	var secondErr error
+	returnedEarly := false
+	select {
+	case secondErr = <-secondDone:
+		returnedEarly = true
+	case <-time.After(50 * time.Millisecond):
+	}
+	service.wg.Done()
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if !returnedEarly {
+		secondErr = <-secondDone
+	}
+	if secondErr != nil {
+		t.Fatal(secondErr)
+	}
+	if returnedEarly {
+		t.Fatal("concurrent Close returned before resource release")
+	}
+
+	reopened, err := Open(Config{DataDir: dataDir, Clients: clients})
+	if err != nil {
+		t.Fatalf("Open after concurrent Close: %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCloseRejectsNewOperations(t *testing.T) {
+	clients, _, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := Open(Config{DataDir: t.TempDir(), Clients: clients})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.StartDemo(context.Background()); !errors.Is(err, ErrServiceClosed) {
+		t.Fatalf("StartDemo after Close error = %v, want ErrServiceClosed", err)
+	}
+	if err := service.Recover(context.Background()); !errors.Is(err, ErrServiceClosed) {
+		t.Fatalf("Recover after Close error = %v, want ErrServiceClosed", err)
+	}
+}
+
 func waitForApproval(t *testing.T, service *Service, runID domain.RunID) approval.Approval {
 	t.Helper()
 	return waitForDifferentApproval(t, service, runID, "")

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -275,5 +276,161 @@ func TestOnlineEngineRetriesProviderFailure(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("provider calls = %d, want 2", calls.Load())
+	}
+}
+
+func TestEngineCancellationStopsDetachedRun(t *testing.T) {
+	requestStarted := make(chan struct{}, 1)
+	releaseRequest := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case requestStarted <- struct{}{}:
+		default:
+		}
+		select {
+		case <-r.Context().Done():
+		case <-releaseRequest:
+		}
+	}))
+	defer server.Close()
+	defer close(releaseRequest)
+
+	dataDir := t.TempDir()
+	journal, err := audit.Open(dataDir+"/audit", time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	clients, _, err := guardtools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlers, err := guardtools.NewHandlers(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := guardtools.NewRegistry(handlers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := NewEngine(dataDir+"/history", registry, []agents.Middleware{
+		NewAuditMiddleware(journal),
+	}, 0, ModelConfig{
+		Mode:     ModeOnline,
+		APIStyle: APIStyleResponses,
+		BaseURL:  server.URL,
+		APIKey:   "secret",
+		Model:    "model-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := engine.Start(ctx, domain.RunContext{
+			RunID:       "run-cancel",
+			IncidentID:  "incident-cancel",
+			WaybillID:   "YD2026101001",
+			PlanVersion: 1,
+		})
+		done <- err
+	}()
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("model request did not start")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Start error = %v, want context cancellation", err)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("detached run did not stop after context cancellation")
+	}
+}
+
+func TestEngineCloseStopsDetachedRunBeforeClosingHistory(t *testing.T) {
+	requestStarted := make(chan struct{}, 1)
+	releaseRequest := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case requestStarted <- struct{}{}:
+		default:
+		}
+		select {
+		case <-r.Context().Done():
+		case <-releaseRequest:
+		}
+	}))
+	defer server.Close()
+	defer close(releaseRequest)
+
+	dataDir := t.TempDir()
+	journal, err := audit.Open(dataDir+"/audit", time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	clients, _, err := guardtools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlers, err := guardtools.NewHandlers(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := guardtools.NewRegistry(handlers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := NewEngine(dataDir+"/history", registry, []agents.Middleware{
+		NewAuditMiddleware(journal),
+	}, 0, ModelConfig{
+		Mode:     ModeOnline,
+		APIStyle: APIStyleResponses,
+		BaseURL:  server.URL,
+		APIKey:   "secret",
+		Model:    "model-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runDone := make(chan error, 1)
+	go func() {
+		_, err := engine.Start(context.Background(), domain.RunContext{
+			RunID:       "run-close",
+			IncidentID:  "incident-close",
+			WaybillID:   "YD2026101001",
+			PlanVersion: 1,
+		})
+		runDone <- err
+	}()
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("model request did not start")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- engine.Close()
+	}()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("Engine.Close did not wait for the active run to stop")
+	}
+	if err := <-runDone; !errors.Is(err, ErrEngineClosed) {
+		t.Fatalf("Start error = %v, want ErrEngineClosed", err)
 	}
 }
