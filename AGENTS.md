@@ -1,11 +1,11 @@
 # waybill-guardian · AGENTS.md
 
-> 异常运单自治处置 Agent —— 「AI 重构产业 · 架构师大赛」AI+物流赛道参赛项目。
+> 异常运单处置 Agent。「AI 重构产业 · 架构师大赛」AI+物流赛道参赛项目。
 
 ## 一句话
 
-延误 / 破损 / 丢件发生后，Agent 自动拉取运单、轨迹、司机、天气做归因，
-生成改派 / 赔付 / 通知方案；**所有写操作必须经过人工确认闸**，确认后回写 TMS，全程审计可回放。
+延误、破损或丢件发生后，Agent 查询运单、轨迹、司机和天气，形成归因和处置方案。
+所有写操作必须经过人工审批。确认后，系统回写 TMS，并记录可校验、可回放的审计事件。
 
 ## 关键时间线
 
@@ -16,17 +16,18 @@
 ## 架构
 
 ```
-web/  (React + 高德 JS API)
- ├─ 异常运单地图 / 轨迹回放
- ├─ Agent 审计时间线
- └─ 人工审批卡片（确认改派 / 驳回赔付）
+web/  (React + 高德 JS API 或本地轨迹视图)
+ ├─ 异常运单地图和轨迹点
+ ├─ Agent 审计时间线与回放
+ └─ 人工审批卡片
         │ HTTP + SSE
-cmd/server ── internal/agent  (hastekit 接线)
-                 ├─ tools:       7 个契约工具（查询自动执行，写操作走审批）
-                 ├─ approval:    人审闸 pending → confirmed / rejected
-                 ├─ idempotency: 写操作强制 idempotency_key（middleware 拦截缺键调用）
-                 ├─ audit:       append-only 事件流，可回放
-                 └─ platform:    mock TMS ⟷ 真实平台 adapter（同一 Go interface）
+cmd/server ── internal/guardian
+                 ├─ agent:       hastekit Agent loop、pause/resume、模型 retry
+                 ├─ tools:       7 个契约工具
+                 ├─ approval:    pending → confirmed / rejected / expired
+                 ├─ idempotency: 服务端重算 key、并发合并、结果回放
+                 ├─ audit:       append-only JSONL、哈希链、SSE replay/live
+                 └─ platform:    mock clients 和未实现的 real adapter
 ```
 
 ## 工具契约（contract.yaml）
@@ -39,43 +40,47 @@ cmd/server ── internal/agent  (hastekit 接线)
 
 | 决策 | 选择 | 依据 |
 |---|---|---|
-| Agent harness | hastekit/agent-sdk-go，go.mod 钉死版本 | Go 原生；自带 function calling / MCP、provider 抽象、retry / fallback middleware、HITL、流式事件。脏活 80% 现成，自研聚焦人审 / 幂等 / 审计 20% |
-| 人审闸 | 同步审批对象 + 状态机（非事后审计） | 物流写操作不可逆（改派涉及真实运力）；评委必问"怎么防 Agent 改错"（Q2），这是核心答辩素材 |
-| 幂等 | 写操作强制 `idempotency_key`，middleware 层拦截 | 重试 / fallback 场景下防止重复改派、重复赔付 |
-| 审计 | append-only 事件流，可回放 | 支撑"事故复盘"演示；评委可回放异常处置全过程 |
-| 数据层 | 先 mock TMS，与真实平台 adapter 实现同一契约 | 赛前无真实接口；切换时 agent 代码零改动 |
-| 前端地图 | 高德 JS API | 演示在国内，瓦片稳定；Leaflet / CARTO 可能慢 |
+| Agent runtime | hastekit/agent-sdk-go v0.0.24 | 使用 typed tools、file history、HITL pause/resume 和流式事件。在线模式只启用三次模型 retry，不配置 provider fallback |
+| 人工审批 | SDK pause/resume 加持久化审批投影 | 写操作先暂停，人工决定落盘后才恢复同一个 thread。超时默认拒绝 |
+| 幂等 | middleware 重算并校验 `idempotency_key` | 模型传值不可信。并发调用共享第一次执行结果，避免重复改派和通知 |
+| 审计 | 每个 run 一份 append-only JSONL | `seq`、`prev_hash` 和 `hash` 支持完整性校验、回放和 SSE 续传 |
+| 数据层 | fixture 驱动的 mock clients | 默认演示可离线重复运行。`PLATFORM=real` 在 adapter 未实现时拒绝启动 |
+| 前端地图 | 高德 JS API 加本地降级视图 | 未配置 key 或 SDK 加载失败时，其他演示功能仍可使用 |
 
 ## 目录地图
 
-- `cmd/server` — HTTP + SSE 入口
-- `internal/agent` — hastekit 组装：7 工具注册、middleware 链、HITL 接线
-- `internal/tools` — 契约工具的 mock 实现（确定性演示数据）
-- `internal/approval` — 人审闸状态机
-- `internal/audit` — append-only 审计存储与回放
-- `internal/idempotency` — 幂等键生成、校验、去重
-- `internal/platform` — TMS 接口定义；mock 实现 + 未来真实 adapter
-- `web` — 演示前端
+- `cmd/server`：HTTP 和 SSE 入口。
+- `internal/guardian`：用例协调、run 锁、超时和启动恢复。
+- `internal/agent`：hastekit 组装、七个工具注册、HITL 和模型配置。
+- `internal/tools`：契约工具的 typed wrapper 和确定性数据集。
+- `internal/approval`：审批状态机和事件投影。
+- `internal/audit`：append-only JSONL、哈希校验、回放和订阅。
+- `internal/idempotency`：幂等键生成、校验、并发合并和结果回放。
+- `internal/platform`：TMS、天气和通知接口，以及 mock 实现。
+- `web`：React 运营控制台。
 
 ## 参考项目（诚实标注，详见 THIRD_PARTY_NOTICES.md）
 
-思路借鉴（本仓库未复制其源代码）：
-- `hastekit/agent-sdk-go` — harness 本体，作为 Go module 依赖引入（Apache-2.0）
-- `jattiphrswan/logistics-tracker` — 轨迹模拟 / 地图组件 / 告警信息流改审计时间线 / 回放面板的**思路**
-- `09karankr/port-logistics-intelligence` — 风险评分三段式展示的**思路**
-- `dominicfinn/open_tms` — shipment / operational issue 领域模型的**思路**
+思路借鉴，本仓库未复制这些项目的源文件：
+
+- `hastekit/agent-sdk-go`：作为 Go module 依赖引入，许可证为 Apache-2.0。
+- `jattiphrswan/logistics-tracker`：轨迹模拟、地图组件、时间线和回放交互。
+- `09karankr/port-logistics-intelligence`：风险评分展示和 append-only audit。
+- `dominicfinn/open_tms`：shipment 和 operational issue 领域划分。
 
 ## 演示剧本（初赛视频用）
 
-杭州 → 成都运单 YD2026101001：车辆在绵阳段停留超时 → Agent 拉轨迹 / 司机 / 天气 →
-归因"司机疲劳驾驶 + 服务区长时间停留" → 生成改派方案（候选运力二选一）→ 人工确认 →
-回写 TMS → 短信通知货主 → 审计时间线回放。
+杭州到成都运单 `YD2026101001` 在绵阳段停留超时。Agent 查询轨迹、司机和天气后，
+归因到疲劳驾驶和服务区长时间停留。Agent 生成改派与通知方案，人工确认后回写 mock TMS，
+再通过审计时间线回放全过程。逐字稿见 [`docs/demo-script.md`](./docs/demo-script.md)。
 
 ## 提交前检查清单
 
-- [ ] 仓库转公开（当前 private）
-- [ ] go.mod 中 hastekit 已钉死 tag / commit
-- [ ] THIRD_PARTY_NOTICES.md 与实际引入情况一致
-- [ ] 无参考项目整仓 / 整文件复制残留
-- [ ] demo 剧本可一键跑通
-- [ ] README 演示说明与视频一致
+- [x] 仓库已公开。
+- [x] `go.mod` 将 hastekit 固定为 `v0.0.24`。
+- [x] `THIRD_PARTY_NOTICES.md` 已登记直接依赖和参考项目。
+- [x] 本仓库没有复制参考项目的源文件。
+- [x] `./scripts/demo.sh` 可启动完整演示。
+- [x] README 和三分钟讲稿使用当前页面流程。
+- [x] `npm run record:demo` 可生成带中文字幕的演示录像。
+- [ ] 审看最终视频、补充正式配音，并在赛事平台提交视频和公开仓库链接。

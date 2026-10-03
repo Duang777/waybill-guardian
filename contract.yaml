@@ -27,5 +27,5 @@ write:
     args: [waybill_id, claim_type, idempotency_key]
     gate: 人工确认（approval pending → confirmed）
   notify.send_sms:
-    args: [phone, template_id, params]
+    args: [phone, template_id, params, idempotency_key]
     gate: 人工确认（与改派 / 赔付同一审批单，可选）

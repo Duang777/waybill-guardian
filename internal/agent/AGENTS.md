@@ -2,49 +2,68 @@
 
 ## 职责
 
-hastekit agent 的组装层：7 个契约工具注册、middleware 链编排、human-in-the-loop 接线、
-system prompt。这是本项目"架构师"叙事的核心：**脏活（重试 / fallback / 多模型）用 SDK，
-人审 / 幂等 / 审计三件套自己写**。
+本目录组装 hastekit Agent，注册七个契约工具，连接 middleware，处理 HITL pause/resume，
+并配置确定性模型或在线模型。审批、幂等和业务审计由项目代码实现。
 
 ## 依赖（钉死版本）
 
 ```bash
 go get github.com/hastekit/agent-sdk-go@v0.0.24
-go mod tidy && go list -m github.com/hastekit/agent-sdk-go  # 确认解析到 v0.0.24
+go mod tidy
+go list -m github.com/hastekit/agent-sdk-go
 ```
 
-- 选用理由：Go 原生；function calling + MCP、provider 抽象、retry / provider fallback 中间件、
-  streaming / cancellation、structured output、OTel tracing 一应俱全（2026-10-02 核实，Apache-2.0）。
-- 风险：项目新（12 stars）、README 声明有 breaking changes → **必须钉死版本**，升级需手动回归。
-- 待源码验证：HITL 是否支持持久化 pause/resume；若只是同步回调式批准，则用 `internal/approval`
-  的状态机兜底（审批单落盘，agent run 挂起等待，前端确认后恢复）。
+当前版本为 `v0.0.24`，对应 commit `df1bdd4560bcff6dbffea29a6e3a263cb8c39d44`。
+许可证为 Apache-2.0。该版本可能包含 breaking changes，因此升级必须重新执行后端和浏览器端验收。
 
-## 工具注册映射（contract.yaml → hastekit function tool）
+## HITL 结论
+
+源码确认 `WithNeedsApproval(true)` 会在工具执行前把 run 保存为 `await_approval`，并返回
+`paused`。它不是同步阻塞回调。恢复时，调用方使用相同的 namespace 和 thread，传入
+`PreviousRunID` 和 `FunctionCallInterruptResolutionMessage`。
+
+本项目直接使用该 pause/resume 协议。hastekit file history 保存 pending tool calls，
+`internal/approval` 把审批请求和决定写入业务 JSONL。`guardian.Recover` 负责在进程启动时
+对账两份记录。完整源码证据见
+[`docs/research/hastekit-v0.0.24.md`](../../docs/research/hastekit-v0.0.24.md)。
+
+## 工具注册映射
 
 | 契约工具 | 执行策略 |
 |---|---|
 | `tms.get_waybill` / `tms.get_tracking` / `tms.get_driver` / `ext.get_road_weather` | 自动执行（只读） |
 | `tms.reassign` / `tms.create_claim` / `notify.send_sms` | 走 approval 人审闸；middleware 强制校验 `idempotency_key` |
 
-## middleware 链（顺序即执行顺序）
+契约名包含点，模型 wire name 使用下划线。每个 hastekit tool 的 metadata 保存原契约名和
+读写类型。
 
-1. `idempotency` — 写操作缺 `idempotency_key` 直接拦截拒绝（防 agent 漏传）
-2. `approval` — 写操作挂起生成审批单，等待人工确认后放行
-3. `audit` — 所有 tool call / 审批状态变更记为 append-only 事件
-4. hastekit 自带 `retry` / `fallback` — 模型调用失败重试、多 provider 切换
+## middleware 职责
 
-## system prompt 设计要点（TODO 细化）
+`guardian.Open` 安装三个项目 middleware：
 
-- 角色：物流异常处置专家，先归因后行动，禁止跳过归因直接改派。
-- 工具使用纪律：一次只调一个写操作；写操作参数必须复述给用户确认（对应审批卡片）。
-- 输出：归因结论（原因 + 证据链）→ 处置方案（改派 / 赔付 / 通知三选一或组合）→ 等待确认。
+1. `AuditMiddleware` 记录工具调用和结果，并在写盘前脱敏。
+2. `ApprovalGuard` 只允许与 confirmed 审批中 `call_id` 和参数哈希一致的写调用。
+3. `IdempotencyMiddleware` 从可信 `RunContext` 重算 key，合并并发调用，并回放首次成功结果。
 
-## 参考方案
+hastekit 自己根据 `RequiresApproval` 在首次写调用前暂停。项目 middleware 在恢复执行时再次
+校验业务审批和幂等约束。
 
-- `hastekit/agent-sdk-go` README 的 middleware / HITL / streaming 示例（作为依赖使用，Apache-2.0）。
+## system prompt
 
-## TODO
+`SystemPrompt` 要求 Agent 先读取四类证据，再提出写操作。每个写操作必须携带
+`idempotency_key`。首选运力被拒绝后，Agent 使用第二个候选运力。
 
-- [ ] 通读 hastekit HITL 源码，确认 pause/resume 语义，结论记在这里
-- [ ] system prompt 初版 + 演示剧本联调
-- [ ] provider 配置：国内 OpenAI-compatible endpoint 的 base_url 接法验证
+## 模型配置
+
+`AGENT_MODE=demo` 使用 `ScenarioModel`。它根据持久化 conversation 中的工具结果决定下一步，
+所以重启后不依赖内存 step counter。该模式不需要 API key。
+
+`AGENT_MODE=online` 需要：
+
+- `LLM_BASE_URL`：绝对 HTTP(S) API 根路径，不得以 `/` 结尾，也不得包含具体 endpoint。
+- `LLM_API_KEY`：provider 密钥。
+- `LLM_MODEL`：模型名。
+- `LLM_API_STYLE`：`responses` 或 `chat_completions`，默认 `responses`。
+
+在线模式安装 hastekit model retry，最多尝试三次。当前只配置一个 provider，因此不启用
+provider fallback。测试覆盖两个 API style、鉴权 header、模型名、配置校验和 503 重试。

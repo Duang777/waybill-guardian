@@ -8,6 +8,8 @@
 # web
 web/node_modules/
 web/dist/
+web/artifacts/
+web/*.tsbuildinfo
 web/.env
 web/.env.local
 
