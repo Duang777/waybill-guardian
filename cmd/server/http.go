@@ -269,7 +269,10 @@ func (a *api) timeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	controller := http.NewResponseController(w)
-	if err := setSSEWriteDeadline(controller); err != nil {
+	if err := prepareSSEWrite(r.Context(), controller); err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
 		writeProblem(w, http.StatusInternalServerError, "stream_unsupported", "response writer cannot set deadlines")
 		return
 	}
@@ -285,11 +288,14 @@ func (a *api) timeline(w http.ResponseWriter, r *http.Request) {
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 	for {
+		if r.Context().Err() != nil {
+			return
+		}
 		select {
 		case <-r.Context().Done():
 			return
 		case <-heartbeat.C:
-			if err := setSSEWriteDeadline(controller); err != nil {
+			if err := prepareSSEWrite(r.Context(), controller); err != nil {
 				return
 			}
 			if _, err := io.WriteString(w, ": heartbeat\n\n"); err != nil {
@@ -306,7 +312,7 @@ func (a *api) timeline(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
-			if err := setSSEWriteDeadline(controller); err != nil {
+			if err := prepareSSEWrite(r.Context(), controller); err != nil {
 				return
 			}
 			if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", event.Seq, event.Type, raw); err != nil {
@@ -409,8 +415,22 @@ func (a *api) releaseSSESlot() {
 	}
 }
 
-func setSSEWriteDeadline(controller *http.ResponseController) error {
-	return controller.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+func prepareSSEWrite(ctx context.Context, controller *http.ResponseController) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := setSSEWriteDeadline(ctx, controller); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+func setSSEWriteDeadline(ctx context.Context, controller *http.ResponseController) error {
+	deadline := time.Now().Add(sseWriteTimeout)
+	if requestDeadline, ok := ctx.Deadline(); ok && requestDeadline.Before(deadline) {
+		deadline = requestDeadline
+	}
+	return controller.SetWriteDeadline(deadline)
 }
 
 func (a *api) writeServiceError(w http.ResponseWriter, err error) {

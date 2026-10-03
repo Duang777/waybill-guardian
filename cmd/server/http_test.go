@@ -192,6 +192,65 @@ func TestTimelineStopsWritingToSlowClientAfterDeadline(t *testing.T) {
 	}
 }
 
+func TestTimelineDoesNotWriteBufferedEventsAfterRequestCancellation(t *testing.T) {
+	clients, _, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := guardian.Open(guardian.Config{
+		DataDir:   t.TempDir(),
+		Clients:   clients,
+		StepDelay: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	run, err := service.StartDemo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	access := newLocalAccess(t)
+	handler := &api{service: service, access: access}
+
+	for range 32 {
+		ctx, cancel := context.WithCancel(context.Background())
+		request := httptest.NewRequestWithContext(
+			ctx,
+			http.MethodGet,
+			"http://127.0.0.1/api/runs/"+string(run.RunID)+"/timeline",
+			nil,
+		)
+		request.SetPathValue("id", string(run.RunID))
+		request = authenticateRequest(t, access, request)
+		writer := &cancelOnFlushWriter{
+			ResponseRecorder: httptest.NewRecorder(),
+			cancel:           cancel,
+		}
+
+		handler.timeline(writer, request)
+
+		if strings.Contains(writer.Body.String(), "event:") {
+			t.Fatal("timeline wrote an event after request cancellation")
+		}
+	}
+}
+
+func TestSSEWriteDeadlineUsesEarlierRequestDeadline(t *testing.T) {
+	requestDeadline := time.Now().Add(time.Second)
+	ctx, cancel := context.WithDeadline(context.Background(), requestDeadline)
+	defer cancel()
+	writer := newDeadlineBlockingWriter()
+	defer writer.release()
+
+	if err := setSSEWriteDeadline(ctx, http.NewResponseController(writer)); err != nil {
+		t.Fatal(err)
+	}
+	if got := writer.writeDeadline(); !got.Equal(requestDeadline) {
+		t.Fatalf("write deadline = %v, want %v", got, requestDeadline)
+	}
+}
+
 func TestTimelineRejectsWhenSubscriptionLimitIsReached(t *testing.T) {
 	clients, _, err := tools.NewDemoClients()
 	if err != nil {
@@ -706,6 +765,7 @@ type deadlineBlockingWriter struct {
 
 	mu          sync.Mutex
 	deadlineSet bool
+	deadline    time.Time
 	timeout     chan struct{}
 	unblock     chan struct{}
 	timeoutOnce sync.Once
@@ -737,9 +797,10 @@ func (w *deadlineBlockingWriter) Write(payload []byte) (int, error) {
 
 func (*deadlineBlockingWriter) Flush() {}
 
-func (w *deadlineBlockingWriter) SetWriteDeadline(time.Time) error {
+func (w *deadlineBlockingWriter) SetWriteDeadline(deadline time.Time) error {
 	w.mu.Lock()
 	w.deadlineSet = true
+	w.deadline = deadline
 	w.mu.Unlock()
 	w.timeoutOnce.Do(func() {
 		time.AfterFunc(20*time.Millisecond, func() {
@@ -755,10 +816,30 @@ func (w *deadlineBlockingWriter) deadlineWasSet() bool {
 	return w.deadlineSet
 }
 
+func (w *deadlineBlockingWriter) writeDeadline() time.Time {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.deadline
+}
+
 func (w *deadlineBlockingWriter) release() {
 	w.releaseOnce.Do(func() {
 		close(w.unblock)
 	})
+}
+
+type cancelOnFlushWriter struct {
+	*httptest.ResponseRecorder
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (w *cancelOnFlushWriter) Flush() {
+	w.once.Do(w.cancel)
+}
+
+func (*cancelOnFlushWriter) SetWriteDeadline(time.Time) error {
+	return nil
 }
 
 func waitForHTTPApproval(
