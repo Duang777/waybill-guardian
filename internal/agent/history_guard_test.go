@@ -19,6 +19,9 @@ func TestHistoryGuardRejectsProhibitedData(t *testing.T) {
 		{name: "mobile number", value: map[string]any{"text": "contact 13800138000"}},
 		{name: "license plate", value: map[string]any{"text": "vehicle 浙A12345"}},
 		{name: "nested JSON string", value: map[string]any{"arguments": `{"template_id":"delay"}`}},
+		{name: "fenced JSON string", value: map[string]any{"text": "```json\n{\"latitude\":30.2}\n```"}},
+		{name: "malformed JSON string", value: map[string]any{"arguments": `{"safe":`}},
+		{name: "concatenated JSON string", value: map[string]any{"arguments": `{"safe":1}{"safe":2}`}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -62,6 +65,92 @@ func TestHistoryGuardChecksModelRequestAndResponse(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("safe request did not reach model")
+	}
+}
+
+func TestHistoryGuardChecksRequestAfterOtherMiddlewareTransformsIt(t *testing.T) {
+	called := false
+	middlewares := protectModelBoundary([]agents.Middleware{
+		requestTransformMiddleware{transform: func(request *responses.Request) {
+			request.Parameters.ExtraFields = map[string]any{"latitude": 30.2}
+		}},
+	})
+	wrapped := agents.WrapModelCall(
+		agents.ModelCallMiddlewaresOf(middlewares),
+		func(
+			context.Context,
+			*agents.ModelCall,
+			*responses.Request,
+		) (*responses.Response, error) {
+			called = true
+			return agents.ModelCallText("safe"), nil
+		},
+	)
+
+	if _, err := wrapped(
+		context.Background(),
+		&agents.ModelCall{},
+		&responses.Request{},
+	); !errors.Is(err, ErrUnsafeHistory) {
+		t.Fatalf("transformed request error = %v, want ErrUnsafeHistory", err)
+	}
+	if called {
+		t.Fatal("transformed unsafe request reached model")
+	}
+
+	middlewares = protectModelBoundary([]agents.Middleware{
+		responseTransformMiddleware{},
+	})
+	wrapped = agents.WrapModelCall(
+		agents.ModelCallMiddlewaresOf(middlewares),
+		func(
+			context.Context,
+			*agents.ModelCall,
+			*responses.Request,
+		) (*responses.Response, error) {
+			return agents.ModelCallText("safe"), nil
+		},
+	)
+	if _, err := wrapped(
+		context.Background(),
+		&agents.ModelCall{},
+		&responses.Request{},
+	); !errors.Is(err, ErrUnsafeHistory) {
+		t.Fatalf("transformed response error = %v, want ErrUnsafeHistory", err)
+	}
+}
+
+type requestTransformMiddleware struct {
+	agents.NoopMiddleware
+	transform func(*responses.Request)
+}
+
+func (m requestTransformMiddleware) WrapModelCall(next agents.ModelCallFunc) agents.ModelCallFunc {
+	return func(
+		ctx context.Context,
+		call *agents.ModelCall,
+		request *responses.Request,
+	) (*responses.Response, error) {
+		m.transform(request)
+		return next(ctx, call, request)
+	}
+}
+
+type responseTransformMiddleware struct {
+	agents.NoopMiddleware
+}
+
+func (responseTransformMiddleware) WrapModelCall(next agents.ModelCallFunc) agents.ModelCallFunc {
+	return func(
+		ctx context.Context,
+		call *agents.ModelCall,
+		request *responses.Request,
+	) (*responses.Response, error) {
+		_, err := next(ctx, call, request)
+		if err != nil {
+			return nil, err
+		}
+		return agents.ModelCallText("contact 13800138000"), nil
 	}
 }
 

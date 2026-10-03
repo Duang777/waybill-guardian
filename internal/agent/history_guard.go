@@ -23,9 +23,10 @@ const (
 var (
 	ErrUnsafeHistory = errors.New("agent history contains prohibited data")
 
-	mobileNumberPattern  = regexp.MustCompile(`(^|[^0-9])1[3-9][0-9]{9}([^0-9]|$)`)
-	licensePlatePattern  = regexp.MustCompile(`[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领][A-HJ-NP-Z][A-HJ-NP-Z0-9]{5,6}`)
-	forbiddenHistoryKeys = map[string]struct{}{
+	mobileNumberPattern     = regexp.MustCompile(`(^|[^0-9])1[3-9][0-9]{9}([^0-9]|$)`)
+	licensePlatePattern     = regexp.MustCompile(`[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领][A-HJ-NP-Z][A-HJ-NP-Z0-9]{5,6}`)
+	forbiddenJSONKeyPattern = regexp.MustCompile(`(?i)"(shipper_phone|phone|plate|license_plate|longitude|latitude|template_id|params)"[[:space:]]*:`)
+	forbiddenHistoryKeys    = map[string]struct{}{
 		"phone":         {},
 		"shipper_phone": {},
 		"plate":         {},
@@ -201,6 +202,13 @@ func decodeHistoryJSON(raw []byte) (any, error) {
 	if err := decoder.Decode(&decoded); err != nil {
 		return nil, err
 	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = fmt.Errorf("multiple JSON values")
+		}
+		return nil, err
+	}
 	return decoded, nil
 }
 
@@ -228,13 +236,17 @@ func inspectHistoryValue(value any, path string) error {
 		if licensePlatePattern.MatchString(strings.ToUpper(current)) {
 			return fmt.Errorf("%w: license plate at %s", ErrUnsafeHistory, path)
 		}
+		if forbiddenJSONKeyPattern.MatchString(current) {
+			return fmt.Errorf("%w: prohibited JSON field at %s", ErrUnsafeHistory, path)
+		}
 		trimmed := strings.TrimSpace(current)
 		if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
 			nested, err := decodeHistoryJSON([]byte(trimmed))
-			if err == nil {
-				if err := inspectHistoryValue(nested, path+"<json>"); err != nil {
-					return err
-				}
+			if err != nil {
+				return fmt.Errorf("%w: malformed nested JSON at %s", ErrUnsafeHistory, path)
+			}
+			if err := inspectHistoryValue(nested, path+"<json>"); err != nil {
+				return err
 			}
 		}
 	}
