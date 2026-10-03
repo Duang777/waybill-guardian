@@ -37,6 +37,7 @@ export DATABASE_URL="$TEST_DATABASE_URL"
 
 cd "$ROOT_DIR"
 env -u GOROOT go test -tags=integration -count=1 ./internal/storage/postgres
+env -u GOROOT go test -tags=integration -count=1 -run TestEventIngressConcurrentReplayWithPostgreSQL ./cmd/server
 
 if [[ "${SKIP_POSTGRES_E2E:-0}" != "1" ]]; then
 	require_command() {

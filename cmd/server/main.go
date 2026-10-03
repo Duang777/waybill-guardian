@@ -73,6 +73,17 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	var outboxPublisher *outboxhttp.Publisher
+	if eventConfig.outboxEnabled {
+		outboxPublisher, err = outboxhttp.New(outboxhttp.Config{
+			URL:     eventConfig.outboxURL,
+			Token:   eventConfig.outboxToken,
+			Timeout: eventConfig.outboxTimeout,
+		})
+		if err != nil {
+			return err
+		}
+	}
 	tenantID, err := tenantIDFromEnv(authMode)
 	if err != nil {
 		return err
@@ -196,17 +207,9 @@ func run() error {
 	if storageMode == storage.ModePostgres {
 		recorder = metrics.New(time.Now)
 		if eventConfig.outboxEnabled {
-			publisher, publisherErr := outboxhttp.New(outboxhttp.Config{
-				URL:     eventConfig.outboxURL,
-				Token:   eventConfig.outboxToken,
-				Timeout: eventConfig.outboxTimeout,
-			})
-			if publisherErr != nil {
-				return publisherErr
-			}
 			dispatcher, err = outbox.NewDispatcher(outbox.DispatcherConfig{
 				Store:         repository,
-				Publisher:     publisher,
+				Publisher:     outboxPublisher,
 				Observer:      recorder,
 				BatchSize:     eventConfig.outboxBatchSize,
 				Concurrency:   eventConfig.outboxWorkers,
@@ -271,6 +274,9 @@ func run() error {
 			Addr:              eventConfig.metricsAddr,
 			Handler:           metricsMux,
 			ReadHeaderTimeout: 5 * time.Second,
+			BaseContext: func(net.Listener) context.Context {
+				return ctx
+			},
 		}
 		slog.Info("waybill metrics listening", "addr", metricsListener.Addr())
 		components = append(components, func(ctx context.Context) error {
