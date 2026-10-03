@@ -95,6 +95,7 @@ type Service struct {
 	registry    *guardtools.Registry
 	engine      *agentkit.Engine
 	coordinator RunCoordinator
+	recovery    audit.RecoveryJournal
 
 	mu        sync.Mutex
 	runs      map[domain.RunID]RunView
@@ -152,6 +153,12 @@ func openService(
 	closeJournal := func(err error) (*Service, error) {
 		return nil, errors.Join(err, journal.Close())
 	}
+	recovery, _ := journal.(audit.RecoveryJournal)
+	if recovery != nil {
+		if err := recovery.PrepareRecovery(context.Background()); err != nil {
+			return closeJournal(err)
+		}
+	}
 	approvals, err := approval.NewStore(journal, config.Clock)
 	if err != nil {
 		return closeJournal(err)
@@ -202,6 +209,7 @@ func openService(
 		registry:    registry,
 		engine:      engine,
 		coordinator: coordinator,
+		recovery:    recovery,
 		runs:        make(map[domain.RunID]RunView),
 		locks:       make(map[domain.RunID]*sync.Mutex),
 		timers:      make(map[domain.ApprovalID]chan struct{}),
@@ -406,6 +414,21 @@ func (s *Service) Replay(ctx context.Context, runID domain.RunID, after audit.Se
 }
 
 func (s *Service) GetRun(runID domain.RunID) (RunView, error) {
+	if s.recovery != nil {
+		projection, err := s.recovery.RunProjection(context.Background(), runID)
+		if err != nil {
+			return RunView{}, err
+		}
+		run := RunView{
+			RunID:      projection.RunID,
+			IncidentID: projection.IncidentID,
+			WaybillID:  projection.WaybillID,
+			Status:     projection.Status,
+			LastSeq:    projection.LastSeq,
+		}
+		s.setRun(run)
+		return run, nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	value, ok := s.runs[runID]
@@ -879,7 +902,10 @@ func (s *Service) runSnapshot() []RunView {
 }
 
 func isTerminal(status domain.RunStatus) bool {
-	return status == domain.RunCompleted || status == domain.RunRejected || status == domain.RunFailed
+	return status == domain.RunCompleted ||
+		status == domain.RunRejected ||
+		status == domain.RunFailed ||
+		status == domain.RunManualReview
 }
 
 func (s *Service) beginOperation() error {
@@ -1047,6 +1073,22 @@ func (s *Service) createApproval(
 }
 
 func (s *Service) rebuildRuns() error {
+	if s.recovery != nil {
+		projections, err := s.recovery.RunProjections(context.Background())
+		if err != nil {
+			return err
+		}
+		for _, run := range projections {
+			s.runs[run.RunID] = RunView{
+				RunID:      run.RunID,
+				IncidentID: run.IncidentID,
+				WaybillID:  run.WaybillID,
+				Status:     run.Status,
+				LastSeq:    run.LastSeq,
+			}
+		}
+		return nil
+	}
 	events, err := s.journal.AllEvents(context.Background())
 	if err != nil {
 		return err

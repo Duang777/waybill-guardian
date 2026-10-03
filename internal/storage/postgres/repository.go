@@ -180,8 +180,9 @@ func (r *Repository) lockRunAndValidateClaim(
 	var leaseOwner *string
 	var fence int64
 	var leaseActive bool
+	var status domain.RunStatus
 	if err := tx.QueryRow(ctx, `
-		SELECT last_audit_seq, last_audit_hash, lease_owner, fencing_token,
+		SELECT last_audit_seq, last_audit_hash, lease_owner, fencing_token, status,
 		       COALESCE(lease_deadline > clock_timestamp(), false)
 		FROM waybill.runs
 		WHERE tenant_id = $1 AND run_id = $2
@@ -191,12 +192,16 @@ func (r *Repository) lockRunAndValidateClaim(
 		&lastHash,
 		&leaseOwner,
 		&fence,
+		&status,
 		&leaseActive,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return 0, nil, audit.ErrRunNotFound
 		}
 		return 0, nil, fmt.Errorf("lock PostgreSQL run %q: %w", runID, err)
+	}
+	if status == domain.RunManualReview {
+		return 0, nil, ErrRunQuarantined
 	}
 	if eventType != audit.EventRunStarted {
 		claim := claimFromContext(ctx)
@@ -230,27 +235,27 @@ func (r *Repository) Replay(
 		return nil, err
 	}
 	var lastSeq int64
+	var quarantineReason *string
 	if err := r.db.pool.QueryRow(ctx, `
-		SELECT last_audit_seq
-		FROM waybill.runs
-		WHERE tenant_id = $1 AND run_id = $2
-	`, r.tenantID, runID).Scan(&lastSeq); err != nil {
+		SELECT run.last_audit_seq, quarantine.reason
+		FROM waybill.runs run
+		LEFT JOIN waybill.run_quarantines quarantine
+		  ON quarantine.tenant_id = run.tenant_id
+		 AND quarantine.run_id = run.run_id
+		WHERE run.tenant_id = $1 AND run.run_id = $2
+	`, r.tenantID, runID).Scan(&lastSeq, &quarantineReason); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, audit.ErrRunNotFound
 		}
 		return nil, fmt.Errorf("read PostgreSQL audit head: %w", err)
 	}
+	if quarantineReason != nil {
+		return nil, &RunQuarantinedError{RunID: runID, Reason: *quarantineReason}
+	}
 	if uint64(after) > uint64(lastSeq) {
 		return nil, audit.ErrCursorAhead
 	}
-	rows, err := r.db.pool.Query(ctx, auditSelect+`
-		WHERE tenant_id = $1 AND run_id = $2 AND seq > $3
-		ORDER BY seq
-	`, r.tenantID, runID, after)
-	if err != nil {
-		return nil, fmt.Errorf("replay PostgreSQL audit events: %w", err)
-	}
-	return scanEvents(rows)
+	return r.replayUnchecked(ctx, runID, after)
 }
 
 func (r *Repository) Subscribe(
@@ -289,6 +294,12 @@ func (r *Repository) AllEvents(ctx context.Context) ([]audit.Event, error) {
 	}
 	rows, err := r.db.pool.Query(ctx, auditSelect+`
 		WHERE tenant_id = $1
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM waybill.run_quarantines quarantine
+		      WHERE quarantine.tenant_id = audit_events.tenant_id
+		        AND quarantine.run_id = audit_events.run_id
+		  )
 		ORDER BY run_id, seq
 	`, r.tenantID)
 	if err != nil {
@@ -298,11 +309,24 @@ func (r *Repository) AllEvents(ctx context.Context) ([]audit.Event, error) {
 }
 
 func (r *Repository) Verify(runID domain.RunID) error {
-	events, err := r.Replay(context.Background(), runID, 0)
+	ctx := context.Background()
+	var head auditHead
+	head.runID = runID
+	if err := r.db.pool.QueryRow(ctx, `
+		SELECT last_audit_seq, last_audit_hash
+		FROM waybill.runs
+		WHERE tenant_id = $1 AND run_id = $2
+	`, r.tenantID, runID).Scan(&head.lastSeq, &head.lastHash); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return audit.ErrRunNotFound
+		}
+		return fmt.Errorf("read PostgreSQL audit head: %w", err)
+	}
+	events, err := r.replayUnchecked(ctx, runID, 0)
 	if err != nil {
 		return err
 	}
-	return audit.VerifyEvents(runID, events)
+	return verifyAuditHead(head, events)
 }
 
 func (r *Repository) Close() error {

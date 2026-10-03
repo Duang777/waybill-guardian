@@ -16,6 +16,7 @@ const statusLabels = {
   completed: "处置完成",
   rejected: "转人工跟进",
   failed: "处置失败",
+  manual_review: "等待人工复核",
 } satisfies Record<RunStatus, string>;
 
 export function SummaryStrip({ view, status, connected }: SummaryStripProps) {

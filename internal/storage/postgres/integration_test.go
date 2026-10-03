@@ -16,7 +16,9 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/approval"
 	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/guardian"
 	"github.com/Duang777/waybill-guardian/internal/idempotency"
+	guardtools "github.com/Duang777/waybill-guardian/internal/tools"
 	"github.com/google/uuid"
 	"github.com/hastekit/agent-sdk-go/pkg/agents/history"
 )
@@ -53,8 +55,8 @@ func TestMigrationsAgainstPostgreSQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if health.SchemaVersion != 2 {
-		t.Fatalf("schema version = %d, want 2", health.SchemaVersion)
+	if health.SchemaVersion != 3 {
+		t.Fatalf("schema version = %d, want 3", health.SchemaVersion)
 	}
 	var tableCount int
 	if err := db.pool.QueryRow(ctx, `
@@ -74,8 +76,8 @@ func TestMigrationsAgainstPostgreSQL(t *testing.T) {
 	).Scan(&migrationCount); err != nil {
 		t.Fatal(err)
 	}
-	if migrationCount != 2 {
-		t.Fatalf("migration rows = %d, want 2", migrationCount)
+	if migrationCount != 3 {
+		t.Fatalf("migration rows = %d, want 3", migrationCount)
 	}
 
 	insert := func() error {
@@ -218,6 +220,327 @@ func TestRunLeaseFencesStaleWorker(t *testing.T) {
 	}
 	if event.Seq != 2 {
 		t.Fatalf("current event seq = %d, want 2", event.Seq)
+	}
+}
+
+func TestRunLeaseReleaseIsConcurrentSafe(t *testing.T) {
+	db := openIntegrationDB(t)
+	tenantID := "tenant-" + uuid.NewString()
+	repository := newIntegrationRepository(t, db, tenantID, "worker-1")
+	defer repository.Close()
+
+	runID := domain.RunID(uuid.NewString())
+	appendStarted(t, repository, runID)
+	_, release, err := repository.AcquireRun(t.Context(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const callers = 8
+	results := make(chan error, callers)
+	var wait sync.WaitGroup
+	wait.Add(callers)
+	for range callers {
+		go func() {
+			defer wait.Done()
+			results <- release()
+		}()
+	}
+	wait.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Fatalf("concurrent release: %v", err)
+		}
+	}
+
+	var owner *string
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT lease_owner
+		FROM waybill.runs
+		WHERE tenant_id = $1 AND run_id = $2
+	`, tenantID, runID).Scan(&owner); err != nil {
+		t.Fatal(err)
+	}
+	if owner != nil {
+		t.Fatalf("lease owner after concurrent release = %q", *owner)
+	}
+}
+
+func TestOutboxClaimRenewCompleteAndReclaimAreFenced(t *testing.T) {
+	db := openIntegrationDB(t)
+	tenantID := "tenant-" + uuid.NewString()
+	first := newIntegrationRepository(t, db, tenantID, "worker-1")
+	second := newIntegrationRepository(t, db, tenantID, "worker-2")
+	defer first.Close()
+	defer second.Close()
+
+	runID := domain.RunID(uuid.NewString())
+	appendStarted(t, first, runID)
+	runCtx, release, err := first.AcquireRun(t.Context(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Append(runCtx, runID, toolCallDraft("outbox-next")); err != nil {
+		t.Fatal(err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+
+	claims, err := first.ClaimOutbox(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 1 {
+		t.Fatalf("first outbox claims = %d, want 1", len(claims))
+	}
+	firstClaim := claims[0]
+	if event := firstClaim.Event(); event.AggregateVersion != 1 || event.Attempt != 1 {
+		t.Fatalf("first outbox event = %+v", event)
+	}
+	claims, err = second.ClaimOutbox(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 0 {
+		t.Fatalf("concurrent outbox claims = %d, want 0", len(claims))
+	}
+
+	if _, err := db.pool.Exec(t.Context(), `
+		UPDATE waybill.outbox_events
+		SET lease_deadline = clock_timestamp() - interval '1 second'
+		WHERE tenant_id = $1 AND source = $2 AND event_id = $3
+	`, tenantID, firstClaim.source, firstClaim.eventID); err != nil {
+		t.Fatal(err)
+	}
+	claims, err = second.ClaimOutbox(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 1 {
+		t.Fatalf("reclaimed outbox events = %d, want 1", len(claims))
+	}
+	secondClaim := claims[0]
+	if event := secondClaim.Event(); event.AggregateVersion != 1 || event.Attempt != 2 {
+		t.Fatalf("reclaimed outbox event = %+v", event)
+	}
+	if secondClaim.fence <= firstClaim.fence {
+		t.Fatalf("reclaimed fence = %d, first fence = %d", secondClaim.fence, firstClaim.fence)
+	}
+	if err := second.RenewOutbox(t.Context(), secondClaim); err != nil {
+		t.Fatalf("renew current outbox claim: %v", err)
+	}
+	if err := first.RenewOutbox(t.Context(), firstClaim); !errors.Is(err, ErrStaleOutboxClaim) {
+		t.Fatalf("stale outbox renewal = %v, want ErrStaleOutboxClaim", err)
+	}
+	if err := first.CompleteOutbox(t.Context(), firstClaim, OutboxResult{
+		Disposition: OutboxPublished,
+	}); !errors.Is(err, ErrStaleOutboxClaim) {
+		t.Fatalf("stale outbox completion = %v, want ErrStaleOutboxClaim", err)
+	}
+	if err := second.CompleteOutbox(t.Context(), secondClaim, OutboxResult{
+		Disposition: OutboxPublished,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	claims, err = first.ClaimOutbox(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 1 || claims[0].Event().AggregateVersion != 2 {
+		t.Fatalf("next outbox claim = %+v", claims)
+	}
+	nextClaim := claims[0]
+	if err := first.CompleteOutbox(t.Context(), nextClaim, OutboxResult{
+		Disposition: OutboxRetryableFailed,
+		RetryAfter:  time.Hour,
+		ErrorCode:   "broker_unavailable",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	claims, err = second.ClaimOutbox(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 0 {
+		t.Fatalf("outbox retry claimed before availability: %+v", claims)
+	}
+	if _, err := db.pool.Exec(t.Context(), `
+		UPDATE waybill.outbox_events
+		SET available_at = clock_timestamp() - interval '1 second'
+		WHERE tenant_id = $1 AND source = $2 AND event_id = $3
+	`, tenantID, nextClaim.source, nextClaim.eventID); err != nil {
+		t.Fatal(err)
+	}
+	claims, err = second.ClaimOutbox(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 1 || claims[0].Event().Attempt != 2 {
+		t.Fatalf("retryable outbox claims = %+v", claims)
+	}
+	if err := second.CompleteOutbox(t.Context(), claims[0], OutboxResult{
+		Disposition: OutboxPublished,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var status string
+	var publishedAt *time.Time
+	var leaseOwner *string
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT status, published_at, lease_owner
+		FROM waybill.outbox_events
+		WHERE tenant_id = $1 AND source = $2 AND event_id = $3
+	`, tenantID, nextClaim.source, nextClaim.eventID).Scan(
+		&status,
+		&publishedAt,
+		&leaseOwner,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(OutboxPublished) || publishedAt == nil || leaseOwner != nil {
+		t.Fatalf("completed outbox state = status %q published %v owner %v",
+			status, publishedAt, leaseOwner)
+	}
+}
+
+func TestPrepareRecoveryQuarantinesOnlyDamagedRun(t *testing.T) {
+	db := openIntegrationDB(t)
+	tenantID := "tenant-" + uuid.NewString()
+	repository := newIntegrationRepository(t, db, tenantID, "worker-1")
+	defer repository.Close()
+
+	damagedRunID := domain.RunID(uuid.NewString())
+	appendStarted(t, repository, damagedRunID)
+	runCtx, release, err := repository.AcquireRun(t.Context(), damagedRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.Append(runCtx, damagedRunID, toolCallDraft("damaged")); err != nil {
+		t.Fatal(err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	healthyRunID := domain.RunID(uuid.NewString())
+	appendStarted(t, repository, healthyRunID)
+
+	if _, err := db.pool.Exec(t.Context(), `
+		UPDATE waybill.audit_events
+		SET payload_canonical = convert_to('{"call_id":"tampered"}', 'UTF8')
+		WHERE tenant_id = $1 AND run_id = $2 AND seq = 2
+	`, tenantID, damagedRunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.PrepareRecovery(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.PrepareRecovery(t.Context()); err != nil {
+		t.Fatalf("repeated recovery preparation: %v", err)
+	}
+
+	damaged, err := repository.RunProjection(t.Context(), damagedRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthy, err := repository.RunProjection(t.Context(), healthyRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if damaged.Status != domain.RunManualReview {
+		t.Fatalf("damaged run status = %q, want manual_review", damaged.Status)
+	}
+	if healthy.Status != domain.RunStarted {
+		t.Fatalf("healthy run status = %q, want started", healthy.Status)
+	}
+	if _, err := repository.Replay(t.Context(), damagedRunID, 0); !errors.Is(err, ErrRunQuarantined) {
+		t.Fatalf("damaged run replay = %v, want ErrRunQuarantined", err)
+	}
+	if _, err := repository.ClaimRun(t.Context(), damagedRunID); !errors.Is(err, ErrRunQuarantined) {
+		t.Fatalf("damaged run claim = %v, want ErrRunQuarantined", err)
+	}
+	if err := repository.Verify(damagedRunID); err == nil {
+		t.Fatal("damaged audit chain passed verification")
+	}
+	events, err := repository.AllEvents(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].RunID != healthyRunID {
+		t.Fatalf("recoverable audit events = %+v", events)
+	}
+	healthyEvents, err := repository.Replay(t.Context(), healthyRunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(healthyEvents) != 1 {
+		t.Fatalf("healthy run events = %d, want 1", len(healthyEvents))
+	}
+	outboxClaims, err := repository.ClaimOutbox(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outboxClaims) != 1 ||
+		outboxClaims[0].Event().AggregateID != string(healthyRunID) {
+		t.Fatalf("outbox claims after quarantine = %+v", outboxClaims)
+	}
+
+	var quarantineCount int
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT count(*)
+		FROM waybill.run_quarantines
+		WHERE tenant_id = $1 AND run_id = $2
+	`, tenantID, damagedRunID).Scan(&quarantineCount); err != nil {
+		t.Fatal(err)
+	}
+	if quarantineCount != 1 {
+		t.Fatalf("quarantine rows = %d, want 1", quarantineCount)
+	}
+
+	history, err := NewConversationPersistence(db, HistoryConfig{
+		TenantID: tenantID,
+		KeyID:    "test-key",
+		Key:      bytes.Repeat([]byte{0x24}, 32),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clients, _, err := guardtools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := guardian.OpenDurable(guardian.DurableConfig{
+		Config:      guardian.Config{Clients: clients},
+		Journal:     repository,
+		Effects:     repository,
+		History:     history,
+		Coordinator: repository,
+	})
+	if err != nil {
+		t.Fatalf("open guardian with quarantined run: %v", err)
+	}
+	defer service.Close()
+	if err := service.Recover(t.Context()); err != nil {
+		t.Fatalf("recover healthy runs with quarantined peer: %v", err)
+	}
+	snapshot, err := service.Snapshot(t.Context(), damagedRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Run.Status != domain.RunManualReview || len(snapshot.Events) != 0 {
+		t.Fatalf("quarantined run snapshot = %+v", snapshot)
+	}
+	activeRuns, err := service.ListActiveRuns(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(activeRuns) != 1 ||
+		activeRuns[0].RunID != damagedRunID ||
+		activeRuns[0].Status != domain.RunManualReview {
+		t.Fatalf("active runs after isolated recovery = %+v", activeRuns)
 	}
 }
 

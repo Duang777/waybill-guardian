@@ -62,7 +62,7 @@ cd waybill-guardian
 | `PG_STARTUP_TIMEOUT` | `30s` | PostgreSQL 连接、检查和迁移的总超时 |
 | `TENANT_ID` | `local-demo` | PostgreSQL 业务数据的租户边界 |
 | `INSTANCE_ID` | 随机 UUID | PostgreSQL run 和 effect 租约的 worker 身份 |
-| `RUN_LEASE_TTL` | `30s` | PostgreSQL run/effect 租约时长 |
+| `RUN_LEASE_TTL` | `30s` | PostgreSQL run、effect 和 outbox 租约时长 |
 | `CHECKPOINT_KEY_ID` | `local-v1` | checkpoint 加密密钥版本 |
 | `CHECKPOINT_ENCRYPTION_KEY` | 空 | PostgreSQL 模式必填，Base64 编码的 32 字节 AES-256 key |
 | `AGENT_MODE` | `demo` | `demo` 使用确定性模型；`online` 调用外部模型 |

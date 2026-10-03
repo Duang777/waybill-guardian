@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/Duang777/waybill-guardian/internal/audit"
@@ -41,6 +42,7 @@ func (r *Repository) ClaimRun(ctx context.Context, runID domain.RunID) (*runClai
 		    fencing_token = fencing_token + 1,
 		    updated_at = clock_timestamp()
 		WHERE tenant_id = $1 AND run_id = $2
+		  AND status <> 'manual_review'
 		  AND (lease_deadline IS NULL OR lease_deadline <= clock_timestamp())
 		RETURNING fencing_token, lease_deadline
 	`, r.tenantID, runID, r.workerID, r.leaseTTL.Seconds()).Scan(
@@ -54,16 +56,19 @@ func (r *Repository) ClaimRun(ctx context.Context, runID domain.RunID) (*runClai
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("claim PostgreSQL run %q: %w", runID, err)
 	}
-	var exists bool
+	var status domain.RunStatus
 	if err := r.db.pool.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM waybill.runs WHERE tenant_id = $1 AND run_id = $2
-		)
-	`, r.tenantID, runID).Scan(&exists); err != nil {
+		SELECT status
+		FROM waybill.runs
+		WHERE tenant_id = $1 AND run_id = $2
+	`, r.tenantID, runID).Scan(&status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, audit.ErrRunNotFound
+		}
 		return nil, fmt.Errorf("inspect PostgreSQL run lease: %w", err)
 	}
-	if !exists {
-		return nil, audit.ErrRunNotFound
+	if status == domain.RunManualReview {
+		return nil, ErrRunQuarantined
 	}
 	return nil, ErrRunLeaseHeld
 }
@@ -122,8 +127,12 @@ func (r *Repository) AcquireRun(
 	leaseCtx, cancel := context.WithCancel(ctx)
 	leaseCtx = context.WithValue(leaseCtx, runClaimContextKey{}, claim)
 	done := make(chan struct{})
+	renewInterval := r.leaseTTL / 3
+	if renewInterval <= 0 {
+		renewInterval = time.Nanosecond
+	}
 	go func() {
-		ticker := time.NewTicker(r.leaseTTL / 3)
+		ticker := time.NewTicker(renewInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -142,18 +151,19 @@ func (r *Repository) AcquireRun(
 			}
 		}
 	}()
-	var released bool
+	var releaseOnce sync.Once
 	var releaseErr error
 	return leaseCtx, func() error {
-		if released {
-			return releaseErr
-		}
-		released = true
-		close(done)
-		cancel()
-		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), r.leaseTTL/3)
-		defer releaseCancel()
-		releaseErr = r.ReleaseRun(releaseCtx, claim)
+		releaseOnce.Do(func() {
+			close(done)
+			cancel()
+			releaseCtx, releaseCancel := context.WithTimeout(
+				context.Background(),
+				renewInterval,
+			)
+			defer releaseCancel()
+			releaseErr = r.ReleaseRun(releaseCtx, claim)
+		})
 		return releaseErr
 	}, nil
 }

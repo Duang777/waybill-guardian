@@ -50,6 +50,7 @@ const (
 	RunCompleted        RunStatus = "completed"
 	RunRejected         RunStatus = "rejected"
 	RunFailed           RunStatus = "failed"
+	RunManualReview     RunStatus = "manual_review"
 )
 
 type RunContext struct {

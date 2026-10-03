@@ -39,6 +39,28 @@ func (s *Service) ListActiveRuns(ctx context.Context) ([]RunSummary, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if s.recovery != nil {
+		projections, err := s.recovery.RunProjections(ctx)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]RunSummary, 0, len(projections))
+		for _, run := range projections {
+			if !isOperationallyActive(run.Status) {
+				continue
+			}
+			result = append(result, RunSummary{
+				RunID:      run.RunID,
+				IncidentID: run.IncidentID,
+				WaybillID:  run.WaybillID,
+				Status:     run.Status,
+				LastSeq:    run.LastSeq,
+				UpdatedAt:  run.UpdatedAt,
+			})
+		}
+		sortRunSummaries(result)
+		return result, nil
+	}
 	events, err := s.journal.AllEvents(ctx)
 	if err != nil {
 		return nil, err
@@ -49,16 +71,11 @@ func (s *Service) ListActiveRuns(ctx context.Context) ([]RunSummary, error) {
 	}
 	result := make([]RunSummary, 0, len(runs))
 	for _, run := range runs {
-		if !isTerminal(run.Status) {
+		if isOperationallyActive(run.Status) {
 			result = append(result, run)
 		}
 	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].UpdatedAt.Equal(result[j].UpdatedAt) {
-			return result[i].RunID < result[j].RunID
-		}
-		return result[i].UpdatedAt.After(result[j].UpdatedAt)
-	})
+	sortRunSummaries(result)
 	return result, nil
 }
 
@@ -93,6 +110,28 @@ func (s *Service) ListPendingApprovals(ctx context.Context) ([]PendingApprovalSu
 }
 
 func (s *Service) Snapshot(ctx context.Context, runID domain.RunID) (RunSnapshot, error) {
+	if s.recovery != nil {
+		projection, err := s.recovery.RunProjection(ctx, runID)
+		if err != nil {
+			return RunSnapshot{}, err
+		}
+		run := RunSummary{
+			RunID:      projection.RunID,
+			IncidentID: projection.IncidentID,
+			WaybillID:  projection.WaybillID,
+			Status:     projection.Status,
+			LastSeq:    projection.LastSeq,
+			UpdatedAt:  projection.UpdatedAt,
+		}
+		if projection.Status == domain.RunManualReview {
+			return RunSnapshot{Run: run, Events: []audit.Event{}}, nil
+		}
+		events, err := s.journal.Replay(ctx, runID, 0)
+		if err != nil {
+			return RunSnapshot{}, err
+		}
+		return RunSnapshot{Run: run, Events: events}, nil
+	}
 	events, err := s.journal.Replay(ctx, runID, 0)
 	if err != nil {
 		return RunSnapshot{}, err
@@ -102,6 +141,19 @@ func (s *Service) Snapshot(ctx context.Context, runID domain.RunID) (RunSnapshot
 		return RunSnapshot{}, err
 	}
 	return RunSnapshot{Run: run, Events: events}, nil
+}
+
+func sortRunSummaries(values []RunSummary) {
+	sort.Slice(values, func(i, j int) bool {
+		if values[i].UpdatedAt.Equal(values[j].UpdatedAt) {
+			return values[i].RunID < values[j].RunID
+		}
+		return values[i].UpdatedAt.After(values[j].UpdatedAt)
+	})
+}
+
+func isOperationallyActive(status domain.RunStatus) bool {
+	return !isTerminal(status) || status == domain.RunManualReview
 }
 
 func projectRuns(events []audit.Event) (map[domain.RunID]RunSummary, error) {

@@ -274,6 +274,25 @@ describe("runSnapshotSchema", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("allows an empty timeline only for quarantined runs", () => {
+    const run = {
+      run_id: "run-quarantined",
+      incident_id: "incident-quarantined",
+      waybill_id: "YD2026101001",
+      status: "manual_review",
+      last_seq: 2,
+      updated_at: "2026-10-10T01:15:00Z",
+    };
+
+    expect(runSnapshotSchema.safeParse({ run, events: [] }).success).toBe(true);
+    expect(
+      runSnapshotSchema.safeParse({
+        run: { ...run, status: "investigating" },
+        events: [],
+      }).success,
+    ).toBe(false);
+  });
 });
 
 describe("playback projections", () => {
