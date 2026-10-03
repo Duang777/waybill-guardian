@@ -355,13 +355,22 @@ func (r *Repository) ensureIncident(
 	if err != nil {
 		return nil, fmt.Errorf("insert PostgreSQL event incident: %w", MapError(err))
 	}
-	var actualID domain.IncidentID
+	var (
+		actualID        domain.IncidentID
+		actualWaybillID domain.WaybillID
+	)
 	if err := tx.QueryRow(ctx, `
-		SELECT incident_id
+		SELECT incident_id, waybill_id
 		FROM waybill.incidents
 		WHERE tenant_id = $1 AND source = $2 AND source_incident_key = $3
-	`, r.tenantID, episode.Source, episode.IncidentKey).Scan(&actualID); err != nil {
+	`, r.tenantID, episode.Source, episode.IncidentKey).Scan(
+		&actualID,
+		&actualWaybillID,
+	); err != nil {
 		return nil, fmt.Errorf("read PostgreSQL event incident: %w", err)
+	}
+	if actualWaybillID != episode.WaybillID {
+		return nil, events.ErrIncidentIdentityConflict
 	}
 	return &incidentWork{
 		id:      actualID,
@@ -494,17 +503,58 @@ func (r *Repository) projectIncident(
 	}
 	rows.Close()
 
-	targets := make(map[events.EventRef]events.Record)
+	targetIDs := make([]string, 0)
+	seenTargets := make(map[string]struct{})
 	for _, record := range records {
 		if record.Correction == nil {
 			continue
 		}
-		target, found, err := r.loadEventRecord(ctx, tx, record.Correction.Corrects)
-		if err != nil {
-			return events.Projection{}, err
+		targetID := record.Correction.Corrects.ID
+		if _, exists := seenTargets[targetID]; exists {
+			continue
 		}
-		if found {
+		seenTargets[targetID] = struct{}{}
+		targetIDs = append(targetIDs, targetID)
+	}
+	sort.Strings(targetIDs)
+	targets := make(map[events.EventRef]events.Record, len(targetIDs))
+	if len(targetIDs) != 0 {
+		targetRows, err := tx.Query(ctx, `
+			SELECT event_canonical
+			FROM waybill.inbox_events
+			WHERE tenant_id = $1
+			  AND source = $2
+			  AND event_id = ANY($3::text[])
+			  AND profile_version = 'waybill-event-v1'
+			  AND status IN ('received', 'processed')
+			ORDER BY event_id
+		`, r.tenantID, episode.Source, targetIDs)
+		if err != nil {
+			return events.Projection{}, fmt.Errorf(
+				"read PostgreSQL correction targets: %w",
+				err,
+			)
+		}
+		defer targetRows.Close()
+		for targetRows.Next() {
+			var canonical []byte
+			if err := targetRows.Scan(&canonical); err != nil {
+				return events.Projection{}, fmt.Errorf(
+					"scan PostgreSQL correction target: %w",
+					err,
+				)
+			}
+			target, err := events.RestoreCanonicalEvent(canonical)
+			if err != nil {
+				return events.Projection{}, err
+			}
 			targets[target.Ref] = target
+		}
+		if err := targetRows.Err(); err != nil {
+			return events.Projection{}, fmt.Errorf(
+				"read PostgreSQL correction targets: %w",
+				err,
+			)
 		}
 	}
 	return events.Reduce(events.EventSet{
@@ -512,32 +562,6 @@ func (r *Repository) projectIncident(
 		Records:           records,
 		CorrectionTargets: targets,
 	}), nil
-}
-
-func (r *Repository) loadEventRecord(
-	ctx context.Context,
-	tx pgx.Tx,
-	ref events.EventRef,
-) (events.Record, bool, error) {
-	var canonical []byte
-	err := tx.QueryRow(ctx, `
-		SELECT event_canonical
-		FROM waybill.inbox_events
-		WHERE tenant_id = $1 AND source = $2 AND event_id = $3
-		  AND profile_version = 'waybill-event-v1'
-		  AND status IN ('received', 'processed')
-	`, r.tenantID, ref.Source, ref.ID).Scan(&canonical)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return events.Record{}, false, nil
-	}
-	if err != nil {
-		return events.Record{}, false, fmt.Errorf("read PostgreSQL correction target: %w", err)
-	}
-	record, err := events.RestoreCanonicalEvent(canonical)
-	if err != nil {
-		return events.Record{}, false, err
-	}
-	return record, true, nil
 }
 
 func (r *Repository) updateIncidentProjection(

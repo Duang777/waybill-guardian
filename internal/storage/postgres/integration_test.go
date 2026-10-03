@@ -75,8 +75,8 @@ func TestMigrationsAgainstPostgreSQL(t *testing.T) {
 	`).Scan(&tableCount); err != nil {
 		t.Fatal(err)
 	}
-	if tableCount != 13 {
-		t.Fatalf("business table count = %d, want 13", tableCount)
+	if tableCount != 14 {
+		t.Fatalf("business table count = %d, want 14", tableCount)
 	}
 	var migrationCount int
 	if err := db.pool.QueryRow(ctx,
@@ -240,6 +240,103 @@ func TestIngestEventReplaysStoredResultAndRejectsCollision(t *testing.T) {
 		eventmodel.ErrEventIdentityConflict,
 	) {
 		t.Fatalf("identity collision error = %v", err)
+	}
+}
+
+func TestIngestEventRejectsIncidentWaybillRebinding(t *testing.T) {
+	db := openIntegrationDB(t)
+	tenantID := "tenant-" + uuid.NewString()
+	repository := newIntegrationRepository(t, db, tenantID, "worker-1")
+	defer repository.Close()
+
+	original := decodeIntegrationDetection(
+		t,
+		"event-original-waybill",
+		"incident-bound-waybill",
+		1,
+		360,
+	)
+	first, err := repository.IngestEvent(t.Context(), original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialHash, initialState, initialVersion := readIncidentProjection(
+		t,
+		db,
+		tenantID,
+		"incident-bound-waybill",
+	)
+
+	rebound := decodeIntegrationDetectionForWaybill(
+		t,
+		"event-rebound-waybill",
+		"incident-bound-waybill",
+		2,
+		180,
+		"YD2026101002",
+	)
+	if _, err := repository.IngestEvent(t.Context(), rebound); !errors.Is(
+		err,
+		eventmodel.ErrIncidentIdentityConflict,
+	) {
+		t.Fatalf("IngestEvent error = %v, want ErrIncidentIdentityConflict", err)
+	}
+
+	currentHash, currentState, currentVersion := readIncidentProjection(
+		t,
+		db,
+		tenantID,
+		"incident-bound-waybill",
+	)
+	if currentHash != initialHash ||
+		currentState != initialState ||
+		currentVersion != initialVersion {
+		t.Fatalf(
+			"incident changed after rejected rebinding: before=%s/%s/%d after=%s/%s/%d",
+			initialHash,
+			initialState,
+			initialVersion,
+			currentHash,
+			currentState,
+			currentVersion,
+		)
+	}
+
+	var (
+		storedWaybill domain.WaybillID
+		inboxCount    int
+		incidentCount int
+		outboxCount   int
+	)
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT
+			(SELECT waybill_id FROM waybill.incidents
+			 WHERE tenant_id = $1 AND incident_id = $2),
+			(SELECT count(*) FROM waybill.inbox_events
+			 WHERE tenant_id = $1 AND event_id = 'event-rebound-waybill'),
+			(SELECT count(*) FROM waybill.incidents
+			 WHERE tenant_id = $1 AND source_incident_key = 'incident-bound-waybill'),
+			(SELECT count(*) FROM waybill.outbox_events
+			 WHERE tenant_id = $1 AND aggregate_type = 'incident')
+	`, tenantID, first.IncidentID).Scan(
+		&storedWaybill,
+		&inboxCount,
+		&incidentCount,
+		&outboxCount,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if storedWaybill != "YD2026101001" ||
+		inboxCount != 0 ||
+		incidentCount != 1 ||
+		outboxCount != 1 {
+		t.Fatalf(
+			"durable state after rejected rebinding = waybill:%q inbox:%d incident:%d outbox:%d",
+			storedWaybill,
+			inboxCount,
+			incidentCount,
+			outboxCount,
+		)
 	}
 }
 
@@ -1037,6 +1134,75 @@ func TestOutboxPermanentFailureRequiresAuditedExactRequeue(t *testing.T) {
 		retried[0].Event().ID != event.ID ||
 		retried[0].Event().Attempt != 2 {
 		t.Fatalf("requeued claims = %+v", retried)
+	}
+	if err := repository.CompleteOutbox(t.Context(), retried[0], outboxmodel.Completion{
+		Disposition: outboxmodel.PermanentFailed,
+		ErrorCode:   "still_rejected",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.RequeueOutbox(t.Context(), outboxmodel.RequeueRequest{
+		Source:  event.Source,
+		EventID: event.ID,
+		Actor:   "second-operator@example.com",
+		Reason:  "receiver allowlist updated",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := db.pool.Query(t.Context(), `
+		SELECT requeue_no, failure_code, actor, reason
+		FROM waybill.outbox_requeues
+		WHERE tenant_id = $1 AND source = $2 AND event_id = $3
+		ORDER BY requeue_no
+	`, tenantID, event.Source, event.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	type requeueAudit struct {
+		number      int
+		failureCode string
+		actor       string
+		reason      string
+	}
+	var audits []requeueAudit
+	for rows.Next() {
+		var audit requeueAudit
+		if err := rows.Scan(
+			&audit.number,
+			&audit.failureCode,
+			&audit.actor,
+			&audit.reason,
+		); err != nil {
+			t.Fatal(err)
+		}
+		audits = append(audits, audit)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(audits) != 2 ||
+		audits[0] != (requeueAudit{
+			number:      1,
+			failureCode: "downstream_rejected",
+			actor:       "operator@example.com",
+			reason:      "downstream contract repaired",
+		}) ||
+		audits[1] != (requeueAudit{
+			number:      2,
+			failureCode: "still_rejected",
+			actor:       "second-operator@example.com",
+			reason:      "receiver allowlist updated",
+		}) {
+		t.Fatalf("requeue audits = %+v", audits)
+	}
+	finalClaims, err := repository.ClaimOutbox(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(finalClaims) != 1 || finalClaims[0].Event().Attempt != 3 {
+		t.Fatalf("second requeue claims = %+v", finalClaims)
 	}
 }
 
@@ -1919,9 +2085,30 @@ func decodeIntegrationDetection(
 	stopMinutes int,
 ) eventmodel.Submission {
 	t.Helper()
-	body := fmt.Sprintf(
-		`{"specversion":"1.0","id":%q,"source":"urn:tms:integration","type":"com.waybill.tracking.delay.detected.v1","subject":"waybill/YD2026101001","time":"2026-10-10T12:30:00Z","datacontenttype":"application/json","dataschema":"urn:waybill-guardian:schema:delay-detected:v1","data":{"waybill_id":"YD2026101001","incident_key":%q,"source_version":%d,"event_time":"2026-10-10T12:28:31Z","record_time":"2026-10-10T12:30:00Z","location":{"code":"MY-N-SERVICE","name":"Mianyang North Service Area"},"business_step":"transporting","reason_code":"stop_duration_exceeded","observations":{"stop_minutes":%d}}}`,
+	return decodeIntegrationDetectionForWaybill(
+		t,
 		eventID,
+		incidentKey,
+		version,
+		stopMinutes,
+		"YD2026101001",
+	)
+}
+
+func decodeIntegrationDetectionForWaybill(
+	t *testing.T,
+	eventID string,
+	incidentKey string,
+	version int64,
+	stopMinutes int,
+	waybillID string,
+) eventmodel.Submission {
+	t.Helper()
+	body := fmt.Sprintf(
+		`{"specversion":"1.0","id":%q,"source":"urn:tms:integration","type":"com.waybill.tracking.delay.detected.v1","subject":%q,"time":"2026-10-10T12:30:00Z","datacontenttype":"application/json","dataschema":"urn:waybill-guardian:schema:delay-detected:v1","data":{"waybill_id":%q,"incident_key":%q,"source_version":%d,"event_time":"2026-10-10T12:28:31Z","record_time":"2026-10-10T12:30:00Z","location":{"code":"MY-N-SERVICE","name":"Mianyang North Service Area"},"business_step":"transporting","reason_code":"stop_duration_exceeded","observations":{"stop_minutes":%d}}}`,
+		eventID,
+		"waybill/"+waybillID,
+		waybillID,
 		incidentKey,
 		version,
 		stopMinutes,

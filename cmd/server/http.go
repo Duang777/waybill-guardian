@@ -94,7 +94,7 @@ func (a *api) ingestEvent(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		a.observeIngest(metrics.IngestRejected)
-		a.writeEventError(w, err)
+		writeEventDecodeError(w, err)
 		return
 	}
 	record := submission.Record()
@@ -107,7 +107,7 @@ func (a *api) ingestEvent(w http.ResponseWriter, r *http.Request) {
 	result, err := a.eventStore.IngestEvent(r.Context(), submission)
 	if err != nil {
 		a.observeIngest(metrics.IngestFailed)
-		a.writeEventError(w, err)
+		writeEventStoreError(w, err)
 		return
 	}
 	body, err := result.ResponseJSON()
@@ -131,18 +131,23 @@ func (a *api) observeIngest(outcome metrics.IngestOutcome) {
 	}
 }
 
-func (a *api) writeEventError(w http.ResponseWriter, err error) {
-	if code, ok := events.DecodeErrorCode(err); ok {
-		status := http.StatusBadRequest
-		switch code {
-		case events.DecodeInvalidContentType:
-			status = http.StatusUnsupportedMediaType
-		case events.DecodeBodyTooLarge:
-			status = http.StatusRequestEntityTooLarge
-		}
-		writeProblem(w, status, string(code), err.Error())
+func writeEventDecodeError(w http.ResponseWriter, err error) {
+	code, ok := events.DecodeErrorCode(err)
+	if !ok {
+		writeProblem(w, http.StatusInternalServerError, "internal_error", "request failed")
 		return
 	}
+	status := http.StatusBadRequest
+	switch code {
+	case events.DecodeInvalidContentType:
+		status = http.StatusUnsupportedMediaType
+	case events.DecodeBodyTooLarge:
+		status = http.StatusRequestEntityTooLarge
+	}
+	writeProblem(w, status, string(code), err.Error())
+}
+
+func writeEventStoreError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, events.ErrEventIdentityConflict):
 		writeProblem(
@@ -157,6 +162,13 @@ func (a *api) writeEventError(w http.ResponseWriter, err error) {
 			http.StatusConflict,
 			"event_identity_legacy",
 			"event identity uses a legacy hash profile",
+		)
+	case errors.Is(err, events.ErrIncidentIdentityConflict):
+		writeProblem(
+			w,
+			http.StatusConflict,
+			"incident_identity_conflict",
+			"incident identity belongs to another waybill",
 		)
 	case errors.Is(err, events.ErrEventsUnavailable):
 		writeProblem(

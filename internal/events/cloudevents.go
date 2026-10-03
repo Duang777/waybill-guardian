@@ -650,6 +650,9 @@ func scanObject(decoder *json.Decoder) error {
 		if !ok {
 			return fmt.Errorf("JSON object key must be a string")
 		}
+		if key != strings.ToLower(key) {
+			return fmt.Errorf("JSON object key %q must use exact lowercase spelling", key)
+		}
 		if _, exists := keys[key]; exists {
 			return fmt.Errorf("duplicate JSON key %q", key)
 		}

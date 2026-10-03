@@ -251,18 +251,35 @@ func (r *Repository) RequeueOutbox(
 		return err
 	}
 	tag, err := r.db.pool.Exec(ctx, `
-		UPDATE waybill.outbox_events
+		WITH target AS MATERIALIZED (
+			SELECT requeue_count, COALESCE(last_error_code, 'legacy_unknown') AS failure_code
+			FROM waybill.outbox_events
+			WHERE tenant_id = $1 AND source = $2 AND event_id = $3
+			  AND status = 'permanent_failed'
+			FOR UPDATE
+		),
+		recorded AS (
+			INSERT INTO waybill.outbox_requeues (
+				tenant_id, source, event_id, requeue_no, failure_code,
+				actor, reason, requeued_at
+			)
+			SELECT $1, $2, $3, target.requeue_count + 1, target.failure_code,
+			       $4, $5, clock_timestamp()
+			FROM target
+			RETURNING requeue_no, requeued_at
+		)
+		UPDATE waybill.outbox_events event
 		SET status = 'pending',
 		    available_at = clock_timestamp(),
 		    last_error_code = NULL,
 		    lease_owner = NULL,
 		    lease_deadline = NULL,
-		    requeue_count = requeue_count + 1,
-		    last_requeued_at = clock_timestamp(),
+		    requeue_count = recorded.requeue_no,
+		    last_requeued_at = recorded.requeued_at,
 		    last_requeued_by = $4,
 		    last_requeue_reason = $5
-		WHERE tenant_id = $1 AND source = $2 AND event_id = $3
-		  AND status = 'permanent_failed'
+		FROM recorded
+		WHERE event.tenant_id = $1 AND event.source = $2 AND event.event_id = $3
 	`, r.tenantID, strings.TrimSpace(request.Source), strings.TrimSpace(request.EventID),
 		strings.TrimSpace(request.Actor), strings.TrimSpace(request.Reason))
 	if err != nil {

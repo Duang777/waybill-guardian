@@ -267,6 +267,27 @@ ALTER TABLE waybill.outbox_events
     ADD CONSTRAINT outbox_events_aggregate_version_uq
         UNIQUE (tenant_id, aggregate_type, aggregate_id, aggregate_version);
 
+CREATE TABLE waybill.outbox_requeues (
+    tenant_id text NOT NULL,
+    source text NOT NULL,
+    event_id text NOT NULL,
+    requeue_no integer NOT NULL,
+    failure_code text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    requeued_at timestamptz NOT NULL,
+    CONSTRAINT outbox_requeues_pk
+        PRIMARY KEY (tenant_id, source, event_id, requeue_no),
+    CONSTRAINT outbox_requeues_event_fk
+        FOREIGN KEY (tenant_id, source, event_id)
+        REFERENCES waybill.outbox_events (tenant_id, source, event_id),
+    CONSTRAINT outbox_requeues_number_ck CHECK (requeue_no > 0),
+    CONSTRAINT outbox_requeues_actor_ck
+        CHECK (octet_length(actor) BETWEEN 1 AND 256),
+    CONSTRAINT outbox_requeues_reason_ck
+        CHECK (octet_length(reason) BETWEEN 1 AND 512)
+);
+
 ALTER TABLE waybill.inbox_events
     ADD CONSTRAINT inbox_events_outbox_fk
         FOREIGN KEY (tenant_id, outbox_source, outbox_event_id)

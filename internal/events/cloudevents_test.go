@@ -130,6 +130,28 @@ func TestDecodeStructuredRejectsInvalidRequests(t *testing.T) {
 			code: DecodeInvalidJSON,
 		},
 		{
+			name:        "case variant envelope key",
+			contentType: "application/cloudevents+json",
+			body: strings.Replace(
+				validDetectionEvent(),
+				`"id":"evt-20261010-000184",`,
+				`"id":"evt-a","ID":"evt-b",`,
+				1,
+			),
+			code: DecodeInvalidJSON,
+		},
+		{
+			name:        "case variant nested key",
+			contentType: "application/cloudevents+json",
+			body: strings.Replace(
+				validDetectionEvent(),
+				`"waybill_id":"YD2026101001",`,
+				`"Waybill_ID":"YD2026101001",`,
+				1,
+			),
+			code: DecodeInvalidJSON,
+		},
+		{
 			name:        "trailing JSON",
 			contentType: "application/cloudevents+json",
 			body:        validDetectionEvent() + `{}`,

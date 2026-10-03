@@ -101,12 +101,7 @@ func (p *Publisher) Publish(ctx context.Context, event outbox.Event) outbox.Publ
 		}
 	}
 	defer response.Body.Close()
-	if _, err := io.Copy(io.Discard, io.LimitReader(response.Body, responseBodyLimit)); err != nil {
-		return outbox.PublishResult{
-			Disposition: outbox.RetryableFailed,
-			ErrorCode:   "response_read_error",
-		}
-	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, responseBodyLimit))
 	return classifyStatus(response.StatusCode)
 }
 

@@ -52,7 +52,8 @@ func DecodeErrorCode(err error) (DecodeCode, bool) {
 }
 
 var (
-	ErrEventIdentityConflict = errors.New("event identity has different content")
-	ErrLegacyEventIdentity   = errors.New("event identity uses a legacy hash profile")
-	ErrEventsUnavailable     = errors.New("event ingestion requires PostgreSQL")
+	ErrEventIdentityConflict    = errors.New("event identity has different content")
+	ErrLegacyEventIdentity      = errors.New("event identity uses a legacy hash profile")
+	ErrIncidentIdentityConflict = errors.New("incident identity belongs to another waybill")
+	ErrEventsUnavailable        = errors.New("event ingestion requires PostgreSQL")
 )

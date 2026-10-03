@@ -3,6 +3,7 @@ package outboxhttp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -161,6 +162,44 @@ func TestPublisherCapsResponseBodyRead(t *testing.T) {
 	}
 }
 
+func TestPublisherUsesStatusWhenResponseBodyReadFails(t *testing.T) {
+	tests := []struct {
+		status int
+		want   outbox.PublishResult
+	}{
+		{
+			status: http.StatusAccepted,
+			want:   outbox.PublishResult{Disposition: outbox.Published},
+		},
+		{
+			status: http.StatusBadRequest,
+			want: outbox.PublishResult{
+				Disposition: outbox.PermanentFailed,
+				ErrorCode:   "http_permanent_status",
+			},
+		},
+	}
+	for _, test := range tests {
+		publisher, err := New(Config{
+			URL:   "https://events.example.test/v1/events",
+			Token: "secret-token",
+			Client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: test.status,
+					Body:       failingBody{},
+					Header:     make(http.Header),
+				}, nil
+			})},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := publisher.Publish(t.Context(), testEvent()); got != test.want {
+			t.Fatalf("status %d result = %+v, want %+v", test.status, got, test.want)
+		}
+	}
+}
+
 func TestPublisherClassifiesNetworkFailureAsRetryable(t *testing.T) {
 	publisher, err := New(Config{
 		URL:   "https://events.example.test/v1/events",
@@ -269,6 +308,16 @@ func (b *countingBody) Read(buffer []byte) (int, error) {
 }
 
 func (*countingBody) Close() error {
+	return nil
+}
+
+type failingBody struct{}
+
+func (failingBody) Read([]byte) (int, error) {
+	return 0, errors.New("truncated response body")
+}
+
+func (failingBody) Close() error {
 	return nil
 }
 

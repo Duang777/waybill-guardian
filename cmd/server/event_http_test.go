@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -140,12 +141,31 @@ func TestEventIngressMapsDecodeAndStoreErrors(t *testing.T) {
 			code:        "event_identity_legacy",
 		},
 		{
+			name:        "incident identity conflict",
+			contentType: "application/cloudevents+json",
+			body:        localEventBody(time.Now().UTC(), "event-incident-conflict"),
+			storeErr:    events.ErrIncidentIdentityConflict,
+			status:      http.StatusConflict,
+			code:        "incident_identity_conflict",
+		},
+		{
 			name:        "store unavailable",
 			contentType: "application/cloudevents+json",
 			body:        localEventBody(time.Now().UTC(), "event-unavailable"),
 			storeErr:    events.ErrEventsUnavailable,
 			status:      http.StatusServiceUnavailable,
 			code:        "events_unavailable",
+		},
+		{
+			name:        "stored event decode failure",
+			contentType: "application/cloudevents+json",
+			body:        localEventBody(time.Now().UTC(), "event-corrupt"),
+			storeErr: &events.DecodeError{
+				Code: events.DecodeInvalidData,
+				Err:  errors.New("corrupt stored canonical event"),
+			},
+			status: http.StatusInternalServerError,
+			code:   "internal_error",
 		},
 	}
 	for _, test := range tests {

@@ -118,8 +118,12 @@ func (r RequeueRequest) Validate() error {
 		return fmt.Errorf("outbox event ID is required")
 	case strings.TrimSpace(r.Actor) == "":
 		return fmt.Errorf("outbox requeue actor is required")
+	case len(strings.TrimSpace(r.Actor)) > 256:
+		return fmt.Errorf("outbox requeue actor exceeds 256 bytes")
 	case strings.TrimSpace(r.Reason) == "":
 		return fmt.Errorf("outbox requeue reason is required")
+	case len(strings.TrimSpace(r.Reason)) > 512:
+		return fmt.Errorf("outbox requeue reason exceeds 512 bytes")
 	}
 	return nil
 }

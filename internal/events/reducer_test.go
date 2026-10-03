@@ -115,6 +115,44 @@ func TestReduceCollapsesEquivalentSourceVersion(t *testing.T) {
 	}
 }
 
+func TestReduceAppliesCorrectionToEquivalentEventAlias(t *testing.T) {
+	first := detectedRecord("event-a", 7, 360)
+	alias := detectedRecord("event-b", 7, 360)
+	tests := []struct {
+		name      string
+		operation CorrectionOperation
+		state     TransportState
+	}{
+		{name: "replace", operation: CorrectionReplace, state: TransportActive},
+		{name: "retract", operation: CorrectionRetract, state: TransportRetracted},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			correction := correctionRecord(
+				"event-correction",
+				8,
+				alias.Ref,
+				test.operation,
+				120,
+			)
+			projection := Reduce(EventSet{
+				Episode: first.Episode(),
+				Records: []Record{first, alias, correction},
+			})
+			if projection.State != test.state {
+				t.Fatalf("projection state = %q, want %q", projection.State, test.state)
+			}
+			if test.operation == CorrectionReplace &&
+				(projection.CurrentRef == nil ||
+					*projection.CurrentRef != correction.Ref ||
+					projection.Current == nil ||
+					projection.Current.StopMinutes != 120) {
+				t.Fatalf("replacement projection = %#v", projection)
+			}
+		})
+	}
+}
+
 func TestReduceRetraction(t *testing.T) {
 	target := detectedRecord("event-target", 4, 360)
 	correction := correctionRecord("event-retract", 5, target.Ref, CorrectionRetract, 0)

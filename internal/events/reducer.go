@@ -77,7 +77,8 @@ func Reduce(set EventSet) Projection {
 		return reviewProjection(ReviewIncidentIdentityConflict, identityRefs)
 	}
 
-	records, versionConflictRefs := collapseEquivalentVersions(records)
+	allRecords := records
+	records, aliases, versionConflictRefs := collapseEquivalentVersions(records)
 	if len(versionConflictRefs) != 0 {
 		return reviewProjection(ReviewSourceVersionConflict, versionConflictRefs)
 	}
@@ -86,7 +87,7 @@ func Reduce(set EventSet) Projection {
 	for ref, record := range set.CorrectionTargets {
 		targets[ref] = record.Clone()
 	}
-	for _, record := range records {
+	for _, record := range allRecords {
 		targets[record.Ref] = record
 	}
 
@@ -119,7 +120,11 @@ func Reduce(set EventSet) Projection {
 				invalidRefs = append(invalidRefs, record.Ref, target.Ref)
 				continue
 			}
-			corrections[target.Ref] = append(corrections[target.Ref], record)
+			targetRef := target.Ref
+			if canonicalRef, exists := aliases[target.Ref]; exists {
+				targetRef = canonicalRef
+			}
+			corrections[targetRef] = append(corrections[targetRef], record)
 		default:
 			identityRefs = append(identityRefs, record.Ref)
 		}
@@ -286,8 +291,11 @@ func cloneAndSortRecords(values []Record) []Record {
 	return records
 }
 
-func collapseEquivalentVersions(records []Record) ([]Record, []EventRef) {
+func collapseEquivalentVersions(
+	records []Record,
+) ([]Record, map[EventRef]EventRef, []EventRef) {
 	collapsed := make([]Record, 0, len(records))
+	aliases := make(map[EventRef]EventRef, len(records))
 	var conflicts []EventRef
 	for start := 0; start < len(records); {
 		end := start + 1
@@ -307,11 +315,15 @@ func collapseEquivalentVersions(records []Record) ([]Record, []EventRef) {
 				conflicts = append(conflicts, record.Ref)
 			}
 		} else {
-			collapsed = append(collapsed, records[start])
+			representative := records[start]
+			collapsed = append(collapsed, representative)
+			for _, record := range records[start:end] {
+				aliases[record.Ref] = representative.Ref
+			}
 		}
 		start = end
 	}
-	return collapsed, conflicts
+	return collapsed, aliases, conflicts
 }
 
 func semanticDigest(record Record) Digest {
