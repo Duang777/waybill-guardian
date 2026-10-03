@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +19,8 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/tools"
 )
 
+const defaultHTTPAddr = "127.0.0.1:8080"
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error("server stopped", "error", err)
@@ -25,6 +29,10 @@ func main() {
 }
 
 func run() error {
+	httpAddr := envOr("HTTP_ADDR", defaultHTTPAddr)
+	if err := validateHTTPAddr(httpAddr); err != nil {
+		return err
+	}
 	clients, err := platformClients()
 	if err != nil {
 		return err
@@ -51,7 +59,7 @@ func run() error {
 	}
 
 	server := &http.Server{
-		Addr:              envOr("HTTP_ADDR", ":8080"),
+		Addr:              httpAddr,
 		Handler:           newHandler(service),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -69,6 +77,21 @@ func run() error {
 		return nil
 	}
 	return err
+}
+
+func validateHTTPAddr(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid HTTP_ADDR %q: %w", addr, err)
+	}
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("HTTP_ADDR must use an explicit loopback host")
+	}
+	return nil
 }
 
 func platformClients() (platform.Clients, error) {

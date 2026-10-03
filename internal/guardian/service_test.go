@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	agentkit "github.com/Duang777/waybill-guardian/internal/agent"
 	"github.com/Duang777/waybill-guardian/internal/approval"
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/tools"
@@ -385,6 +386,29 @@ func TestRecoverCompletesApprovalWithoutRepeatingSuccessfulEffects(t *testing.T)
 	}
 	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 1 {
 		t.Fatal("recovery repeated already successful effects")
+	}
+}
+
+func TestOpenReleasesAuditLockAfterInitializationFailure(t *testing.T) {
+	dataDir := t.TempDir()
+	clients, _, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(Config{
+		DataDir: dataDir,
+		Clients: clients,
+		Model:   agentkit.ModelConfig{Mode: "invalid"},
+	}); err == nil {
+		t.Fatal("Open accepted invalid agent mode")
+	}
+
+	service, err := Open(Config{DataDir: dataDir, Clients: clients})
+	if err != nil {
+		t.Fatalf("Open after initialization failure: %v", err)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

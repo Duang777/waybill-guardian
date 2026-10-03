@@ -102,21 +102,24 @@ func Open(config Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	closeJournal := func(err error) (*Service, error) {
+		return nil, errors.Join(err, journal.Close())
+	}
 	approvals, err := approval.NewStore(journal, config.Clock)
 	if err != nil {
-		return nil, err
+		return closeJournal(err)
 	}
 	idempotencyStore, err := idempotency.NewStore(journal)
 	if err != nil {
-		return nil, err
+		return closeJournal(err)
 	}
 	handlers, err := guardtools.NewHandlers(config.Clients)
 	if err != nil {
-		return nil, err
+		return closeJournal(err)
 	}
 	registry, err := guardtools.NewRegistry(handlers)
 	if err != nil {
-		return nil, err
+		return closeJournal(err)
 	}
 	middlewares := []agents.Middleware{
 		agentkit.NewAuditMiddleware(journal),
@@ -131,7 +134,7 @@ func Open(config Config) (*Service, error) {
 		config.Model,
 	)
 	if err != nil {
-		return nil, err
+		return closeJournal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &Service{
@@ -149,9 +152,8 @@ func Open(config Config) (*Service, error) {
 		timers:    make(map[domain.ApprovalID]chan struct{}),
 	}
 	if err := service.rebuildRuns(); err != nil {
-		_ = engine.Close()
 		cancel()
-		return nil, err
+		return nil, errors.Join(err, engine.Close(), journal.Close())
 	}
 	return service, nil
 }
@@ -564,7 +566,7 @@ func (s *Service) Close() error {
 	s.mu.Unlock()
 	s.cancel()
 	s.wg.Wait()
-	return s.engine.Close()
+	return errors.Join(s.engine.Close(), s.journal.Close())
 }
 
 func (s *Service) handleOutcome(

@@ -21,6 +21,8 @@ type api struct {
 	mux     *http.ServeMux
 }
 
+const trustedLocalActor = "local-demo-reviewer"
+
 func newHandler(service *guardian.Service) http.Handler {
 	server := &api{service: service, mux: http.NewServeMux()}
 	server.mux.HandleFunc("GET /healthz", server.health)
@@ -65,7 +67,7 @@ func (a *api) confirm(w http.ResponseWriter, r *http.Request) {
 	}
 	value, err := a.service.Decide(r.Context(), domain.ApprovalID(r.PathValue("id")), guardian.DecisionRequest{
 		Kind:      approval.DecisionConfirm,
-		DecidedBy: actorFromRequest(r),
+		DecidedBy: trustedLocalActor,
 	})
 	if err != nil {
 		a.writeServiceError(w, err)
@@ -84,7 +86,7 @@ func (a *api) reject(w http.ResponseWriter, r *http.Request) {
 	}
 	value, err := a.service.Decide(r.Context(), domain.ApprovalID(r.PathValue("id")), guardian.DecisionRequest{
 		Kind:         approval.DecisionReject,
-		DecidedBy:    actorFromRequest(r),
+		DecidedBy:    trustedLocalActor,
 		RejectReason: strings.TrimSpace(body.Reason),
 	})
 	if err != nil {
@@ -170,13 +172,6 @@ func parseLastEventID(value string) (audit.Seq, error) {
 		return 0, fmt.Errorf("Last-Event-ID must be an unsigned integer")
 	}
 	return audit.Seq(parsed), nil
-}
-
-func actorFromRequest(r *http.Request) string {
-	if actor := strings.TrimSpace(r.Header.Get("X-Actor")); actor != "" {
-		return actor
-	}
-	return "demo-reviewer"
 }
 
 func requireEmptyBody(body io.Reader) error {

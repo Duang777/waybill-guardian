@@ -27,6 +27,9 @@ go list -m github.com/hastekit/agent-sdk-go
 对账两份记录。完整源码证据见
 [`docs/research/hastekit-v0.0.24.md`](../../docs/research/hastekit-v0.0.24.md)。
 
+项目通过 `secureHistoryPersistence` 包装 SDK file persistence。history 目录权限为 `0700`，
+其中普通文件在打开和每次写入后都校正为 `0600`，因为记录可能包含完整工具输入输出。
+
 ## 工具注册映射
 
 | 契约工具 | 执行策略 |

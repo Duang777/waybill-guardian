@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,7 @@ func TestAppendReplayVerifyAndRedact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer store.Close()
 	runID := domain.RunID("run-a")
 	for i := 1; i <= 10; i++ {
 		_, err := store.Append(context.Background(), runID, Draft{
@@ -57,11 +59,15 @@ func TestAppendReplayVerifyAndRedact(t *testing.T) {
 	if err := store.Verify(runID); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	reopened, err := Open(dir, clock)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer reopened.Close()
 	replayed, err := reopened.Replay(context.Background(), runID, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -97,10 +103,14 @@ func TestOpenTruncatesIncompleteTail(t *testing.T) {
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 	reopened, err := Open(dir, time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer reopened.Close()
 	events, err := reopened.Replay(context.Background(), runID, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -110,11 +120,58 @@ func TestOpenTruncatesIncompleteTail(t *testing.T) {
 	}
 }
 
+func TestOpenRejectsSecondWriter(t *testing.T) {
+	dir := t.TempDir()
+	first, err := Open(dir, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := Open(dir, time.Now)
+	if second != nil {
+		_ = second.Close()
+		t.Fatal("second writer unexpectedly opened the same directory")
+	}
+	if !errors.Is(err, ErrWriterLocked) {
+		t.Fatalf("second Open error = %v, want ErrWriterLocked", err)
+	}
+
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(dir, time.Now)
+	if err != nil {
+		t.Fatalf("Open after Close: %v", err)
+	}
+	defer reopened.Close()
+}
+
+func TestOpenSecuresDataDirectoryAndLockFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	journalPath := filepath.Join(dir, "audit-existing.jsonl")
+	if err := os.WriteFile(journalPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(dir, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	assertMode(t, dir, 0o700)
+	assertMode(t, filepath.Join(dir, ".writer.lock"), 0o600)
+	assertMode(t, journalPath, 0o600)
+}
+
 func TestSubscribeBridgesReplayAndLive(t *testing.T) {
 	store, err := Open(t.TempDir(), time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer store.Close()
 	runID := domain.RunID("run-stream")
 	if _, err := store.Append(context.Background(), runID, Draft{
 		EventID: "one",
@@ -154,11 +211,69 @@ func TestSubscribeBridgesReplayAndLive(t *testing.T) {
 	}
 }
 
+func TestClosedStoreRejectsOperationsAndClosesSubscriptions(t *testing.T) {
+	store, err := Open(t.TempDir(), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := domain.RunID("run-closed")
+	if _, err := store.Append(context.Background(), runID, Draft{
+		EventID: "one",
+		Actor:   ActorSystem,
+		Type:    EventRunStarted,
+		Payload: map[string]string{"status": "started"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	subscription, err := store.Subscribe(ctx, runID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, open := <-subscription.Events(); !open {
+		t.Fatal("subscription closed before buffered replay was drained")
+	}
+	if _, open := <-subscription.Events(); open {
+		t.Fatal("subscription remained open after store close")
+	}
+	if _, err := store.Append(context.Background(), runID, Draft{
+		EventID: "two",
+		Actor:   ActorSystem,
+		Type:    EventNote,
+	}); !errors.Is(err, ErrStoreClosed) {
+		t.Fatalf("Append after Close error = %v, want ErrStoreClosed", err)
+	}
+	if _, err := store.Replay(context.Background(), runID, 0); !errors.Is(err, ErrStoreClosed) {
+		t.Fatalf("Replay after Close error = %v, want ErrStoreClosed", err)
+	}
+	if _, err := store.Subscribe(context.Background(), runID, 0); !errors.Is(err, ErrStoreClosed) {
+		t.Fatalf("Subscribe after Close error = %v, want ErrStoreClosed", err)
+	}
+	if err := store.Verify(runID); !errors.Is(err, ErrStoreClosed) {
+		t.Fatalf("Verify after Close error = %v, want ErrStoreClosed", err)
+	}
+}
+
 func TestMaskHelpers(t *testing.T) {
 	if got := MaskPhone("13961234567"); got != "139****4567" {
 		t.Fatalf("MaskPhone = %q", got)
 	}
 	if got := MaskPlate("川A8X6Q2"); got != "川A****2" {
 		t.Fatalf("MaskPlate = %q", got)
+	}
+}
+
+func assertMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("%s mode = %#o, want %#o", path, got, want)
 	}
 }

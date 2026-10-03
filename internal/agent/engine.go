@@ -87,7 +87,7 @@ func NewEngine(
 	} else if mode != ModeDemo {
 		return nil, fmt.Errorf("AGENT_MODE must be demo or online")
 	}
-	fileHistory, err := hastekit.OpenFileHistory(historyDir)
+	fileHistory, err := openSecureHistory(historyDir)
 	if err != nil {
 		return nil, fmt.Errorf("open hastekit history: %w", err)
 	}

@@ -68,11 +68,16 @@ func TestHTTPDemoFlowAndSSECursor(t *testing.T) {
 		t.Fatalf("unmasked shipper phone %q", waybill.Waybill.ShipperPhone)
 	}
 
-	confirmResponse, err := http.Post(
+	confirmRequest, err := http.NewRequest(
+		http.MethodPost,
 		server.URL+"/api/approvals/"+string(pending.ID)+"/confirm",
-		"application/json",
 		http.NoBody,
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmRequest.Header.Set("X-Actor", "forged-reviewer")
+	confirmResponse, err := http.DefaultClient.Do(confirmRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,6 +92,9 @@ func TestHTTPDemoFlowAndSSECursor(t *testing.T) {
 	_ = confirmResponse.Body.Close()
 	if confirmed.Status != approval.StatusExecuted {
 		t.Fatalf("approval status = %q", confirmed.Status)
+	}
+	if confirmed.DecidedBy != trustedLocalActor {
+		t.Fatalf("decided_by = %q, want %q", confirmed.DecidedBy, trustedLocalActor)
 	}
 
 	events, err := service.Replay(context.Background(), run.RunID, 0)
@@ -172,6 +180,34 @@ func TestRealPlatformFailsFast(t *testing.T) {
 	t.Setenv("PLATFORM", "real")
 	if _, err := platformClients(); !errors.Is(err, platform.ErrNotImplemented) {
 		t.Fatalf("platformClients error = %v, want ErrNotImplemented", err)
+	}
+}
+
+func TestValidateHTTPAddrAllowsOnlyExplicitLoopback(t *testing.T) {
+	allowed := []string{
+		defaultHTTPAddr,
+		"localhost:8080",
+		"127.0.0.2:9000",
+		"[::1]:8080",
+	}
+	for _, addr := range allowed {
+		if err := validateHTTPAddr(addr); err != nil {
+			t.Errorf("validateHTTPAddr(%q) = %v", addr, err)
+		}
+	}
+
+	rejected := []string{
+		":8080",
+		"0.0.0.0:8080",
+		"[::]:8080",
+		"192.168.1.10:8080",
+		"example.com:8080",
+		"127.0.0.1",
+	}
+	for _, addr := range rejected {
+		if err := validateHTTPAddr(addr); err == nil {
+			t.Errorf("validateHTTPAddr(%q) unexpectedly succeeded", addr)
+		}
 	}
 }
 

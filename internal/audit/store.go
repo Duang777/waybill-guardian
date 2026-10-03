@@ -14,14 +14,17 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
 )
 
 var (
-	ErrRunNotFound = errors.New("audit run not found")
-	ErrCursorAhead = errors.New("audit cursor is ahead of the run")
+	ErrRunNotFound  = errors.New("audit run not found")
+	ErrCursorAhead  = errors.New("audit cursor is ahead of the run")
+	ErrWriterLocked = errors.New("audit directory is already open by another writer")
+	ErrStoreClosed  = errors.New("audit store is closed")
 )
 
 type runLog struct {
@@ -32,12 +35,14 @@ type runLog struct {
 }
 
 type Store struct {
-	dir   string
-	clock func() time.Time
+	dir      string
+	clock    func() time.Time
+	lockFile *os.File
 
 	mu     sync.Mutex
 	runs   map[domain.RunID]*runLog
 	failed error
+	closed bool
 }
 
 type Subscription struct {
@@ -61,21 +66,59 @@ func Open(dir string, clock func() time.Time) (*Store, error) {
 	if clock == nil {
 		clock = time.Now
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create audit directory: %w", err)
 	}
-	store := &Store{dir: dir, clock: clock, runs: make(map[domain.RunID]*runLog)}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("secure audit directory: %w", err)
+	}
+	lockFile, err := openWriterLock(dir)
+	if err != nil {
+		return nil, err
+	}
+	store := &Store{
+		dir:      dir,
+		clock:    clock,
+		lockFile: lockFile,
+		runs:     make(map[domain.RunID]*runLog),
+	}
+	closeOnError := func(err error) (*Store, error) {
+		return nil, errors.Join(err, store.Close())
+	}
 	paths, err := filepath.Glob(filepath.Join(dir, "audit-*.jsonl"))
 	if err != nil {
-		return nil, fmt.Errorf("list audit journals: %w", err)
+		return closeOnError(fmt.Errorf("list audit journals: %w", err))
 	}
 	sort.Strings(paths)
 	for _, path := range paths {
+		if err := os.Chmod(path, 0o600); err != nil {
+			return closeOnError(fmt.Errorf("secure audit journal %q: %w", path, err))
+		}
 		if err := store.load(path); err != nil {
-			return nil, err
+			return closeOnError(err)
 		}
 	}
 	return store, nil
+}
+
+func openWriterLock(dir string) (*os.File, error) {
+	path := filepath.Join(dir, ".writer.lock")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open audit writer lock: %w", err)
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("secure audit writer lock: %w", err)
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = file.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil, ErrWriterLocked
+		}
+		return nil, fmt.Errorf("lock audit directory: %w", err)
+	}
+	return file, nil
 }
 
 func (s *Store) Append(ctx context.Context, runID domain.RunID, draft Draft) (Event, error) {
@@ -92,6 +135,9 @@ func (s *Store) Append(ctx context.Context, runID domain.RunID, draft Draft) (Ev
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return Event{}, ErrStoreClosed
+	}
 	if s.failed != nil {
 		return Event{}, s.failed
 	}
@@ -141,6 +187,9 @@ func (s *Store) Replay(ctx context.Context, runID domain.RunID, after Seq) ([]Ev
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return nil, ErrStoreClosed
+	}
 	run, ok := s.runs[runID]
 	if !ok || len(run.events) == 0 {
 		return nil, ErrRunNotFound
@@ -156,6 +205,10 @@ func (s *Store) Subscribe(ctx context.Context, runID domain.RunID, after Seq) (*
 		return nil, err
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, ErrStoreClosed
+	}
 	run, ok := s.runs[runID]
 	if !ok || len(run.events) == 0 {
 		s.mu.Unlock()
@@ -220,11 +273,48 @@ func (s *Store) AllEvents() []Event {
 func (s *Store) Verify(runID domain.RunID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return ErrStoreClosed
+	}
 	run, ok := s.runs[runID]
 	if !ok {
 		return ErrRunNotFound
 	}
 	return verifyEvents(runID, run.events)
+}
+
+func (s *Store) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	for _, run := range s.runs {
+		for id, subscriber := range run.subscribers {
+			close(subscriber)
+			delete(run.subscribers, id)
+		}
+	}
+	lockFile := s.lockFile
+	s.lockFile = nil
+	s.mu.Unlock()
+
+	if lockFile == nil {
+		return nil
+	}
+	unlockErr := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	closeErr := lockFile.Close()
+	if unlockErr != nil {
+		unlockErr = fmt.Errorf("unlock audit directory: %w", unlockErr)
+	}
+	if closeErr != nil {
+		closeErr = fmt.Errorf("close audit writer lock: %w", closeErr)
+	}
+	return errors.Join(unlockErr, closeErr)
 }
 
 func (s *Store) ensureRun(runID domain.RunID) *runLog {

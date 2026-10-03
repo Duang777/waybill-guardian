@@ -64,11 +64,15 @@ func TestApprovalStateMachineAndRecovery(t *testing.T) {
 	if executed.Status != StatusExecuted {
 		t.Fatalf("executed status = %q", executed.Status)
 	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	reopenedJournal, err := audit.Open(dir, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer reopenedJournal.Close()
 	reopened, err := NewStore(reopenedJournal, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
@@ -88,6 +92,7 @@ func TestRejectRequiresReasonAndExpiryDefaultsToReject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer journal.Close()
 	store, err := NewStore(journal, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
