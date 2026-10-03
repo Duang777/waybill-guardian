@@ -1033,6 +1033,9 @@ func (s *Service) createApproval(
 				write.Action,
 			)
 		}
+		if err := write.ValidateRunContext(runContext); err != nil {
+			return approval.Approval{}, err
+		}
 		if write.LegacyKey != "" {
 			return approval.Approval{}, fmt.Errorf(
 				"%w: model supplied idempotency_key",

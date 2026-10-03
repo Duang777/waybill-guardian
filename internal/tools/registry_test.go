@@ -128,6 +128,7 @@ func TestParseWriteCanonicalizesBusinessArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	if first.Action != domain.ActionSendSMS ||
+		first.WaybillID != "YD2026101001" ||
 		first.Target != "waybill/YD2026101001/recipient/shipper" {
 		t.Fatalf("canonical write = %+v", first)
 	}
@@ -137,6 +138,29 @@ func TestParseWriteCanonicalizesBusinessArguments(t *testing.T) {
 	}
 	if first.LegacyKey != "" {
 		t.Fatalf("business-only write has legacy key %q", first.LegacyKey)
+	}
+}
+
+func TestCanonicalWriteRejectsAnotherRunWaybill(t *testing.T) {
+	registry := testRegistry(t)
+	write, err := registry.ParseWrite(
+		"notify_send_sms",
+		json.RawMessage(
+			`{"waybill_id":"YD2026101001","recipient":"shipper","carrier_id":"CARRIER-SW-42"}`,
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := write.ValidateRunContext(domain.RunContext{
+		WaybillID: "YD2026101002",
+	}); err == nil {
+		t.Fatal("write for another waybill was accepted")
+	}
+	if err := write.ValidateRunContext(domain.RunContext{
+		WaybillID: "YD2026101001",
+	}); err != nil {
+		t.Fatalf("write for run waybill was rejected: %v", err)
 	}
 }
 

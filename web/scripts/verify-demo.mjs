@@ -78,6 +78,8 @@ try {
     await page.getByRole("button", { name: buttonName, exact: true }).click();
     await page.getByText("改派至川行快运", { exact: true }).waitFor();
     await page.getByText("待确认", { exact: true }).waitFor();
+    await page.getByText("发送至货主 · 川行快运", { exact: true }).waitFor();
+    await page.getByText("发送至司机 · 川行快运", { exact: true }).waitFor();
 
     if (index === 0) {
       await page.screenshot({

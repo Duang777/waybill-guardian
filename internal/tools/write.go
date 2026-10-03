@@ -13,6 +13,7 @@ import (
 type CanonicalWrite struct {
 	Action         domain.Action
 	WireName       string
+	WaybillID      domain.WaybillID
 	Target         string
 	Arguments      json.RawMessage
 	ArgumentsHash  string
@@ -35,6 +36,17 @@ type legacySendSMSInput struct {
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
+func (write CanonicalWrite) ValidateRunContext(runContext domain.RunContext) error {
+	if write.WaybillID != runContext.WaybillID {
+		return fmt.Errorf(
+			"write waybill %q does not match run waybill %q",
+			write.WaybillID,
+			runContext.WaybillID,
+		)
+	}
+	return nil
+}
+
 func (r *Registry) ParseWrite(wireName string, raw json.RawMessage) (CanonicalWrite, error) {
 	definition, ok := r.ByWireName(wireName)
 	if !ok || definition.Access != AccessWrite {
@@ -46,7 +58,7 @@ func (r *Registry) ParseWrite(wireName string, raw json.RawMessage) (CanonicalWr
 	}
 
 	var arguments any
-	var target, legacyKey string
+	var waybillID, target, legacyKey string
 	switch definition.Action {
 	case domain.ActionReassign:
 		var input legacyReassignInput
@@ -57,6 +69,7 @@ func (r *Registry) ParseWrite(wireName string, raw json.RawMessage) (CanonicalWr
 			return CanonicalWrite{}, validationErr
 		}
 		arguments = input.ReassignInput
+		waybillID = input.WaybillID
 		target = "waybill/" + input.WaybillID + "/carrier/" + input.CarrierID
 		legacyKey = input.IdempotencyKey
 	case domain.ActionCreateClaim:
@@ -68,6 +81,7 @@ func (r *Registry) ParseWrite(wireName string, raw json.RawMessage) (CanonicalWr
 			return CanonicalWrite{}, validationErr
 		}
 		arguments = input.CreateClaimInput
+		waybillID = input.WaybillID
 		target = "waybill/" + input.WaybillID + "/claim/" + input.ClaimType
 		legacyKey = input.IdempotencyKey
 	case domain.ActionSendSMS:
@@ -79,6 +93,7 @@ func (r *Registry) ParseWrite(wireName string, raw json.RawMessage) (CanonicalWr
 			return CanonicalWrite{}, validationErr
 		}
 		arguments = input.SendSMSInput
+		waybillID = input.WaybillID
 		target = "waybill/" + input.WaybillID + "/recipient/" + string(input.Recipient)
 		legacyKey = input.IdempotencyKey
 	default:
@@ -96,6 +111,7 @@ func (r *Registry) ParseWrite(wireName string, raw json.RawMessage) (CanonicalWr
 	return CanonicalWrite{
 		Action:         definition.Action,
 		WireName:       definition.WireName,
+		WaybillID:      domain.WaybillID(waybillID),
 		Target:         target,
 		Arguments:      canonical,
 		ArgumentsHash:  argumentsHash,

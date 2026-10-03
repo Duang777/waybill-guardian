@@ -259,13 +259,14 @@ function actionDetail(
   }
   if (action === "notify.send_sms") {
     const recipient = stringParam(params, "recipient");
-    if (recipient === "shipper") {
-      return "发送至货主";
-    }
-    if (recipient === "driver") {
-      return "发送至司机";
-    }
-    return `发送至 ${recipient}`;
+    const recipientLabel =
+      recipient === "shipper" ? "货主" : recipient === "driver" ? "司机" : recipient;
+    const carrierID = stringParam(params, "carrier_id");
+    const carrier =
+      view?.waybill.candidate_carriers.find(
+        (candidate) => candidate.carrier_id === carrierID,
+      )?.name ?? carrierID;
+    return `发送至${recipientLabel} · ${carrier}`;
   }
   return stringParam(params, "claim_type");
 }
