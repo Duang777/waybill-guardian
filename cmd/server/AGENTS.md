@@ -36,7 +36,8 @@ HTTP 和 SSE 服务入口。handler 只做请求校验、协议转换和错误�
 - `AUTH_MODE=local` 固定使用 `local-demo-reviewer`，客户端提供的 `Authorization` 和
   `X-Actor` 不参与身份判断。
 - `AUTH_MODE=jwt` 要求 RS256 Bearer JWT，并校验 issuer、audience、时效、tenant、角色和
-  运单范围。审批人只取已验证 JWT 的 `sub`。
+  运单范围。审批人只取已验证 JWT 的 `sub`。middleware 将凭据截止时间设为请求 context
+  deadline，SSE 必须在 token 到期后退出。
 - run 和 approval 先从 `guardian.Service` 查询关联的 `waybill_id`，再做对象授权。列表按
   调用者的运单范围过滤。
 - 非数字 `Last-Event-ID` 返回 400。游标超过当前末尾返回 409。

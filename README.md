@@ -87,8 +87,9 @@ BACKEND_PORT=18080 WEB_PORT=15173 DATA_DIR=/tmp/waybill-demo ./scripts/demo.sh
 `AUTH_MODE=jwt` 验证 RS256 签名、issuer、audience、`iat`、`nbf` 和 `exp`。JWT 还必须包含
 `sub`、`tenant_id`、`roles`，以及 `waybill_all=true` 或非空 `waybill_ids`。可用角色为
 `viewer`、`dispatcher` 和 `operator`，分别允许读取、启动 run 和决定审批。服务忽略
-`X-Actor`，并把已验证的 `sub` 写入 `decided_by`。JWT 模式可以监听显式非 loopback IP，
-但服务本身不终止 TLS。远程部署必须放在 HTTPS 入口后。`PLATFORM=real` 要求
+`X-Actor`，并把已验证的 `sub` 写入 `decided_by`。请求 context 的 deadline 不晚于 JWT
+有效期，因此时间线 SSE 会在凭据到期时断开。JWT 模式可以监听显式非 loopback IP，但服务
+本身不终止 TLS。远程部署必须放在 HTTPS 入口后。`PLATFORM=real` 要求
 `STORAGE=postgres` 和 `AUTH_MODE=jwt`，真实 adapter 尚未实现，因此仍会拒绝启动。
 
 ### 使用在线模型

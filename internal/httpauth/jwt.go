@@ -21,6 +21,7 @@ type jwtClaims struct {
 type jwtVerifier struct {
 	parser *jwt.Parser
 	key    *rsa.PublicKey
+	leeway time.Duration
 }
 
 func newJWTVerifier(config JWTConfig) (*jwtVerifier, error) {
@@ -59,7 +60,8 @@ func newJWTVerifier(config JWTConfig) (*jwtVerifier, error) {
 			jwt.WithTimeFunc(config.Clock),
 			jwt.WithStrictDecoding(),
 		),
-		key: key,
+		key:    key,
+		leeway: config.Leeway,
 	}, nil
 }
 
@@ -78,6 +80,7 @@ func (v *jwtVerifier) Verify(raw string) (Principal, error) {
 	if err != nil {
 		return Principal{}, ErrUnauthenticated
 	}
+	principal.validUntil = claims.ExpiresAt.Time.Add(v.leeway)
 	return principal, nil
 }
 

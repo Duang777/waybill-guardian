@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,6 +63,17 @@ func authenticateAPI(access *httpauth.Boundary, next http.Handler) http.Handler 
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			writeProblem(w, http.StatusUnauthorized, "unauthenticated", "valid authentication is required")
 			return
+		}
+		principal, err := httpauth.PrincipalFrom(authenticated.Context())
+		if err != nil {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			writeProblem(w, http.StatusUnauthorized, "unauthenticated", "valid authentication is required")
+			return
+		}
+		if deadline, ok := principal.CredentialDeadline(); ok {
+			ctx, cancel := context.WithDeadline(authenticated.Context(), deadline)
+			defer cancel()
+			authenticated = authenticated.WithContext(ctx)
 		}
 		next.ServeHTTP(w, authenticated)
 	})

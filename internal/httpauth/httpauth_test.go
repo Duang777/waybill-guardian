@@ -59,6 +59,9 @@ func TestLocalBoundaryUsesTrustedIdentity(t *testing.T) {
 	if principal.Subject() != "local-demo-reviewer" {
 		t.Fatalf("subject = %q", principal.Subject())
 	}
+	if _, ok := principal.CredentialDeadline(); ok {
+		t.Fatal("local principal unexpectedly has a credential deadline")
+	}
 	for _, capability := range []Capability{Read, StartRun, DecideApproval} {
 		grant, grantErr := boundary.Grant(principal, capability)
 		if grantErr != nil {
@@ -87,6 +90,10 @@ func TestJWTBoundaryAuthenticatesAndAuthorizes(t *testing.T) {
 	}
 	if principal.Subject() != "reviewer-42" {
 		t.Fatalf("subject = %q", principal.Subject())
+	}
+	deadline, ok := principal.CredentialDeadline()
+	if !ok || !deadline.Equal(now.Add(time.Hour+30*time.Second)) {
+		t.Fatalf("credential deadline = %v, %v", deadline, ok)
 	}
 	grant, err := boundary.Grant(principal, DecideApproval)
 	if err != nil {
@@ -280,6 +287,7 @@ func newTestJWTBoundary(
 			Audience:     "waybill-guardian",
 			PublicKeyPEM: pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: raw}),
 			Clock:        func() time.Time { return now },
+			Leeway:       30 * time.Second,
 		},
 	})
 	if err != nil {

@@ -21,7 +21,8 @@
 - token 必须设置 `waybill_all=true`，或提供非空 `waybill_ids`。两者不能同时使用。
 
 `Principal` 的字段保持私有。HTTP middleware 通过 `Authenticate` 把 Principal 写入请求
-context，handler 使用 `PrincipalFrom` 读取。审批审计主体只取 `Principal.Subject()`。
+context，handler 使用 `PrincipalFrom` 读取。JWT Principal 的 `CredentialDeadline` 包含
+验证时使用的 `exp + leeway`。审批审计主体只取 `Principal.Subject()`。
 
 ## 约束
 

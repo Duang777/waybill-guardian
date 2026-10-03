@@ -55,14 +55,22 @@ type JWTConfig struct {
 }
 
 type Principal struct {
-	subject  Subject
-	tenantID TenantID
-	roles    map[Role]struct{}
-	scope    waybillScope
+	subject    Subject
+	tenantID   TenantID
+	roles      map[Role]struct{}
+	scope      waybillScope
+	validUntil time.Time
 }
 
 func (p Principal) Subject() string {
 	return string(p.subject)
+}
+
+func (p Principal) CredentialDeadline() (time.Time, bool) {
+	if p.validUntil.IsZero() {
+		return time.Time{}, false
+	}
+	return p.validUntil, true
 }
 
 type Boundary struct {

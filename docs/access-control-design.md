@@ -133,6 +133,7 @@ func (b *Boundary) Authenticate(*http.Request) (*http.Request, error)
 func (b *Boundary) Grant(Principal, Capability) (Grant, error)
 func PrincipalFrom(context.Context) (Principal, error)
 func (p Principal) Subject() string
+func (p Principal) CredentialDeadline() (time.Time, bool)
 func (g Grant) Require(domain.WaybillID) error
 func (g Grant) Allows(domain.WaybillID) bool
 ```
@@ -147,7 +148,8 @@ func (g Grant) Allows(domain.WaybillID) bool
 
 `Boundary.Grant` 先要求 Principal tenant 等于进程 `TENANT_ID`，再检查角色。
 `Grant.Require` 和 `Grant.Allows` 隐藏 wildcard 与 ID 集合表示。local Principal 拥有三个
-角色和全部运单范围。
+角色和全部运单范围。JWT Principal 还保存经验证的凭据截止时间；HTTP middleware 将它转成
+请求 context deadline，长时间线在 token 到期后停止。
 
 ```text
 cmd/server/main.go       配置、fail-fast、依赖组装

@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -75,6 +76,46 @@ func TestJWTHandlerRequiresAuthenticationOnEveryAPIRoute(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("health status = %d", response.Code)
+	}
+}
+
+func TestAuthenticateAPILimitsRequestToCredentialLifetime(t *testing.T) {
+	verifierNow := time.Unix(1, 0).UTC()
+	access, privateKey := newJWTAccessWithClock(
+		t,
+		func() time.Time { return verifierNow },
+	)
+	claims := testJWTClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "https://issuer.example",
+			Subject:   "reviewer-42",
+			Audience:  jwt.ClaimStrings{"waybill-guardian"},
+			IssuedAt:  jwt.NewNumericDate(time.Unix(0, 0).UTC()),
+			NotBefore: jwt.NewNumericDate(time.Unix(0, 0).UTC()),
+			ExpiresAt: jwt.NewNumericDate(time.Unix(2, 0).UTC()),
+		},
+		TenantID:   "tenant-a",
+		Roles:      []string{"viewer"},
+		WaybillAll: true,
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodRS256, claims).SignedString(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := authenticateAPI(access, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !errors.Is(r.Context().Err(), context.DeadlineExceeded) {
+			t.Fatalf("request context error = %v", r.Context().Err())
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	request := httptest.NewRequest(http.MethodGet, "http://api.example/api/runs", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusNoContent)
 	}
 }
 
@@ -328,6 +369,13 @@ func newHTTPAuthService(t *testing.T) (*guardian.Service, *platform.Mock) {
 }
 
 func newJWTAccess(t *testing.T) (*httpauth.Boundary, *rsa.PrivateKey) {
+	return newJWTAccessWithClock(t, nil)
+}
+
+func newJWTAccessWithClock(
+	t *testing.T,
+	clock func() time.Time,
+) (*httpauth.Boundary, *rsa.PrivateKey) {
 	t.Helper()
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -340,6 +388,7 @@ func newJWTAccess(t *testing.T) (*httpauth.Boundary, *rsa.PrivateKey) {
 			Issuer:       "https://issuer.example",
 			Audience:     "waybill-guardian",
 			PublicKeyPEM: rsaPublicKeyPEM(t, &privateKey.PublicKey),
+			Clock:        clock,
 		},
 	})
 	if err != nil {
