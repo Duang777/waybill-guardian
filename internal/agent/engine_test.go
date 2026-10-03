@@ -50,8 +50,7 @@ func TestScenarioAgentPausesThenExecutesApprovedWrites(t *testing.T) {
 	}
 	middlewares := []agents.Middleware{
 		NewAuditMiddleware(journal),
-		NewApprovalGuard(approvals),
-		NewIdempotencyMiddleware(idempotencyStore),
+		NewWriteEffectMiddleware(approvals, idempotencyStore, registry),
 	}
 	engine, err := NewEngine(dataDir+"/history", registry, middlewares, 0, ModelConfig{})
 	if err != nil {
@@ -72,8 +71,8 @@ func TestScenarioAgentPausesThenExecutesApprovedWrites(t *testing.T) {
 	if outcome.Status != agentstate.RunStatusPaused {
 		t.Fatalf("status = %q, want paused; text=%q", outcome.Status, outcome.Text)
 	}
-	if len(outcome.Interrupts) != 2 {
-		t.Fatalf("interrupts = %d, want 2", len(outcome.Interrupts))
+	if len(outcome.Interrupts) != 3 {
+		t.Fatalf("interrupts = %d, want 3", len(outcome.Interrupts))
 	}
 	if mock.WriteCount(domain.ActionReassign) != 0 || mock.WriteCount(domain.ActionSendSMS) != 0 {
 		t.Fatal("write tools ran before approval")
@@ -81,38 +80,38 @@ func TestScenarioAgentPausesThenExecutesApprovedWrites(t *testing.T) {
 
 	items := make([]approval.Item, 0, len(outcome.Interrupts))
 	callIDs := make([]string, 0, len(outcome.Interrupts))
-	effectIDs := make(map[domain.EffectID]struct{}, len(outcome.Interrupts))
-	window := "incident-agent/plan-1"
 	for _, interrupt := range outcome.Interrupts {
-		var arguments map[string]json.RawMessage
-		if err := json.Unmarshal(interrupt.Arguments, &arguments); err != nil {
+		var rawArguments map[string]json.RawMessage
+		if err := json.Unmarshal(interrupt.Arguments, &rawArguments); err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := arguments["effect_id"]; ok {
-			t.Fatal("model-facing arguments contain effect_id")
+		if rawArguments["effect_id"] != nil || rawArguments["idempotency_key"] != nil {
+			t.Fatalf("model-facing arguments contain execution identity: %s", interrupt.Arguments)
 		}
-		if _, ok := arguments["idempotency_key"]; ok {
-			t.Fatal("model-facing arguments contain idempotency_key")
-		}
-		hash, err := idempotency.ArgumentsHash(string(interrupt.Arguments))
+		write, err := registry.ParseWrite(interrupt.WireName, interrupt.Arguments)
 		if err != nil {
 			t.Fatal(err)
 		}
-		identity := idempotency.Identify(interrupt.Action, runContext.WaybillID, window, hash)
-		effectIDs[identity.EffectID] = struct{}{}
+		identity, err := idempotency.Derive(idempotency.DerivationInput{
+			RunContext: runContext,
+			Action:     write.Action,
+			Target:     write.Target,
+			Arguments:  write.Arguments,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 		callIDs = append(callIDs, interrupt.CallID)
 		items = append(items, approval.Item{
-			CallID:         interrupt.CallID,
-			Action:         interrupt.Action,
-			WireName:       interrupt.WireName,
-			Params:         interrupt.Arguments,
-			ArgumentsHash:  hash,
-			EffectID:       identity.EffectID,
-			IdempotencyKey: identity.Key,
+			CallID:          interrupt.CallID,
+			Action:          write.Action,
+			WireName:        write.WireName,
+			Params:          write.Arguments,
+			ArgumentsHash:   identity.ArgumentsHash,
+			IdentityVersion: identity.Version,
+			EffectID:        identity.EffectID,
+			IdempotencyKey:  identity.Key,
 		})
-	}
-	if len(effectIDs) != len(outcome.Interrupts) {
-		t.Fatalf("effect IDs = %d, interrupts = %d", len(effectIDs), len(outcome.Interrupts))
 	}
 	approvalID := approval.IDFor(runContext.RunID, callIDs)
 	if _, err := approvals.Create(context.Background(), approval.Approval{
@@ -138,7 +137,7 @@ func TestScenarioAgentPausesThenExecutesApprovedWrites(t *testing.T) {
 	if resumed.Status != agentstate.RunStatusCompleted {
 		t.Fatalf("resumed status = %q, text=%q", resumed.Status, resumed.Text)
 	}
-	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 1 {
+	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 2 {
 		t.Fatalf("writes = reassign:%d sms:%d", mock.WriteCount(domain.ActionReassign), mock.WriteCount(domain.ActionSendSMS))
 	}
 	if len(outcome.Chunks) == 0 || len(resumed.Chunks) == 0 {

@@ -82,8 +82,8 @@ func (m *ScenarioModel) NewStreamingResponses(
 		}
 		return textResponse("两个改派方案均被驳回，本次处置结束并转人工跟进。"), nil
 	}
-	if state.hasSuccessfulResult(reassignWire) && state.hasSuccessfulResult(smsWire) {
-		return textResponse("改派已完成，货主通知已发送，处置过程已写入审计时间线。"), nil
+	if state.hasSuccessfulResult(reassignWire) && state.successfulResultCount(smsWire) >= 2 {
+		return textResponse("改派已完成，货主和司机通知已发送，处置过程已写入审计时间线。"), nil
 	}
 	return textResponse("写操作未全部成功，本次处置转人工检查。"), nil
 }
@@ -100,9 +100,17 @@ func (m *ScenarioModel) proposal(
 		WaybillID: string(runContext.WaybillID),
 		CarrierID: carrierID,
 	}
-	sms := guardtools.SendSMSInput{
+	shipperSMS := guardtools.SendSMSInput{
 		Phone:      "13800001234",
 		TemplateID: "waybill_reassigned",
+		Params: map[string]string{
+			"waybill_id": string(runContext.WaybillID),
+			"carrier_id": carrierID,
+		},
+	}
+	driverSMS := guardtools.SendSMSInput{
+		Phone:      "13961234567",
+		TemplateID: "waybill_reassigned_driver",
 		Params: map[string]string{
 			"waybill_id": string(runContext.WaybillID),
 			"carrier_id": carrierID,
@@ -111,7 +119,8 @@ func (m *ScenarioModel) proposal(
 	return &responses.Response{Output: []responses.OutputMessageUnion{
 		assistantText(summary),
 		toolCall(runContext.RunID, reassignWire, planVersion, reassign),
-		toolCall(runContext.RunID, smsWire, planVersion, sms),
+		toolCall(runContext.RunID, smsWire, planVersion, shipperSMS),
+		toolCall(runContext.RunID, smsWire, planVersion, driverSMS),
 	}}
 }
 
@@ -162,6 +171,16 @@ func (s conversationState) hasSuccessfulResult(name string) bool {
 	return !strings.Contains(latest, "declined") && !strings.Contains(latest, "failed")
 }
 
+func (s conversationState) successfulResultCount(name string) int {
+	count := 0
+	for _, result := range s.results[name] {
+		if !strings.Contains(result, "declined") && !strings.Contains(result, "failed") {
+			count++
+		}
+	}
+	return count
+}
+
 func parseRunContext(values map[string]any) (domain.RunContext, error) {
 	runID, _ := values["run_id"].(string)
 	incidentID, _ := values["incident_id"].(string)
@@ -197,7 +216,7 @@ func intValue(value any) int {
 
 func toolCall(runID domain.RunID, name string, version int, args any) responses.OutputMessageUnion {
 	raw, _ := json.Marshal(args)
-	callID := stableID(string(runID) + "|" + name + "|" + fmt.Sprint(version))
+	callID := stableID(string(runID) + "|" + name + "|" + fmt.Sprint(version) + "|" + string(raw))
 	return responses.OutputMessageUnion{OfFunctionCall: &responses.FunctionCallMessage{
 		ID:        "fc_" + callID,
 		CallID:    "call_" + callID,

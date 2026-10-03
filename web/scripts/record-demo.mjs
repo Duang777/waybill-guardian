@@ -123,14 +123,14 @@ try {
   await scene(
     page,
     "写操作仍未执行",
-    "改派和短信通知组成一个审批批次，参数、理由和证据都对审批人可见。",
+    "改派、货主通知和司机通知组成一个审批批次，参数、理由和证据都对审批人可见。",
     4_000,
   );
 
   await setCaption(
     page,
     "人工确认后才恢复执行",
-    "服务端先持久化决定，再校验审批范围和幂等键，最后调用平台。",
+    "服务端先持久化决定，再校验审批范围和 effect 身份，最后调用平台。",
   );
   await page.getByRole("button", { name: "确认并执行", exact: true }).click();
   await page.getByText("方案已执行", { exact: true }).waitFor();

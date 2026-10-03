@@ -3,22 +3,22 @@
 ## 职责
 
 本目录防止改派、赔付和通知被重复执行。模型调用重试、服务恢复和人工重复点击都不能依赖
-调用方自行去重，因此 Agent 的每个写调用都经过 `IdempotencyMiddleware`。
+调用方自行去重，因此 Agent 的每个写调用都经过 `WriteEffectMiddleware`。
 
 ## key 生成和校验
 
 ```
-effect_id = UUIDv5(action + "|" + waybill_id + "|" + business_window + "|" + arguments_hash)
-key = sha256(effect_id)
+proposal_id = UUIDv5(run_id, incident_id, waybill_id, plan_version)
+proposal_item_id = SHA256(identity_version, action, target, arguments_hash)
+effect_id = UUIDv5(proposal_id, proposal_item_id)
+key = SHA256("waybill-effect-key-v1\0" + effect_id)
 ```
 
-`business_window` 使用 `incident_id + "/plan-" + plan_version`。模型只提交业务参数。
-middleware 从可信 `RunContext` 和 canonical JSON 参数哈希生成 effect ID 与 key，再通过 context
-把 key 传给 platform handler。同方案内目标或参数不同的同类动作具有不同 effect ID；完全相同的
-动作按同一 effect 去重。
+Agent 只提交业务参数。`guardian` 在创建审批前生成并保存 `effect_id` 和 key。middleware
+从可信 `RunContext` 和严格解析的业务参数重算身份。handler 只从 execution context 读取 key。
 
-参数绑定使用 canonical JSON 的 SHA-256。相同 key 携带不同 effect ID、action 或参数哈希时返回
-`ErrKeyConflict`。
+参数绑定使用 canonical JSON 的 SHA-256。相同 key 携带不同 effect、action 或参数哈希时返回
+`ErrKeyConflict`。旧审批保留原 key 和完整参数哈希；未完成且共享 key 的旧批次拒绝执行。
 
 ## 去重语义
 
@@ -33,7 +33,7 @@ absent -> started -> succeeded
 - 首次调用先追加 `write_started`，再调用 platform。
 - 相同 key 的并发调用等待第一次执行。成功后，等待者读取首次结果。
 - 后续成功重复调用不再进入 platform，并追加 `duplicate_suppressed`。
-- 已记录失败的调用允许重试。
+- 已记录失败的调用允许重试。每次重试使用递增 attempt 和独立事件 ID。
 - 启动恢复只看到 `write_started` 而没有结果时，状态为 `indeterminate`。系统不自动重试。
 
 store 不维护独立 JSONL。它从 `internal/audit` 的事件重建 entry。成功结果包含在
@@ -47,5 +47,5 @@ store 不维护独立 JSONL。它从 `internal/audit` 的事件重建 entry。�
 
 ## 验证
 
-测试覆盖 effect ID 与 key 生成、同类 effect 隔离、参数哈希、缺键、key 冲突、并发十次只执行
-一次、成功结果回放、失败后重试和 indeterminate 恢复。
+测试覆盖身份 golden vector、参数哈希、key 冲突、并发十次只执行一次、旧结果回放、
+失败 attempt 和不完整身份拒绝。

@@ -3,10 +3,12 @@ package tools
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"regexp"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/idempotency"
 	"github.com/Duang777/waybill-guardian/internal/platform"
 )
 
@@ -77,20 +79,6 @@ type Handlers struct {
 	clients platform.Clients
 }
 
-type idempotencyKeyContextKey struct{}
-
-func WithIdempotencyKey(ctx context.Context, key domain.IdempotencyKey) context.Context {
-	return context.WithValue(ctx, idempotencyKeyContextKey{}, key)
-}
-
-func idempotencyKeyFromContext(ctx context.Context) (domain.IdempotencyKey, error) {
-	key, _ := ctx.Value(idempotencyKeyContextKey{}).(domain.IdempotencyKey)
-	if key == "" {
-		return "", fmt.Errorf("server-generated idempotency key is required")
-	}
-	return key, nil
-}
-
 func NewHandlers(clients platform.Clients) (*Handlers, error) {
 	if clients.TMS == nil || clients.Weather == nil || clients.Notification == nil {
 		return nil, fmt.Errorf("all platform clients are required")
@@ -141,13 +129,10 @@ func (h *Handlers) GetRoadWeather(ctx context.Context, in GetRoadWeatherInput) (
 }
 
 func (h *Handlers) Reassign(ctx context.Context, in ReassignInput) (ReassignOutput, error) {
-	if err := validateWaybillID(in.WaybillID); err != nil {
+	if err := validateReassign(in); err != nil {
 		return ReassignOutput{}, err
 	}
-	if in.CarrierID == "" {
-		return ReassignOutput{}, fmt.Errorf("carrier_id is required")
-	}
-	key, err := idempotencyKeyFromContext(ctx)
+	key, err := executionKey(ctx, domain.ActionReassign)
 	if err != nil {
 		return ReassignOutput{}, err
 	}
@@ -159,13 +144,10 @@ func (h *Handlers) Reassign(ctx context.Context, in ReassignInput) (ReassignOutp
 }
 
 func (h *Handlers) CreateClaim(ctx context.Context, in CreateClaimInput) (CreateClaimOutput, error) {
-	if err := validateWaybillID(in.WaybillID); err != nil {
+	if err := validateCreateClaim(in); err != nil {
 		return CreateClaimOutput{}, err
 	}
-	if in.ClaimType == "" {
-		return CreateClaimOutput{}, fmt.Errorf("claim_type is required")
-	}
-	key, err := idempotencyKeyFromContext(ctx)
+	key, err := executionKey(ctx, domain.ActionCreateClaim)
 	if err != nil {
 		return CreateClaimOutput{}, err
 	}
@@ -177,13 +159,10 @@ func (h *Handlers) CreateClaim(ctx context.Context, in CreateClaimInput) (Create
 }
 
 func (h *Handlers) SendSMS(ctx context.Context, in SendSMSInput) (SendSMSOutput, error) {
-	if in.Phone == "" || in.TemplateID == "" {
-		return SendSMSOutput{}, fmt.Errorf("phone and template_id are required")
+	if err := validateSendSMS(in); err != nil {
+		return SendSMSOutput{}, err
 	}
-	if in.Params == nil {
-		return SendSMSOutput{}, fmt.Errorf("params is required")
-	}
-	key, err := idempotencyKeyFromContext(ctx)
+	key, err := executionKey(ctx, domain.ActionSendSMS)
 	if err != nil {
 		return SendSMSOutput{}, err
 	}
@@ -193,6 +172,50 @@ func (h *Handlers) SendSMS(ctx context.Context, in SendSMSInput) (SendSMSOutput,
 		Params:         in.Params,
 		IdempotencyKey: key,
 	})
+}
+
+func validateReassign(in ReassignInput) error {
+	if err := validateWaybillID(in.WaybillID); err != nil {
+		return err
+	}
+	if in.CarrierID == "" {
+		return fmt.Errorf("carrier_id is required")
+	}
+	return nil
+}
+
+func validateCreateClaim(in CreateClaimInput) error {
+	if err := validateWaybillID(in.WaybillID); err != nil {
+		return err
+	}
+	if in.ClaimType == "" {
+		return fmt.Errorf("claim_type is required")
+	}
+	return nil
+}
+
+func validateSendSMS(in SendSMSInput) error {
+	if in.Phone == "" || in.TemplateID == "" {
+		return fmt.Errorf("phone and template_id are required")
+	}
+	if in.Params == nil {
+		return fmt.Errorf("params is required")
+	}
+	return nil
+}
+
+func executionKey(ctx context.Context, action domain.Action) (domain.IdempotencyKey, error) {
+	identity, err := idempotency.ExecutionFromContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	if identity.Action != action {
+		return "", errors.Join(
+			idempotency.ErrInvalidIdentity,
+			fmt.Errorf("execution action %q does not match tool action %q", identity.Action, action),
+		)
+	}
+	return identity.Key, nil
 }
 
 func validateWaybillID(id string) error {

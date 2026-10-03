@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"os"
 	"sort"
+	"strings"
 	"testing"
 
+	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/hastekit/agent-sdk-go/pkg/agents"
 	"github.com/hastekit/agent-sdk-go/pkg/gateway/llm/responses"
 	"gopkg.in/yaml.v3"
@@ -88,10 +90,70 @@ func TestRegistryMatchesContract(t *testing.T) {
 				!*descriptor.Annotations.IdempotentHint {
 				t.Fatalf("write tool %q lacks idempotent annotation", name)
 			}
+			properties, _ := descriptor.ToolUnion.OfFunction.Parameters["properties"].(map[string]any)
+			if _, exists := properties["idempotency_key"]; exists {
+				t.Fatalf("write tool %q exposes idempotency_key", name)
+			}
+			if _, exists := properties["effect_id"]; exists {
+				t.Fatalf("write tool %q exposes effect_id", name)
+			}
 		}
 		if descriptor.Meta[MetaContractName] != name || descriptor.Meta[MetaAccess] != definition.Access {
 			t.Fatalf("tool %q metadata = %#v", name, descriptor.Meta)
 		}
+	}
+}
+
+func TestParseWriteCanonicalizesBusinessArguments(t *testing.T) {
+	registry := testRegistry(t)
+	first, err := registry.ParseWrite(
+		"notify_send_sms",
+		json.RawMessage(`{"phone":"13800001234","template_id":"delay","params":{"b":"2","a":"1"}}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := registry.ParseWrite(
+		"notify_send_sms",
+		json.RawMessage(`{"params":{"a":"1","b":"2"},"template_id":"delay","phone":"13800001234"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Action != domain.ActionSendSMS || first.Target != "phone/13800001234" {
+		t.Fatalf("canonical write = %+v", first)
+	}
+	if string(first.Arguments) != string(second.Arguments) ||
+		first.ArgumentsHash != second.ArgumentsHash {
+		t.Fatalf("canonical writes differ:\nfirst:  %+v\nsecond: %+v", first, second)
+	}
+	if first.LegacyKey != "" {
+		t.Fatalf("business-only write has legacy key %q", first.LegacyKey)
+	}
+}
+
+func TestParseWriteRejectsUnknownExecutionFields(t *testing.T) {
+	registry := testRegistry(t)
+	for _, field := range []string{"effect_id", "unknown"} {
+		raw := `{"waybill_id":"YD2026101001","carrier_id":"CARRIER-SW-42","` +
+			field + `":"forged"}`
+		if _, err := registry.ParseWrite("tms_reassign", json.RawMessage(raw)); err == nil ||
+			!strings.Contains(err.Error(), "unknown field") {
+			t.Fatalf("field %q error = %v", field, err)
+		}
+	}
+
+	legacy, err := registry.ParseWrite(
+		"tms_reassign",
+		json.RawMessage(
+			`{"waybill_id":"YD2026101001","carrier_id":"CARRIER-SW-42","idempotency_key":"old-key"}`,
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.LegacyKey != "old-key" || strings.Contains(string(legacy.Arguments), "idempotency_key") {
+		t.Fatalf("legacy canonical write = %+v", legacy)
 	}
 }
 
@@ -159,4 +221,21 @@ func sameStrings(left, right []string) bool {
 		}
 	}
 	return true
+}
+
+func testRegistry(t *testing.T) *Registry {
+	t.Helper()
+	clients, _, err := NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlers, err := NewHandlers(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := NewRegistry(handlers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return registry
 }

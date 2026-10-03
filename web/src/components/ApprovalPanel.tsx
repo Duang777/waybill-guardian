@@ -99,7 +99,10 @@ export function ApprovalPanel({
           </div>
           <div className={styles.effectList}>
             {approval.items.map((item) => (
-              <div className={styles.effectRow} key={item.call_id}>
+              <div
+                className={styles.effectRow}
+                key={"effect_id" in item ? item.effect_id : item.call_id}
+              >
                 <div className={styles.effectIcon}>
                   {item.action === "notify.send_sms" ? (
                     <Send aria-hidden="true" size={15} />

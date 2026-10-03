@@ -40,28 +40,27 @@ context 或关闭 Engine 时，Engine 先发送 SDK stop，再等待 run 和已�
 | 契约工具 | 执行策略 |
 |---|---|
 | `tms.get_waybill` / `tms.get_tracking` / `tms.get_driver` / `ext.get_road_weather` | 自动执行（只读） |
-| `tms.reassign` / `tms.create_claim` / `notify.send_sms` | 走 approval 人审闸；middleware 生成 effect ID 和幂等键 |
+| `tms.reassign` / `tms.create_claim` / `notify.send_sms` | 走 approval 人审闸；middleware 校验服务端生成的 effect 身份 |
 
 契约名包含点，模型 wire name 使用下划线。每个 hastekit tool 的 metadata 保存原契约名和
 读写类型。
 
 ## middleware 职责
 
-`guardian.Open` 安装三个项目 middleware：
+`guardian.Open` 安装两个项目 middleware：
 
 1. `AuditMiddleware` 记录工具调用和结果，并在写盘前脱敏。
-2. `ApprovalGuard` 只允许与 confirmed 审批中 `call_id` 和参数哈希一致的写调用。
-3. `IdempotencyMiddleware` 从可信 `RunContext` 和业务参数生成 effect ID 与 key，合并并发调用，
-   并回放首次成功结果。
+2. `WriteEffectMiddleware` 严格解析业务参数，校验 confirmed 审批中的 `call_id`、参数哈希和
+   `effect_id`，再合并并发调用或回放首次成功结果。middleware 通过 context 把持久化 key
+   交给 typed handler。
 
 hastekit 自己根据 `RequiresApproval` 在首次写调用前暂停。项目 middleware 在恢复执行时再次
 校验业务审批和幂等约束。
 
 ## system prompt
 
-`SystemPrompt` 要求 Agent 先读取四类证据，再提出只含业务参数的写操作。effect ID 和
-`idempotency_key` 不进入模型工具 schema，由服务端生成。首选运力被拒绝后，Agent 使用第二个
-候选运力。
+`SystemPrompt` 要求 Agent 先读取四类证据，再提出写操作。模型只提交业务参数，不生成
+`effect_id` 或 `idempotency_key`。首选运力被拒绝后，Agent 使用第二个候选运力。
 
 ## 模型配置
 

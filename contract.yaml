@@ -3,7 +3,7 @@
 # 设计原则：
 # - 查询类工具可自动执行，无需人工确认
 # - 改派 / 赔付 / 通知三类写操作：必须经过人工确认闸
-# - effect_id 和 idempotency_key 由服务端按审批批次与业务参数生成，不暴露给模型
+# - 模型只提交业务参数；服务端生成 effect_id 和 idempotency_key
 # - mock 实现与未来真实平台 adapter 实现同一契约，切换时 agent 代码零改动
 
 read:

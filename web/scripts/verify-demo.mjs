@@ -86,7 +86,7 @@ try {
       .getByText("处置完成", { exact: true })
       .waitFor();
     const eventCount = await page.locator("ol li").count();
-    assert(eventCount === 22, `run ${index + 1} produced ${eventCount} events, want 22`);
+    assert(eventCount === 26, `run ${index + 1} produced ${eventCount} events, want 26`);
     assert(
       !(await hasHorizontalOverflow(page)),
       `run ${index + 1} has horizontal overflow`,

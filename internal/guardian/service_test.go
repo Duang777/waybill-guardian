@@ -33,6 +33,20 @@ func TestDemoConfirmCompletesExactlyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	pending := waitForApproval(t, service, run.RunID)
+	var smsEffects []domain.EffectID
+	var smsKeys []domain.IdempotencyKey
+	for _, item := range pending.Items {
+		if item.Action == domain.ActionSendSMS {
+			smsEffects = append(smsEffects, item.EffectID)
+			smsKeys = append(smsKeys, item.IdempotencyKey)
+		}
+	}
+	if len(smsEffects) != 2 {
+		t.Fatalf("sms effects = %d, want 2", len(smsEffects))
+	}
+	if smsEffects[0] == smsEffects[1] || smsKeys[0] == smsKeys[1] {
+		t.Fatalf("same-action effects collided: effects=%v keys=%v", smsEffects, smsKeys)
+	}
 	decided, err := service.Decide(context.Background(), pending.ID, DecisionRequest{
 		Kind:      approval.DecisionConfirm,
 		DecidedBy: "demo-reviewer",
@@ -50,7 +64,7 @@ func TestDemoConfirmCompletesExactlyOnce(t *testing.T) {
 	if completed.Status != domain.RunCompleted {
 		t.Fatalf("run status = %q", completed.Status)
 	}
-	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 1 {
+	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 2 {
 		t.Fatalf("writes = reassign:%d sms:%d", mock.WriteCount(domain.ActionReassign), mock.WriteCount(domain.ActionSendSMS))
 	}
 
@@ -64,7 +78,7 @@ func TestDemoConfirmCompletesExactlyOnce(t *testing.T) {
 	if repeated.Status != approval.StatusExecuted {
 		t.Fatalf("repeated status = %q", repeated.Status)
 	}
-	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 1 {
+	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 2 {
 		t.Fatal("repeated confirmation executed writes again")
 	}
 }
@@ -189,7 +203,7 @@ func TestConcurrentConfirmResumesRunOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 1 {
+	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 2 {
 		t.Fatalf("writes = reassign:%d sms:%d", mock.WriteCount(domain.ActionReassign), mock.WriteCount(domain.ActionSendSMS))
 	}
 }
@@ -412,7 +426,7 @@ func TestRecoverReplaysConfirmedApproval(t *testing.T) {
 		t.Fatalf("approval status = %q", recovered.Status)
 	}
 	waitForRunStatus(t, reopened, run.RunID, domain.RunCompleted)
-	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 1 {
+	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 2 {
 		t.Fatalf("writes = reassign:%d sms:%d", mock.WriteCount(domain.ActionReassign), mock.WriteCount(domain.ActionSendSMS))
 	}
 }
@@ -516,7 +530,7 @@ func TestRecoverCompletesApprovalWithoutRepeatingSuccessfulEffects(t *testing.T)
 	if recovered.Status != approval.StatusExecuted {
 		t.Fatalf("approval status = %q", recovered.Status)
 	}
-	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 1 {
+	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 2 {
 		t.Fatal("recovery repeated already successful effects")
 	}
 }

@@ -77,6 +77,7 @@ type Service struct {
 	journal   *audit.Store
 	approvals *approval.Store
 	effects   *idempotency.Store
+	registry  *guardtools.Registry
 	engine    *agentkit.Engine
 
 	mu        sync.Mutex
@@ -127,8 +128,7 @@ func Open(config Config) (*Service, error) {
 	}
 	middlewares := []agents.Middleware{
 		agentkit.NewAuditMiddleware(journal),
-		agentkit.NewApprovalGuard(approvals),
-		agentkit.NewIdempotencyMiddleware(idempotencyStore),
+		agentkit.NewWriteEffectMiddleware(approvals, idempotencyStore, registry),
 	}
 	engine, err := agentkit.NewEngine(
 		filepath.Join(config.DataDir, "hastekit"),
@@ -150,6 +150,7 @@ func Open(config Config) (*Service, error) {
 		journal:   journal,
 		approvals: approvals,
 		effects:   idempotencyStore,
+		registry:  registry,
 		engine:    engine,
 		runs:      make(map[domain.RunID]RunView),
 		locks:     make(map[domain.RunID]*sync.Mutex),
@@ -583,13 +584,22 @@ func (s *Service) approvalEffectResults(value approval.Approval) ([]approval.Ite
 	results := make([]approval.ItemExecution, 0, len(value.Items))
 	allSucceeded := true
 	for _, item := range value.Items {
+		identity, err := item.Identity()
+		if err != nil {
+			allSucceeded = false
+			results = append(results, approval.ItemExecution{
+				CallID:         item.CallID,
+				Action:         item.Action,
+				EffectID:       item.EffectID,
+				IdempotencyKey: item.IdempotencyKey,
+				Status:         approval.ExecutionMissing,
+			})
+			continue
+		}
 		state, ok := s.effects.Lookup(idempotency.Command{
-			RunID:         value.RunID,
-			CallID:        item.CallID,
-			Action:        item.Action,
-			EffectID:      item.EffectID,
-			Key:           item.IdempotencyKey,
-			ArgumentsHash: item.ArgumentsHash,
+			RunID:    value.RunID,
+			CallID:   item.CallID,
+			Identity: identity,
 		})
 		status := approval.ExecutionMissing
 		if ok {
@@ -728,21 +738,48 @@ func (s *Service) createApproval(
 ) (approval.Approval, error) {
 	items := make([]approval.Item, 0, len(outcome.Interrupts))
 	callIDs := make([]string, 0, len(outcome.Interrupts))
-	window := fmt.Sprintf("%s/plan-%d", run.IncidentID, planVersion)
+	runContext := domain.RunContext{
+		RunID:       run.RunID,
+		IncidentID:  run.IncidentID,
+		WaybillID:   run.WaybillID,
+		PlanVersion: planVersion,
+	}
 	for _, interrupt := range outcome.Interrupts {
-		hash, err := idempotency.ArgumentsHash(string(interrupt.Arguments))
+		write, err := s.registry.ParseWrite(interrupt.WireName, interrupt.Arguments)
 		if err != nil {
 			return approval.Approval{}, err
 		}
-		identity := idempotency.Identify(interrupt.Action, run.WaybillID, window, hash)
+		if write.Action != interrupt.Action {
+			return approval.Approval{}, fmt.Errorf(
+				"interrupt action %q does not match tool action %q",
+				interrupt.Action,
+				write.Action,
+			)
+		}
+		if write.LegacyKey != "" {
+			return approval.Approval{}, fmt.Errorf(
+				"%w: model supplied idempotency_key",
+				idempotency.ErrInvalidIdentity,
+			)
+		}
+		identity, err := idempotency.Derive(idempotency.DerivationInput{
+			RunContext: runContext,
+			Action:     write.Action,
+			Target:     write.Target,
+			Arguments:  write.Arguments,
+		})
+		if err != nil {
+			return approval.Approval{}, err
+		}
 		items = append(items, approval.Item{
-			CallID:         interrupt.CallID,
-			Action:         interrupt.Action,
-			WireName:       interrupt.WireName,
-			Params:         interrupt.Arguments,
-			ArgumentsHash:  hash,
-			EffectID:       identity.EffectID,
-			IdempotencyKey: identity.Key,
+			CallID:          interrupt.CallID,
+			Action:          write.Action,
+			WireName:        write.WireName,
+			Params:          write.Arguments,
+			ArgumentsHash:   identity.ArgumentsHash,
+			IdentityVersion: identity.Version,
+			EffectID:        identity.EffectID,
+			IdempotencyKey:  identity.Key,
 		})
 		callIDs = append(callIDs, interrupt.CallID)
 	}

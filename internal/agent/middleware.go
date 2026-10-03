@@ -75,45 +75,26 @@ func (m *AuditMiddleware) WrapToolCall(next agents.ToolCallFunc) agents.ToolCall
 	}
 }
 
-type ApprovalGuard struct {
+type WriteEffectMiddleware struct {
 	agents.NoopMiddleware
 	approvals *approval.Store
+	effects   *idempotency.Store
+	registry  *guardtools.Registry
 }
 
-func NewApprovalGuard(approvals *approval.Store) *ApprovalGuard {
-	return &ApprovalGuard{approvals: approvals}
-}
-
-func (m *ApprovalGuard) WrapToolCall(next agents.ToolCallFunc) agents.ToolCallFunc {
-	return func(ctx context.Context, tool *agents.BaseTool, call *agents.ToolCall) (*agents.ToolCallResponse, error) {
-		if !isWrite(tool) {
-			return next(ctx, tool, call)
-		}
-		runID, err := runIDFromCall(call)
-		if err != nil {
-			return nil, err
-		}
-		hash, err := idempotency.ArgumentsHash(call.Arguments)
-		if err != nil {
-			return nil, err
-		}
-		if !m.approvals.Allows(runID, call.CallID, hash) {
-			return nil, approval.ErrApprovalNotGranted
-		}
-		return next(ctx, tool, call)
+func NewWriteEffectMiddleware(
+	approvals *approval.Store,
+	effects *idempotency.Store,
+	registry *guardtools.Registry,
+) *WriteEffectMiddleware {
+	return &WriteEffectMiddleware{
+		approvals: approvals,
+		effects:   effects,
+		registry:  registry,
 	}
 }
 
-type IdempotencyMiddleware struct {
-	agents.NoopMiddleware
-	store *idempotency.Store
-}
-
-func NewIdempotencyMiddleware(store *idempotency.Store) *IdempotencyMiddleware {
-	return &IdempotencyMiddleware{store: store}
-}
-
-func (m *IdempotencyMiddleware) WrapToolCall(next agents.ToolCallFunc) agents.ToolCallFunc {
+func (m *WriteEffectMiddleware) WrapToolCall(next agents.ToolCallFunc) agents.ToolCallFunc {
 	return func(ctx context.Context, tool *agents.BaseTool, call *agents.ToolCall) (*agents.ToolCallResponse, error) {
 		if !isWrite(tool) {
 			return next(ctx, tool, call)
@@ -126,21 +107,67 @@ func (m *IdempotencyMiddleware) WrapToolCall(next agents.ToolCallFunc) agents.To
 		if err != nil {
 			return nil, err
 		}
-		hash, err := idempotency.ArgumentsHash(call.Arguments)
+		write, err := m.registry.ParseWrite(call.Name, json.RawMessage(call.Arguments))
 		if err != nil {
 			return nil, err
 		}
-		window := fmt.Sprintf("%s/plan-%d", runContext.IncidentID, runContext.PlanVersion)
-		identity := idempotency.Identify(action, runContext.WaybillID, window, hash)
-		result, err := m.store.Execute(ctx, idempotency.Command{
-			RunID:         runContext.RunID,
-			CallID:        call.CallID,
-			Action:        action,
-			EffectID:      identity.EffectID,
-			Key:           identity.Key,
-			ArgumentsHash: hash,
-		}, func(ctx context.Context) (json.RawMessage, error) {
-			response, err := next(guardtools.WithIdempotencyKey(ctx, identity.Key), tool, call)
+		if write.Action != action {
+			return nil, fmt.Errorf("tool action %q does not match registered action %q", action, write.Action)
+		}
+		authorization, err := m.approvals.Authorize(approval.AuthorizationRequest{
+			RunID:                 runContext.RunID,
+			CallID:                call.CallID,
+			Action:                action,
+			WireName:              write.WireName,
+			BusinessArgumentsHash: write.ArgumentsHash,
+			LegacyArgumentsHash:   write.LegacyFullHash,
+			LegacyKey:             write.LegacyKey,
+		})
+		if err != nil {
+			return nil, err
+		}
+		identity, err := authorization.Item.Identity()
+		if err != nil {
+			return nil, err
+		}
+		var expected idempotency.Identity
+		switch identity.Version {
+		case idempotency.IdentityEffectV1:
+			expected, err = idempotency.Derive(idempotency.DerivationInput{
+				RunContext: runContext,
+				Action:     action,
+				Target:     write.Target,
+				Arguments:  write.Arguments,
+			})
+		case idempotency.IdentityEffectV0:
+			expected, err = idempotency.EffectV0Identity(runContext, action, write.ArgumentsHash)
+		default:
+			expected = identity
+		}
+		if err != nil {
+			return nil, err
+		}
+		if expected != identity {
+			return nil, idempotency.ErrInvalidIdentity
+		}
+		command := idempotency.Command{
+			RunID:    runContext.RunID,
+			CallID:   call.CallID,
+			Identity: identity,
+		}
+		if authorization.LegacyAmbiguous {
+			state, ok := m.effects.Lookup(command)
+			if !ok || state != idempotency.StateSucceeded {
+				return nil, approval.ErrAmbiguousLegacyApproval
+			}
+		}
+		executionCall := canonicalToolCall(call, write.Arguments)
+		result, err := m.effects.Execute(ctx, command, func(ctx context.Context) (json.RawMessage, error) {
+			executionContext, err := idempotency.WithExecution(ctx, identity)
+			if err != nil {
+				return nil, err
+			}
+			response, err := next(executionContext, tool, executionCall)
 			if err != nil {
 				return nil, err
 			}
@@ -182,4 +209,12 @@ func runIDFromCall(call *agents.ToolCall) (domain.RunID, error) {
 		return "", fmt.Errorf("run_id is missing from tool context")
 	}
 	return domain.RunID(value), nil
+}
+
+func canonicalToolCall(call *agents.ToolCall, arguments json.RawMessage) *agents.ToolCall {
+	result := *call
+	functionCall := *call.FunctionCallMessage
+	functionCall.Arguments = string(arguments)
+	result.FunctionCallMessage = &functionCall
+	return &result
 }
