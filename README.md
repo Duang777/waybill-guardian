@@ -113,6 +113,22 @@ npm run verify:e2e
 `verify:e2e` 启动隔离的后端和前端，连续确认三次演示，再验证一次驳回路径。脚本还检查移动端
 横向溢出、按钮尺寸和截图。
 
+## 录制演示
+
+安装 Chrome、ffmpeg 和 ffprobe 后运行：
+
+```bash
+cd web
+npm run record:demo
+```
+
+脚本启动隔离的前后端，依次录制确认、审计回放和驳回路径，再生成
+`web/artifacts/waybill-guardian-demo.mp4`。视频为 1600×900、无音轨，并带中文讲解字幕。
+正式配音可按 [`docs/demo-script.md`](./docs/demo-script.md) 录制。
+
+使用 `RECORD_OUTPUT=/absolute/path/demo.mp4` 可修改输出路径。端口冲突时，通过
+`RECORD_BACKEND_PORT` 和 `RECORD_WEB_PORT` 指定其他端口。
+
 ## 架构与边界
 
 `cmd/server` 只处理 HTTP 和 SSE。`internal/guardian` 协调 Agent、审批、幂等和恢复。

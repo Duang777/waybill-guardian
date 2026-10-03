@@ -36,5 +36,8 @@ React 运营控制台。目标是在三分钟内显示异常、归因、审批�
 使用 Chrome 连续确认三次演示，并验证一次驳回路径。脚本保存 desktop 和 mobile 截图，
 检查横向溢出、跳转链接和按钮尺寸。
 
+`npm run record:demo` 启动隔离服务，录制确认、回放和驳回路径，再用 ffmpeg 生成带中文字幕的
+1600×900 MP4。录制文件写入已忽略的 `web/artifacts/`。
+
 参考项目只用于交互思路，本仓库没有复制其源码。登记见根目录
 `THIRD_PARTY_NOTICES.md`。

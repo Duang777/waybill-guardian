@@ -1,12 +1,16 @@
-import { spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { chromium } from "playwright-core";
+import {
+  findChrome,
+  repoDir,
+  startProcess,
+  stopProcesses,
+  waitForHTTP,
+  webDir,
+} from "./demo-runtime.mjs";
 
-const webDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const repoDir = resolve(webDir, "..");
 const artifactDir = join(webDir, "artifacts");
 const dataDir = await mkdtemp(join(tmpdir(), "waybill-guardian-e2e-"));
 const backendPort = Number(process.env.E2E_BACKEND_PORT ?? "18181");
@@ -31,7 +35,7 @@ try {
       },
     }),
   );
-  await waitForHTTP(`${backendURL}/healthz`);
+  await waitForHTTP(`${backendURL}/healthz`, processes);
 
   processes.push(
     startProcess("npm", [
@@ -51,7 +55,7 @@ try {
       },
     }),
   );
-  await waitForHTTP(webURL);
+  await waitForHTTP(webURL, processes);
 
   browser = await chromium.launch({
     executablePath: await findChrome(),
@@ -133,78 +137,8 @@ try {
   }, null, 2));
 } finally {
   await browser?.close();
-  for (const child of processes.reverse()) {
-    stopProcess(child);
-  }
+  stopProcesses(processes);
   await rm(dataDir, { recursive: true, force: true });
-}
-
-function startProcess(command, args, options) {
-  const child = spawn(command, args, {
-    ...options,
-    detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const output = [];
-  const collect = (chunk) => {
-    output.push(chunk.toString());
-    if (output.length > 40) {
-      output.shift();
-    }
-  };
-  child.stdout.on("data", collect);
-  child.stderr.on("data", collect);
-  child.diagnosticOutput = () => output.join("");
-  return child;
-}
-
-function stopProcess(child) {
-  if (child.pid === undefined || child.exitCode !== null) {
-    return;
-  }
-  try {
-    process.kill(-child.pid, "SIGTERM");
-  } catch (error) {
-    if (error.code !== "ESRCH") {
-      throw error;
-    }
-  }
-}
-
-async function waitForHTTP(url) {
-  const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return;
-      }
-    } catch {
-      // The process may still be compiling or binding its port.
-    }
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
-  }
-  const diagnostics = processes.map((child) => child.diagnosticOutput()).join("\n");
-  throw new Error(`timed out waiting for ${url}\n${diagnostics}`);
-}
-
-async function findChrome() {
-  const candidates = [
-    process.env.CHROME_PATH,
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/Applications/Chromium.app/Contents/MacOS/Chromium",
-    "/usr/bin/google-chrome",
-    "/usr/bin/chromium",
-  ].filter((candidate) => typeof candidate === "string" && candidate.length > 0);
-  for (const candidate of candidates) {
-    try {
-      await access(candidate);
-      return candidate;
-    } catch {
-      // Try the next standard installation path.
-    }
-  }
-  throw new Error("Chrome was not found. Set CHROME_PATH to a Chromium executable.");
 }
 
 async function hasHorizontalOverflow(page) {
