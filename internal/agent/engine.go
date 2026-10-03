@@ -65,12 +65,30 @@ type Engine struct {
 	agent    *agents.Agent
 	registry *guardtools.Registry
 	history  *history.CommonConversationManager
+	tools    *toolCallTracker
 
 	mu        sync.Mutex
 	handles   map[*agents.AgentHandle]struct{}
 	closing   bool
 	closeDone chan struct{}
 	closeErr  error
+}
+
+type toolCallTracker struct {
+	agents.NoopMiddleware
+	wg sync.WaitGroup
+}
+
+func (t *toolCallTracker) WrapToolCall(next agents.ToolCallFunc) agents.ToolCallFunc {
+	return func(
+		ctx context.Context,
+		tool *agents.BaseTool,
+		call *agents.ToolCall,
+	) (*agents.ToolCallResponse, error) {
+		t.wg.Add(1)
+		defer t.wg.Done()
+		return next(ctx, tool, call)
+	}
 }
 
 func NewEngine(
@@ -101,6 +119,8 @@ func NewEngine(
 	if err != nil {
 		return nil, fmt.Errorf("open hastekit history: %w", err)
 	}
+	toolCalls := &toolCallTracker{}
+	middlewares = append([]agents.Middleware{toolCalls}, middlewares...)
 	maxLoops := 12
 	options := &agents.AgentOptions{
 		Name:        "waybill-guardian",
@@ -125,6 +145,7 @@ func NewEngine(
 		agent:     sdkAgent,
 		registry:  registry,
 		history:   fileHistory,
+		tools:     toolCalls,
 		handles:   make(map[*agents.AgentHandle]struct{}),
 		closeDone: make(chan struct{}),
 	}, nil
@@ -251,6 +272,7 @@ func (e *Engine) Close() error {
 	for _, handle := range handles {
 		_, _ = handle.Wait()
 	}
+	e.tools.wg.Wait()
 	closeErrors = append(closeErrors, e.history.Close())
 	closeErr := errors.Join(closeErrors...)
 

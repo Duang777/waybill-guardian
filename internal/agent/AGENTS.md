@@ -31,8 +31,9 @@ go list -m github.com/hastekit/agent-sdk-go
 适配层在 SDK 首次写入前以 `0600` 预创建 conversation 文件，并在启动时修正已有文件权限，
 因为记录可能包含完整工具输入输出。
 
-`Engine` 跟踪所有活动的 `AgentHandle`。调用方取消 context 或关闭 Engine 时，Engine 先发送
-SDK stop 并等待 run 结束，再关闭 history，避免 detached execution 在持久化层关闭后继续写入。
+`Engine` 跟踪所有活动的 `AgentHandle`，并通过 middleware 单独跟踪实际工具调用。调用方取消
+context 或关闭 Engine 时，Engine 先发送 SDK stop，再等待 run 和已启动工具全部结束，最后
+关闭 history。即使 SDK 在取消宽限期后放弃等待一个工具，服务也不会提前关闭审计资源。
 
 ## 工具注册映射
 

@@ -434,3 +434,46 @@ func TestEngineCloseStopsDetachedRunBeforeClosingHistory(t *testing.T) {
 		t.Fatalf("Start error = %v, want ErrEngineClosed", err)
 	}
 }
+
+func TestToolCallTrackerWaitsForUnderlyingCall(t *testing.T) {
+	tracker := &toolCallTracker{}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	callDone := make(chan struct{})
+	tracked := tracker.WrapToolCall(func(
+		context.Context,
+		*agents.BaseTool,
+		*agents.ToolCall,
+	) (*agents.ToolCallResponse, error) {
+		close(started)
+		<-release
+		return nil, nil
+	})
+	go func() {
+		defer close(callDone)
+		_, _ = tracked(context.Background(), nil, nil)
+	}()
+	<-started
+
+	waitDone := make(chan struct{})
+	go func() {
+		tracker.wg.Wait()
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+		t.Fatal("tracker returned before the tool call completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-callDone:
+	case <-time.After(time.Second):
+		t.Fatal("tool call did not complete")
+	}
+	select {
+	case <-waitDone:
+	case <-time.After(time.Second):
+		t.Fatal("tracker did not observe tool completion")
+	}
+}

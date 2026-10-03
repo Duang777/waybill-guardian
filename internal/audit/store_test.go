@@ -171,6 +171,51 @@ func TestWriterLockCannotBeBypassedByReplacingLegacyLockPath(t *testing.T) {
 	}
 }
 
+func TestStoreKeepsUsingLockedDirectoryAfterPathReplacement(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "data")
+	first, err := Open(dir, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+
+	lockedDir := filepath.Join(root, "locked-data")
+	if err := os.Rename(dir, lockedDir); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Open(dir, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+
+	if _, err := first.Append(context.Background(), "first", Draft{
+		EventID: "first-event",
+		Actor:   ActorSystem,
+		Type:    EventRunStarted,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.Append(context.Background(), "second", Draft{
+		EventID: "second-event",
+		Actor:   ActorSystem,
+		Type:    EventRunStarted,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(lockedDir, "audit-first.jsonl")); err != nil {
+		t.Fatalf("first store did not write to its locked directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "audit-first.jsonl")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("first store wrote through the replaced path: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "audit-second.jsonl")); err != nil {
+		t.Fatalf("second store did not write to the replacement directory: %v", err)
+	}
+}
+
 func TestOpenSecuresDataDirectoryAndJournal(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o755); err != nil {

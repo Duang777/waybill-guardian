@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strings"
@@ -58,17 +59,20 @@ func run() error {
 		return err
 	}
 
-	server := &http.Server{
-		Addr:              httpAddr,
-		Handler:           newHandler(service),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
 	listener, err := net.Listen("tcp", httpAddr)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", httpAddr, err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	server := &http.Server{
+		Addr:              httpAddr,
+		Handler:           newHandler(service),
+		ReadHeaderTimeout: 5 * time.Second,
+		BaseContext: func(net.Listener) context.Context {
+			return ctx
+		},
+	}
 	slog.Info("waybill guardian listening", "addr", listener.Addr())
 	return serve(ctx, server, listener)
 }
@@ -101,13 +105,33 @@ func serve(ctx context.Context, server *http.Server, listener net.Listener) erro
 }
 
 func validateHTTPAddr(addr string) error {
-	host, _, err := net.SplitHostPort(addr)
+	parsed, err := netip.ParseAddrPort(addr)
 	if err != nil {
 		return fmt.Errorf("invalid HTTP_ADDR %q: %w", addr, err)
 	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
+	if !parsed.Addr().IsLoopback() {
 		return fmt.Errorf("HTTP_ADDR must use a loopback IP address")
+	}
+	return nil
+}
+
+func validateRequestHost(value string) error {
+	if address, err := netip.ParseAddr(value); err == nil {
+		if address.IsLoopback() {
+			return nil
+		}
+		return fmt.Errorf("request host must use a loopback IP address")
+	}
+	if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
+		address, err := netip.ParseAddr(strings.TrimSuffix(strings.TrimPrefix(value, "["), "]"))
+		if err == nil && address.IsLoopback() {
+			return nil
+		}
+		return fmt.Errorf("request host must use a loopback IP address")
+	}
+	address, err := netip.ParseAddrPort(value)
+	if err != nil || !address.Addr().IsLoopback() {
+		return fmt.Errorf("request host must use a loopback IP address")
 	}
 	return nil
 }
