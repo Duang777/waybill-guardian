@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -136,6 +137,80 @@ func TestHTTPDemoFlowAndSSECursor(t *testing.T) {
 	cancel()
 	if receivedID != strconv.FormatUint(uint64(cursor+1), 10) {
 		t.Fatalf("resumed SSE id = %q, want %d", receivedID, cursor+1)
+	}
+}
+
+func TestTimelineStopsWritingToSlowClientAfterDeadline(t *testing.T) {
+	clients, _, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := guardian.Open(guardian.Config{
+		DataDir:   t.TempDir(),
+		Clients:   clients,
+		StepDelay: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	run, err := service.StartDemo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writer := newDeadlineBlockingWriter()
+	ctx, cancel := context.WithCancel(context.Background())
+	request := httptest.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		"http://127.0.0.1/api/runs/"+string(run.RunID)+"/timeline",
+		nil,
+	)
+	request.SetPathValue("id", string(run.RunID))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		(&api{service: service}).timeline(writer, request)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		cancel()
+		writer.release()
+		<-done
+		t.Fatal("timeline handler remained blocked on a slow client")
+	}
+	cancel()
+	writer.release()
+	if !writer.deadlineWasSet() {
+		t.Fatal("timeline handler did not set a write deadline")
+	}
+}
+
+func TestTimelineRejectsWhenSubscriptionLimitIsReached(t *testing.T) {
+	slots := make(chan struct{}, 1)
+	slots <- struct{}{}
+	handler := &api{sseSlots: slots}
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1/api/runs/run-1/timeline",
+		nil,
+	)
+	response := httptest.NewRecorder()
+
+	handler.timeline(response, request)
+
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", response.Code)
+	}
+	var problem map[string]map[string]string
+	if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+		t.Fatal(err)
+	}
+	if problem["error"]["code"] != "too_many_streams" {
+		t.Fatalf("error code = %q, want too_many_streams", problem["error"]["code"])
 	}
 }
 
@@ -393,6 +468,66 @@ func TestServeCancelsLongLivedHandlerDuringShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-requestDone
+}
+
+type deadlineBlockingWriter struct {
+	header http.Header
+
+	mu          sync.Mutex
+	deadlineSet bool
+	timeout     chan struct{}
+	unblock     chan struct{}
+	timeoutOnce sync.Once
+	releaseOnce sync.Once
+}
+
+func newDeadlineBlockingWriter() *deadlineBlockingWriter {
+	return &deadlineBlockingWriter{
+		header:  make(http.Header),
+		timeout: make(chan struct{}),
+		unblock: make(chan struct{}),
+	}
+}
+
+func (w *deadlineBlockingWriter) Header() http.Header {
+	return w.header
+}
+
+func (*deadlineBlockingWriter) WriteHeader(int) {}
+
+func (w *deadlineBlockingWriter) Write(payload []byte) (int, error) {
+	select {
+	case <-w.timeout:
+		return 0, context.DeadlineExceeded
+	case <-w.unblock:
+		return len(payload), nil
+	}
+}
+
+func (*deadlineBlockingWriter) Flush() {}
+
+func (w *deadlineBlockingWriter) SetWriteDeadline(time.Time) error {
+	w.mu.Lock()
+	w.deadlineSet = true
+	w.mu.Unlock()
+	w.timeoutOnce.Do(func() {
+		time.AfterFunc(20*time.Millisecond, func() {
+			close(w.timeout)
+		})
+	})
+	return nil
+}
+
+func (w *deadlineBlockingWriter) deadlineWasSet() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.deadlineSet
+}
+
+func (w *deadlineBlockingWriter) release() {
+	w.releaseOnce.Do(func() {
+		close(w.unblock)
+	})
 }
 
 func waitForHTTPApproval(
