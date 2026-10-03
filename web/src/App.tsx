@@ -43,8 +43,11 @@ export default function App() {
   const [pendingAction, setPendingAction] = useState<PendingAction>("bootstrap");
   const [message, setMessage] = useState<string | null>(null);
   const selectionGeneration = useRef(0);
+  const closeTimeline = useRef<(() => void) | null>(null);
 
   const selectRun = useCallback(async (runID: RunID, signal?: AbortSignal) => {
+    closeTimeline.current?.();
+    closeTimeline.current = null;
     const generation = selectionGeneration.current + 1;
     selectionGeneration.current = generation;
     setConnected(false);
@@ -105,7 +108,7 @@ export default function App() {
     }
     const generation = selectionGeneration.current;
     setConnected(false);
-    return openTimeline(run.run_id, timelineAfter, {
+    const close = openTimeline(run.run_id, timelineAfter, {
       onEvent: (event) => {
         if (selectionGeneration.current === generation && event.run_id === run.run_id) {
           dispatch({ type: "event_received", event });
@@ -122,6 +125,13 @@ export default function App() {
         }
       },
     });
+    closeTimeline.current = close;
+    return () => {
+      close();
+      if (closeTimeline.current === close) {
+        closeTimeline.current = null;
+      }
+    };
   }, [run, timelineAfter]);
 
   useEffect(() => {
@@ -140,6 +150,13 @@ export default function App() {
   const view = waybill.kind === "ready" ? waybill.data : null;
 
   const startDemo = async () => {
+    closeTimeline.current?.();
+    closeTimeline.current = null;
+    selectionGeneration.current += 1;
+    setRun(null);
+    setTimelineAfter(null);
+    setConnected(false);
+    dispatch({ type: "reset" });
     setPendingAction("trigger");
     setMessage(null);
     try {

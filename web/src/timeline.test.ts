@@ -101,6 +101,23 @@ describe("timelineReducer", () => {
     expect(hydrated.events).toEqual(events);
     expect(hydrated.playback).toEqual({ kind: "live" });
   });
+
+  it("rejects events from another run after hydration", () => {
+    const first = event(1, "run_started", {});
+    const hydrated = timelineReducer(initialTimelineState, {
+      type: "hydrate",
+      events: [first],
+    });
+    const foreign = auditEventSchema.parse({
+      ...event(2, "tool_call", { action: "tms.get_waybill" }),
+      event_id: "foreign-event",
+      run_id: "run-2",
+    });
+
+    const next = timelineReducer(hydrated, { type: "event_received", event: foreign });
+
+    expect(next.events).toEqual([first]);
+  });
 });
 
 describe("latestApproval", () => {
