@@ -297,12 +297,112 @@ func TestWaybillErrorContract(t *testing.T) {
 	}
 }
 
+func TestHTTPRecoveryQueries(t *testing.T) {
+	clients, _, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := guardian.Open(guardian.Config{
+		DataDir:   t.TempDir(),
+		Clients:   clients,
+		StepDelay: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	server := httptest.NewServer(newHandler(service))
+	defer server.Close()
+
+	run, err := service.StartDemo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := waitForHTTPApproval(t, service, run.RunID)
+
+	var runs struct {
+		Runs []guardian.RunSummary `json:"runs"`
+	}
+	getJSON(t, server.URL+"/api/runs?status=active", &runs)
+	if len(runs.Runs) != 1 || runs.Runs[0].RunID != run.RunID {
+		t.Fatalf("active runs = %+v", runs.Runs)
+	}
+	var approvals struct {
+		Approvals []guardian.PendingApprovalSummary `json:"approvals"`
+	}
+	getJSON(t, server.URL+"/api/approvals?status=pending", &approvals)
+	if len(approvals.Approvals) != 1 || approvals.Approvals[0].ID != pending.ID {
+		t.Fatalf("pending approvals = %+v", approvals.Approvals)
+	}
+	var snapshot guardian.RunSnapshot
+	getJSON(t, server.URL+"/api/runs/"+string(run.RunID), &snapshot)
+	if len(snapshot.Events) == 0 ||
+		snapshot.Run.LastSeq != snapshot.Events[len(snapshot.Events)-1].Seq {
+		t.Fatalf("inconsistent snapshot = %+v", snapshot)
+	}
+
+	response, err := http.Get(server.URL + "/api/runs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing filter status = %d, want 400", response.StatusCode)
+	}
+}
+
+func TestHTTPRecoveryQueriesReturnEmptyArrays(t *testing.T) {
+	clients, _, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := guardian.Open(guardian.Config{DataDir: t.TempDir(), Clients: clients})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	server := httptest.NewServer(newHandler(service))
+	defer server.Close()
+
+	var runs struct {
+		Runs []guardian.RunSummary `json:"runs"`
+	}
+	getJSON(t, server.URL+"/api/runs?status=active", &runs)
+	if runs.Runs == nil || len(runs.Runs) != 0 {
+		t.Fatalf("active runs = %#v, want empty array", runs.Runs)
+	}
+	var approvals struct {
+		Approvals []guardian.PendingApprovalSummary `json:"approvals"`
+	}
+	getJSON(t, server.URL+"/api/approvals?status=pending", &approvals)
+	if approvals.Approvals == nil || len(approvals.Approvals) != 0 {
+		t.Fatalf("pending approvals = %#v, want empty array", approvals.Approvals)
+	}
+}
+
 func TestParseLastEventID(t *testing.T) {
 	if value, err := parseLastEventID(""); err != nil || value != 0 {
 		t.Fatalf("empty cursor = %d, %v", value, err)
 	}
 	if _, err := parseLastEventID("-1"); err == nil {
 		t.Fatal("negative cursor was accepted")
+	}
+}
+
+func TestParseTimelineCursorPrefersLastEventID(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/timeline?after=4", nil)
+	cursor, err := parseTimelineCursor(request)
+	if err != nil || cursor != 4 {
+		t.Fatalf("query cursor = %d, %v", cursor, err)
+	}
+	request.Header.Set("Last-Event-ID", "7")
+	cursor, err = parseTimelineCursor(request)
+	if err != nil || cursor != 7 {
+		t.Fatalf("header cursor = %d, %v", cursor, err)
+	}
+	request = httptest.NewRequest(http.MethodGet, "http://127.0.0.1/timeline?after=1&after=2", nil)
+	if _, err := parseTimelineCursor(request); err == nil {
+		t.Fatal("duplicate query cursor was accepted")
 	}
 }
 
@@ -546,4 +646,20 @@ func waitForHTTPApproval(
 	}
 	t.Fatal("timed out waiting for approval")
 	return approval.Approval{}
+}
+
+func getJSON(t *testing.T, url string, target any) {
+	t.Helper()
+	response, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("GET %s status = %d body=%s", url, response.StatusCode, body)
+	}
+	if err := json.NewDecoder(response.Body).Decode(target); err != nil {
+		t.Fatal(err)
+	}
 }

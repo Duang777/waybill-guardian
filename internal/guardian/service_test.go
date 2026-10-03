@@ -83,6 +83,73 @@ func TestDemoConfirmCompletesExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestDiscoveryAndSnapshotUseDurableEventPrefix(t *testing.T) {
+	clients, _, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := Open(Config{DataDir: t.TempDir(), Clients: clients, StepDelay: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+
+	run, err := service.StartDemo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := waitForApproval(t, service, run.RunID)
+
+	runs, err := service.ListActiveRuns(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].RunID != run.RunID {
+		t.Fatalf("active runs = %+v", runs)
+	}
+	approvals, err := service.ListPendingApprovals(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(approvals) != 1 || approvals[0].ID != pending.ID {
+		t.Fatalf("pending approvals = %+v", approvals)
+	}
+	snapshot, err := service.Snapshot(context.Background(), run.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Events) == 0 {
+		t.Fatal("snapshot has no events")
+	}
+	last := snapshot.Events[len(snapshot.Events)-1].Seq
+	if snapshot.Run.LastSeq != last {
+		t.Fatalf("snapshot last seq = %d, event tail = %d", snapshot.Run.LastSeq, last)
+	}
+	if snapshot.Run.Status != domain.RunAwaitingApproval {
+		t.Fatalf("snapshot status = %q, want awaiting_approval", snapshot.Run.Status)
+	}
+	if _, err := service.Decide(context.Background(), pending.ID, DecisionRequest{
+		Kind:      approval.DecisionConfirm,
+		DecidedBy: "discovery-test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runs, err = service.ListActiveRuns(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("completed run remained active: %+v", runs)
+	}
+	approvals, err = service.ListPendingApprovals(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(approvals) != 0 {
+		t.Fatalf("executed approval remained pending: %+v", approvals)
+	}
+}
+
 func TestPartialWriteFailureDoesNotCompleteApprovalOrRun(t *testing.T) {
 	clients, mock, err := tools.NewDemoClients()
 	if err != nil {

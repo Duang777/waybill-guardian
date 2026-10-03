@@ -1,15 +1,19 @@
 import { AlertOctagon, Play, RotateCw, Route, X } from "lucide-react";
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import styles from "./app.module.css";
 import {
   APIError,
   DEFAULT_WAYBILL_ID,
   confirmApproval,
+  getRunSnapshot,
   getWaybill,
+  listActiveRuns,
+  listPendingApprovals,
   openTimeline,
   rejectApproval,
   triggerDemo,
-  type Run,
+  type RunID,
+  type RunSummary,
   type WaybillView,
 } from "./api";
 import { ApprovalPanel } from "./components/ApprovalPanel";
@@ -28,45 +32,97 @@ type Resource<T> =
   | { kind: "ready"; data: T }
   | { kind: "error"; message: string };
 
-type PendingAction = "trigger" | "confirm" | "reject" | null;
+type PendingAction = "bootstrap" | "trigger" | "confirm" | "reject" | null;
 
 export default function App() {
   const [waybill, setWaybill] = useState<Resource<WaybillView>>({ kind: "loading" });
-  const [run, setRun] = useState<Run | null>(null);
+  const [run, setRun] = useState<RunSummary | null>(null);
+  const [timelineAfter, setTimelineAfter] = useState<number | null>(null);
   const [timeline, dispatch] = useReducer(timelineReducer, initialTimelineState);
   const [connected, setConnected] = useState(false);
-  const [pendingAction, setPendingAction] = useState<PendingAction>(null);
+  const [pendingAction, setPendingAction] = useState<PendingAction>("bootstrap");
   const [message, setMessage] = useState<string | null>(null);
+  const selectionGeneration = useRef(0);
+
+  const selectRun = useCallback(async (runID: RunID, signal?: AbortSignal) => {
+    const generation = selectionGeneration.current + 1;
+    selectionGeneration.current = generation;
+    setConnected(false);
+    setTimelineAfter(null);
+    dispatch({ type: "reset" });
+
+    const snapshot = await getRunSnapshot(runID, signal);
+    if (selectionGeneration.current !== generation) {
+      return;
+    }
+    setRun(snapshot.run);
+    dispatch({ type: "hydrate", events: snapshot.events });
+    setTimelineAfter(snapshot.run.last_seq);
+
+    const data = await getWaybill(snapshot.run.waybill_id);
+    if (selectionGeneration.current === generation) {
+      setWaybill({ kind: "ready", data });
+    }
+  }, []);
 
   useEffect(() => {
-    let active = true;
-    void getWaybill(DEFAULT_WAYBILL_ID)
-      .then((data) => {
-        if (active) {
+    const controller = new AbortController();
+    void Promise.all([
+      listActiveRuns(controller.signal),
+      listPendingApprovals(controller.signal),
+    ])
+      .then(async ([runs, approvals]) => {
+        const selectedRunID = approvals[0]?.run_id ?? runs[0]?.run_id;
+        if (selectedRunID !== undefined) {
+          await selectRun(selectedRunID, controller.signal);
+          return;
+        }
+        const data = await getWaybill(DEFAULT_WAYBILL_ID);
+        if (!controller.signal.aborted) {
           setWaybill({ kind: "ready", data });
         }
       })
       .catch((error: unknown) => {
-        if (active) {
+        if (!isAbortError(error)) {
+          setMessage(errorMessage(error));
           setWaybill({ kind: "error", message: errorMessage(error) });
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setPendingAction(null);
         }
       });
     return () => {
-      active = false;
+      controller.abort();
+      selectionGeneration.current += 1;
     };
-  }, []);
+  }, [selectRun]);
 
   useEffect(() => {
-    if (run === null) {
+    if (run === null || timelineAfter === null) {
       return;
     }
+    const generation = selectionGeneration.current;
     setConnected(false);
-    return openTimeline(run.run_id, {
-      onEvent: (event) => dispatch({ type: "event_received", event }),
-      onConnectionChange: setConnected,
-      onError: setMessage,
+    return openTimeline(run.run_id, timelineAfter, {
+      onEvent: (event) => {
+        if (selectionGeneration.current === generation && event.run_id === run.run_id) {
+          dispatch({ type: "event_received", event });
+        }
+      },
+      onConnectionChange: (value) => {
+        if (selectionGeneration.current === generation) {
+          setConnected(value);
+        }
+      },
+      onError: (value) => {
+        if (selectionGeneration.current === generation) {
+          setMessage(value);
+        }
+      },
     });
-  }, [run]);
+  }, [run, timelineAfter]);
 
   useEffect(() => {
     if (timeline.playback.kind !== "playing") {
@@ -86,12 +142,9 @@ export default function App() {
   const startDemo = async () => {
     setPendingAction("trigger");
     setMessage(null);
-    dispatch({ type: "reset" });
     try {
       const started = await triggerDemo();
-      setRun(started);
-      const data = await getWaybill(started.waybill_id);
-      setWaybill({ kind: "ready", data });
+      await selectRun(started.run_id);
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -164,6 +217,8 @@ export default function App() {
             )}
             {pendingAction === "trigger"
               ? "正在启动"
+              : pendingAction === "bootstrap"
+                ? "正在恢复"
               : run === null
                 ? "启动演示"
                 : "重新演示"}
@@ -237,6 +292,10 @@ function errorMessage(error: unknown): string {
     return error.message;
   }
   return "请求未完成，请检查服务状态";
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
 }
 
 function compactID(value: string): string {

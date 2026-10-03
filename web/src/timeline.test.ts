@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { approvalSchema, auditEventSchema, type AuditEventType } from "./api";
+import {
+  approvalSchema,
+  auditEventSchema,
+  runSnapshotSchema,
+  type AuditEventType,
+} from "./api";
 import {
   initialTimelineState,
   latestApproval,
@@ -84,6 +89,17 @@ describe("timelineReducer", () => {
     expect(visibleEvents(finished)).toHaveLength(2);
     expect(playbackCursor(finished)).toBe(2);
     expect(finished.playback.kind).toBe("paused");
+  });
+
+  it("hydrates one complete snapshot and returns to the live edge", () => {
+    const events = [
+      event(1, "run_started", {}),
+      event(2, "tool_call", { action: "tms.get_waybill" }),
+    ];
+    const hydrated = timelineReducer(initialTimelineState, { type: "hydrate", events });
+
+    expect(hydrated.events).toEqual(events);
+    expect(hydrated.playback).toEqual({ kind: "live" });
   });
 });
 
@@ -215,5 +231,30 @@ describe("latestApproval", () => {
       "partially_failed",
     );
     expect(runStatus([requested, decided, executionFailed])).toBe("failed");
+  });
+});
+
+describe("runSnapshotSchema", () => {
+  it("accepts a contiguous event prefix and rejects a cursor mismatch", () => {
+    const first = event(1, "run_started", {});
+    const snapshot = {
+      run: {
+        run_id: "run-1",
+        incident_id: "incident-1",
+        waybill_id: "YD2026101001",
+        status: "investigating",
+        last_seq: 1,
+        updated_at: "2026-10-10T01:15:00Z",
+      },
+      events: [first],
+    };
+
+    expect(runSnapshotSchema.safeParse(snapshot).success).toBe(true);
+    expect(
+      runSnapshotSchema.safeParse({
+        ...snapshot,
+        run: { ...snapshot.run, last_seq: 2 },
+      }).success,
+    ).toBe(false);
   });
 });

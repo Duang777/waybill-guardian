@@ -2,7 +2,6 @@ package guardian
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -936,35 +935,18 @@ func (s *Service) createApproval(
 }
 
 func (s *Service) rebuildRuns() error {
-	for _, event := range s.journal.AllEvents() {
-		run := s.runs[event.RunID]
-		run.RunID = event.RunID
-		run.LastSeq = event.Seq
-		switch event.Type {
-		case audit.EventRunStarted:
-			var payload runStartedPayload
-			if err := json.Unmarshal(event.Payload, &payload); err != nil {
-				return err
-			}
-			run.IncidentID = payload.IncidentID
-			run.WaybillID = payload.WaybillID
-			run.Status = payload.Status
-		case audit.EventApprovalRequested:
-			run.Status = domain.RunAwaitingApproval
-		case audit.EventApprovalDecided:
-			run.Status = domain.RunExecuting
-		case audit.EventApprovalReconciliationRequired:
-			run.Status = domain.RunExecuting
-		case audit.EventApprovalExecutionFailed:
-			run.Status = domain.RunFailed
-		case audit.EventRunCompleted:
-			run.Status = domain.RunCompleted
-		case audit.EventRunRejected:
-			run.Status = domain.RunRejected
-		case audit.EventRunFailed:
-			run.Status = domain.RunFailed
+	projected, err := projectRuns(s.journal.AllEvents())
+	if err != nil {
+		return err
+	}
+	for runID, run := range projected {
+		s.runs[runID] = RunView{
+			RunID:      run.RunID,
+			IncidentID: run.IncidentID,
+			WaybillID:  run.WaybillID,
+			Status:     run.Status,
+			LastSeq:    run.LastSeq,
 		}
-		s.runs[event.RunID] = run
 	}
 	return nil
 }

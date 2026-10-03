@@ -20,6 +20,7 @@ export type TimelineState = {
 
 export type TimelineAction =
   | { type: "reset" }
+  | { type: "hydrate"; events: readonly AuditEvent[] }
   | { type: "event_received"; event: AuditEvent }
   | { type: "toggle_playback" }
   | { type: "seek"; cursor: number }
@@ -38,6 +39,11 @@ export function timelineReducer(
   switch (action.type) {
     case "reset":
       return initialTimelineState;
+    case "hydrate":
+      return {
+        events: [...action.events],
+        playback: { kind: "live" },
+      };
     case "event_received": {
       if (state.events.some((event) => event.seq === action.event.seq)) {
         return state;

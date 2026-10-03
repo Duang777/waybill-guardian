@@ -24,7 +24,7 @@ try {
   await mkdir(artifactDir, { recursive: true });
   const goEnvironment = { ...process.env };
   delete goEnvironment.GOROOT;
-  processes.push(
+  const startBackend = () =>
     startProcess("go", ["run", "./cmd/server"], {
       cwd: repoDir,
       env: {
@@ -33,8 +33,9 @@ try {
         HTTP_ADDR: `127.0.0.1:${backendPort}`,
         DEMO_STEP_DELAY: "25ms",
       },
-    }),
-  );
+    });
+  let backendProcess = startBackend();
+  processes.push(backendProcess);
   await waitForHTTP(`${backendURL}/healthz`, processes);
 
   processes.push(
@@ -62,6 +63,12 @@ try {
     headless: true,
   });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  let triggerRequests = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && request.url().endsWith("/api/demo/trigger")) {
+      triggerRequests += 1;
+    }
+  });
   await page.goto(webURL, { waitUntil: "networkidle" });
   await page.getByText("精密电子元件", { exact: true }).waitFor();
 
@@ -77,6 +84,19 @@ try {
         path: join(artifactDir, "desktop-pending.png"),
         fullPage: true,
       });
+      await page.reload({ waitUntil: "networkidle" });
+      await page.getByText("改派至川行快运", { exact: true }).waitFor();
+      await page.getByText("待确认", { exact: true }).waitFor();
+      assert(triggerRequests === 1, `page reload triggered ${triggerRequests} demo runs`);
+
+      await stopProcess(backendProcess);
+      backendProcess = startBackend();
+      processes.push(backendProcess);
+      await waitForHTTP(`${backendURL}/healthz`, processes);
+      await page.reload({ waitUntil: "networkidle" });
+      await page.getByText("改派至川行快运", { exact: true }).waitFor();
+      await page.getByText("待确认", { exact: true }).waitFor();
+      assert(triggerRequests === 1, `backend restart triggered ${triggerRequests} demo runs`);
     }
 
     await page.getByRole("button", { name: "确认并执行", exact: true }).click();
@@ -169,4 +189,13 @@ function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+async function stopProcess(child) {
+  if (child.pid === undefined || child.exitCode !== null) {
+    return;
+  }
+  const stopped = new Promise((resolveStopped) => child.once("exit", resolveStopped));
+  process.kill(-child.pid, "SIGTERM");
+  await stopped;
 }

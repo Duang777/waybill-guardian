@@ -34,6 +34,14 @@ export const runSchema = z
 export type Run = z.infer<typeof runSchema>;
 export type RunStatus = z.infer<typeof runStatusSchema>;
 
+export const runSummarySchema = runSchema
+  .extend({
+    updated_at: z.string().min(1),
+  })
+  .strict();
+
+export type RunSummary = z.infer<typeof runSummarySchema>;
+
 const carrierSchema = z
   .object({
     carrier_id: z.string().min(1),
@@ -215,6 +223,58 @@ export const auditEventSchema = z
 
 export type AuditEvent = z.infer<typeof auditEventSchema>;
 
+const pendingApprovalSummarySchema = z
+  .object({
+    id: approvalIdSchema,
+    run_id: runIdSchema,
+    waybill_id: waybillIdSchema,
+    plan_version: z.number().int().positive(),
+    requested_at: z.string().min(1),
+    expires_at: z.string().min(1),
+  })
+  .strict();
+
+export type PendingApprovalSummary = z.infer<typeof pendingApprovalSummarySchema>;
+
+export const runSnapshotSchema = z
+  .object({
+    run: runSummarySchema,
+    events: z.array(auditEventSchema).min(1),
+  })
+  .strict()
+  .superRefine((snapshot, context) => {
+    snapshot.events.forEach((event, index) => {
+      if (event.run_id !== snapshot.run.run_id) {
+        context.addIssue({
+          code: "custom",
+          message: "snapshot event belongs to another run",
+          path: ["events", index, "run_id"],
+        });
+      }
+      if (event.seq !== index + 1) {
+        context.addIssue({
+          code: "custom",
+          message: "snapshot event sequence is not contiguous",
+          path: ["events", index, "seq"],
+        });
+      }
+    });
+    if (snapshot.events.at(-1)?.seq !== snapshot.run.last_seq) {
+      context.addIssue({
+        code: "custom",
+        message: "snapshot cursor does not match event tail",
+        path: ["run", "last_seq"],
+      });
+    }
+  });
+
+export type RunSnapshot = z.infer<typeof runSnapshotSchema>;
+
+const activeRunsSchema = z.object({ runs: z.array(runSummarySchema) }).strict();
+const pendingApprovalsSchema = z
+  .object({ approvals: z.array(pendingApprovalSummarySchema) })
+  .strict();
+
 const problemSchema = z
   .object({
     error: z
@@ -267,6 +327,24 @@ export function triggerDemo(): Promise<Run> {
   return request("/api/demo/trigger", runSchema, { method: "POST" });
 }
 
+export async function listActiveRuns(signal?: AbortSignal): Promise<RunSummary[]> {
+  const response = await request("/api/runs?status=active", activeRunsSchema, { signal });
+  return response.runs;
+}
+
+export async function listPendingApprovals(
+  signal?: AbortSignal,
+): Promise<PendingApprovalSummary[]> {
+  const response = await request("/api/approvals?status=pending", pendingApprovalsSchema, {
+    signal,
+  });
+  return response.approvals;
+}
+
+export function getRunSnapshot(runID: RunID, signal?: AbortSignal): Promise<RunSnapshot> {
+  return request(`/api/runs/${encodeURIComponent(runID)}`, runSnapshotSchema, { signal });
+}
+
 export function confirmApproval(id: ApprovalID): Promise<Approval> {
   return request(`/api/approvals/${encodeURIComponent(id)}/confirm`, approvalSchema, {
     method: "POST",
@@ -287,8 +365,15 @@ type TimelineHandlers = {
   onError: (message: string) => void;
 };
 
-export function openTimeline(runID: RunID, handlers: TimelineHandlers): () => void {
-  const source = new EventSource(`/api/runs/${encodeURIComponent(runID)}/timeline`);
+export function openTimeline(
+  runID: RunID,
+  after: number,
+  handlers: TimelineHandlers,
+): () => void {
+  const query = new URLSearchParams({ after: String(after) });
+  const source = new EventSource(
+    `/api/runs/${encodeURIComponent(runID)}/timeline?${query.toString()}`,
+  );
   const receive = (message: Event): void => {
     if (!(message instanceof MessageEvent) || typeof message.data !== "string") {
       return;
