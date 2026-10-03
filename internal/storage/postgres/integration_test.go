@@ -151,6 +151,25 @@ func TestHistoryGovernanceMigrationQuarantinesLegacyActiveRun(t *testing.T) {
 		) VALUES (
 			$1, 'waybill-demo', 'run-legacy', 'summary-legacy',
 			decode('01', 'hex'), repeat('0', 64)
+		);
+		INSERT INTO waybill.incidents (
+			tenant_id, incident_id, source, source_incident_key,
+			waybill_id, kind, status
+		) VALUES ($1, 'incident-terminal', 'test', 'terminal-key',
+		          'YD2026101001', 'delay', 'resolved');
+		INSERT INTO waybill.runs (
+			tenant_id, run_id, incident_id, waybill_id, status,
+			sdk_run_id, checkpoint_version, closed_at
+		) VALUES ($1, 'run-terminal', 'incident-terminal', 'YD2026101001',
+		          'completed', 'sdk-run-terminal', 1, clock_timestamp());
+		INSERT INTO waybill.agent_checkpoints (
+			tenant_id, namespace, thread_id, sdk_run_id, checkpoint_version,
+			conversation_id, ciphertext, payload_hash, encryption_key_id,
+			group_id, metadata
+		) VALUES (
+			$1, 'waybill-demo', 'run-terminal', 'sdk-run-terminal', 1,
+			'conversation-terminal', decode('01', 'hex'), repeat('0', 64),
+			'legacy-key', 'default', '{}'::jsonb
 		)
 	`, pgx.QueryExecModeSimpleProtocol, tenantID); err != nil {
 		t.Fatal(err)
@@ -216,6 +235,22 @@ func TestHistoryGovernanceMigrationQuarantinesLegacyActiveRun(t *testing.T) {
 		)
 	}
 	var metadataColumns, privacyColumns int
+	var terminalSDKRunID *string
+	var terminalCheckpoint int64
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT sdk_run_id, checkpoint_version
+		FROM waybill.runs
+		WHERE tenant_id = $1 AND run_id = 'run-terminal'
+	`, tenantID).Scan(&terminalSDKRunID, &terminalCheckpoint); err != nil {
+		t.Fatal(err)
+	}
+	if terminalSDKRunID != nil || terminalCheckpoint != 0 {
+		t.Fatalf(
+			"terminal run history pointer = sdk:%v checkpoint:%d, want nil and 0",
+			terminalSDKRunID,
+			terminalCheckpoint,
+		)
+	}
 	if err := db.pool.QueryRow(t.Context(), `
 		SELECT
 			count(*) FILTER (WHERE column_name = 'metadata'),
@@ -982,14 +1017,28 @@ func TestConversationPersistencePrunesOnlyExpiredTerminalHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, value := range fixtures {
-		var checkpoints, summaries int
+		var (
+			checkpoints       int
+			summaries         int
+			sdkRunID          *string
+			checkpointVersion int64
+		)
 		if err := db.pool.QueryRow(t.Context(), `
 			SELECT
 				(SELECT count(*) FROM waybill.agent_checkpoints
 				  WHERE tenant_id = $1 AND thread_id = $2),
 				(SELECT count(*) FROM waybill.agent_summaries
-				  WHERE tenant_id = $1 AND thread_id = $2)
-		`, tenantID, value.runID).Scan(&checkpoints, &summaries); err != nil {
+				  WHERE tenant_id = $1 AND thread_id = $2),
+				(SELECT sdk_run_id FROM waybill.runs
+				  WHERE tenant_id = $1 AND run_id = $2),
+				(SELECT checkpoint_version FROM waybill.runs
+				  WHERE tenant_id = $1 AND run_id = $2)
+		`, tenantID, value.runID).Scan(
+			&checkpoints,
+			&summaries,
+			&sdkRunID,
+			&checkpointVersion,
+		); err != nil {
 			t.Fatal(err)
 		}
 		want := 1
@@ -1003,6 +1052,22 @@ func TestConversationPersistencePrunesOnlyExpiredTerminalHistory(t *testing.T) {
 				checkpoints,
 				summaries,
 				want,
+			)
+		}
+		if want == 0 && (sdkRunID != nil || checkpointVersion != 0) {
+			t.Fatalf(
+				"expired history pointer for %s = sdk:%v checkpoint:%d",
+				value.runID,
+				sdkRunID,
+				checkpointVersion,
+			)
+		}
+		if want == 1 && (sdkRunID == nil || checkpointVersion != 1) {
+			t.Fatalf(
+				"retained history pointer for %s = sdk:%v checkpoint:%d",
+				value.runID,
+				sdkRunID,
+				checkpointVersion,
 			)
 		}
 	}

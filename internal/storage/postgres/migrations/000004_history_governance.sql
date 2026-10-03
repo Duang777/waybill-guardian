@@ -44,6 +44,16 @@ WHERE incident.tenant_id = run.tenant_id
   AND incident.incident_id = run.incident_id
   AND quarantine.detail_code = 'history_privacy_schema_upgrade';
 
+UPDATE waybill.runs run
+SET sdk_run_id = NULL,
+    checkpoint_version = 0
+WHERE EXISTS (
+    SELECT 1
+    FROM waybill.agent_checkpoints checkpoint
+    WHERE checkpoint.tenant_id = run.tenant_id
+      AND checkpoint.thread_id = run.run_id
+);
+
 DELETE FROM waybill.agent_summaries;
 DELETE FROM waybill.agent_checkpoints;
 

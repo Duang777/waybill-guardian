@@ -421,6 +421,16 @@ func (p *ConversationPersistence) prune(ctx context.Context, cutoff time.Time) e
 	`, p.tenantID, cutoff); err != nil {
 		return fmt.Errorf("prune PostgreSQL history checkpoints: %w", err)
 	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE waybill.runs
+		SET sdk_run_id = NULL,
+		    checkpoint_version = 0
+		WHERE tenant_id = $1
+		  AND status IN ('completed', 'rejected', 'failed', 'manual_review')
+		  AND closed_at < $2
+	`, p.tenantID, cutoff); err != nil {
+		return fmt.Errorf("clear PostgreSQL history pointers: %w", err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit PostgreSQL history retention: %w", err)
 	}

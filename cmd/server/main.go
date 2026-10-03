@@ -49,12 +49,13 @@ func run() error {
 		return err
 	}
 	var database *postgresstore.DB
+	var databaseConfig postgresstore.Config
 	if storageMode == storage.ModePostgres {
-		config, err := postgresConfigFromEnv()
+		databaseConfig, err = postgresConfigFromEnv()
 		if err != nil {
 			return err
 		}
-		database, err = postgresstore.Open(context.Background(), config)
+		database, err = postgresstore.Open(context.Background(), databaseConfig)
 		if err != nil {
 			return err
 		}
@@ -119,8 +120,12 @@ func run() error {
 		if repositoryErr != nil {
 			return repositoryErr
 		}
-		history, historyErr := postgresstore.NewConversationPersistence(
+		historyCtx, cancelHistory := context.WithTimeout(
 			context.Background(),
+			databaseConfig.StartupTimeout,
+		)
+		history, historyErr := postgresstore.NewConversationPersistence(
+			historyCtx,
 			database,
 			postgresstore.HistoryConfig{
 				TenantID:  tenantID,
@@ -129,6 +134,7 @@ func run() error {
 				Retention: historyRetention,
 			},
 		)
+		cancelHistory()
 		if historyErr != nil {
 			return historyErr
 		}
