@@ -5,6 +5,7 @@ import {
   type Approval,
   type AuditEvent,
   type AuditEventType,
+  type RunID,
   type RunStatus,
 } from "./api";
 
@@ -14,6 +15,7 @@ export type Playback =
   | { kind: "playing"; cursor: number };
 
 export type TimelineState = {
+  runID: RunID | null;
   events: readonly AuditEvent[];
   playback: Playback;
 };
@@ -28,6 +30,7 @@ export type TimelineAction =
   | { type: "tick" };
 
 export const initialTimelineState: TimelineState = {
+  runID: null,
   events: [],
   playback: { kind: "live" },
 };
@@ -41,15 +44,19 @@ export function timelineReducer(
       return initialTimelineState;
     case "hydrate":
       return {
+        runID: action.events[0]?.run_id ?? null,
         events: [...action.events],
         playback: { kind: "live" },
       };
     case "event_received": {
+      if (state.runID !== null && state.runID !== action.event.run_id) {
+        return state;
+      }
       if (state.events.some((event) => event.seq === action.event.seq)) {
         return state;
       }
       const events = [...state.events, action.event].sort((left, right) => left.seq - right.seq);
-      return { ...state, events };
+      return { ...state, runID: state.runID ?? action.event.run_id, events };
     }
     case "toggle_playback":
       if (state.playback.kind === "live") {
