@@ -111,6 +111,19 @@ try {
       !(await hasHorizontalOverflow(page)),
       `run ${index + 1} has horizontal overflow`,
     );
+    if (index === 0) {
+      await page.getByLabel("审计回放进度").fill("1");
+      await page
+        .locator('[aria-label="运单状态摘要"]')
+        .getByText("正在归因", { exact: true })
+        .waitFor();
+      assert(
+        (await page.getByText("方案已执行", { exact: true }).count()) === 0,
+        "approval panel did not follow the playback cursor",
+      );
+      await page.getByRole("button", { name: "实时", exact: true }).click();
+      await page.getByText("方案已执行", { exact: true }).waitFor();
+    }
     runs.push({ run: index + 1, eventCount, status: "completed" });
   }
 
