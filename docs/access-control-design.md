@@ -129,7 +129,7 @@ type Grant struct {
 }
 
 func New(Config) (*Boundary, error)
-func (b *Boundary) Authenticate(http.Handler) http.Handler
+func (b *Boundary) Authenticate(*http.Request) (*http.Request, error)
 func (b *Boundary) Grant(Principal, Capability) (Grant, error)
 func PrincipalFrom(context.Context) (Principal, error)
 func (p Principal) Subject() string
@@ -174,9 +174,9 @@ cmd/server/http.go       路由、资源解析、problem 映射
 缺失或无效身份返回 `401 unauthenticated` 和 `WWW-Authenticate: Bearer`。已认证但租户、
 角色或运单范围不符返回 `403 forbidden`。列表静默过滤无权对象并保持空数组为 `[]`。
 
-启动先解析认证配置并构造 `Boundary`，再校验 runtime mode，最后才打开 PostgreSQL 和
-platform adapter。`PLATFORM=real` 要求 `STORAGE=postgres` 与 `AUTH_MODE=jwt`。local 模式
-继续强制 loopback；JWT 模式允许显式非 loopback IP。
+启动先解析 mode、监听地址和存储配置，再校验 runtime mode 和构造 `Boundary`，最后才打开
+PostgreSQL 和 platform adapter。`PLATFORM=real` 要求 `STORAGE=postgres` 与
+`AUTH_MODE=jwt`。local 模式继续强制 loopback；JWT 模式允许显式非 loopback IP。
 
 ## 综合决定
 

@@ -58,11 +58,15 @@ cd waybill-guardian
 | `DEMO_STEP_DELAY` | `220ms` | 确定性模型每一步的演示延迟 |
 | `PLATFORM` | `mock` | `mock` 可用；`real` 会在 adapter 未实现时拒绝启动 |
 | `STORAGE` | `jsonl` | `jsonl` 用于离线演示；`postgres` 使用事务仓储 |
+| `AUTH_MODE` | `local` | `local` 使用本机演示身份；`jwt` 验证 Bearer JWT |
+| `AUTH_JWT_ISSUER` | 空 | `AUTH_MODE=jwt` 时必填，必须精确匹配 JWT `iss` |
+| `AUTH_JWT_AUDIENCE` | 空 | `AUTH_MODE=jwt` 时必填，必须包含在 JWT `aud` |
+| `AUTH_JWT_PUBLIC_KEY_FILE` | 空 | `AUTH_MODE=jwt` 时必填，PEM 编码的 RSA 公钥 |
 | `DATABASE_URL` | 空 | `STORAGE=postgres` 时必填，不应写入日志或仓库 |
 | `PG_MAX_CONNS` | `8` | PostgreSQL 连接池最大连接数 |
 | `PG_MIN_CONNS` | `0` | PostgreSQL 连接池最小连接数 |
 | `PG_STARTUP_TIMEOUT` | `30s` | PostgreSQL 连接、检查和迁移的总超时 |
-| `TENANT_ID` | `local-demo` | PostgreSQL 业务数据的租户边界 |
+| `TENANT_ID` | `local-demo` | HTTP 授权和 PostgreSQL 数据的租户边界；JWT 模式必须显式设置 |
 | `INSTANCE_ID` | 随机 UUID | PostgreSQL run 和 effect 租约的 worker 身份 |
 | `RUN_LEASE_TTL` | `30s` | PostgreSQL run、effect 和 outbox 租约时长 |
 | `CHECKPOINT_KEY_ID` | `local-v1` | checkpoint 加密密钥版本 |
@@ -75,10 +79,17 @@ cd waybill-guardian
 BACKEND_PORT=18080 WEB_PORT=15173 DATA_DIR=/tmp/waybill-demo ./scripts/demo.sh
 ```
 
-`BACKEND_HOST` 必须是 loopback IP 字面量。直接运行 `go run ./cmd/server` 时，`HTTP_ADDR`
-默认是 `127.0.0.1:8080`，空 host、主机名、通配地址和非 loopback 地址都会被拒绝。服务也会
-拒绝 Host 不是 loopback IP 的请求。当前版本没有用户认证，审批审计主体固定为
-`local-demo-reviewer`，不能部署为远程共享服务。
+`AUTH_MODE=local` 时，`BACKEND_HOST` 必须是 loopback IP 字面量。直接运行
+`go run ./cmd/server` 时，`HTTP_ADDR` 默认是 `127.0.0.1:8080`。local 模式拒绝空 host、
+主机名、通配地址、非 loopback 地址，以及 Host 不是 loopback IP 的请求。审批审计主体固定为
+`local-demo-reviewer`。
+
+`AUTH_MODE=jwt` 验证 RS256 签名、issuer、audience、`iat`、`nbf` 和 `exp`。JWT 还必须包含
+`sub`、`tenant_id`、`roles`，以及 `waybill_all=true` 或非空 `waybill_ids`。可用角色为
+`viewer`、`dispatcher` 和 `operator`，分别允许读取、启动 run 和决定审批。服务忽略
+`X-Actor`，并把已验证的 `sub` 写入 `decided_by`。JWT 模式可以监听显式非 loopback IP，
+但服务本身不终止 TLS。远程部署必须放在 HTTPS 入口后。`PLATFORM=real` 要求
+`STORAGE=postgres` 和 `AUTH_MODE=jwt`，真实 adapter 尚未实现，因此仍会拒绝启动。
 
 ### 使用在线模型
 
