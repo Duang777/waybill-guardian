@@ -321,6 +321,31 @@ func TestSubmissionAccessorsReturnCopies(t *testing.T) {
 	}
 }
 
+func TestRestoreResultPreservesCommittedResponse(t *testing.T) {
+	raw := []byte(
+		`{"event_id":"event-1","incident_id":"incident-1","incident_version":3,"disposition":"corrected"}`,
+	)
+	result, err := RestoreResult(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := result.ResponseJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(response, raw) {
+		t.Fatalf("ResponseJSON = %s, want %s", response, raw)
+	}
+	response[0] = '['
+	again, err := result.ResponseJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again[0] != '{' {
+		t.Fatal("ResponseJSON returned mutable stored bytes")
+	}
+}
+
 func decodeEvent(t *testing.T, body string) Submission {
 	t.Helper()
 	submission, err := DecodeStructured(DecodeRequest{

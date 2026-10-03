@@ -1,8 +1,11 @@
 package events
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"time"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
@@ -167,6 +170,7 @@ type Result struct {
 	IncidentVersion int64             `json:"incident_version"`
 	Disposition     Disposition       `json:"disposition"`
 	Replayed        bool              `json:"-"`
+	responseJSON    []byte
 }
 
 func (r Result) CanonicalJSON() ([]byte, error) {
@@ -182,6 +186,40 @@ func (r Result) CanonicalJSON() ([]byte, error) {
 		IncidentVersion: r.IncidentVersion,
 		Disposition:     r.Disposition,
 	})
+}
+
+func (r Result) ResponseJSON() ([]byte, error) {
+	if len(r.responseJSON) != 0 {
+		return append([]byte(nil), r.responseJSON...), nil
+	}
+	return r.CanonicalJSON()
+}
+
+func RestoreResult(raw []byte) (Result, error) {
+	var result Result
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&result); err != nil {
+		return Result{}, fmt.Errorf("decode stored event result: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return Result{}, fmt.Errorf("stored event result contains trailing JSON")
+	}
+	if result.EventID == "" || result.IncidentID == "" || result.IncidentVersion <= 0 {
+		return Result{}, fmt.Errorf("stored event result is incomplete")
+	}
+	switch result.Disposition {
+	case DispositionApplied,
+		DispositionStale,
+		DispositionCorrected,
+		DispositionRetracted,
+		DispositionCorrectionPending,
+		DispositionManualReview:
+	default:
+		return Result{}, fmt.Errorf("stored event result has invalid disposition")
+	}
+	result.responseJSON = append([]byte(nil), raw...)
+	return result, nil
 }
 
 type Ingestor interface {

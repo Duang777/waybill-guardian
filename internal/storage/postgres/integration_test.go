@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/approval"
 	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	eventmodel "github.com/Duang777/waybill-guardian/internal/events"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
 	"github.com/Duang777/waybill-guardian/internal/idempotency"
 	guardtools "github.com/Duang777/waybill-guardian/internal/tools"
@@ -56,8 +58,8 @@ func TestMigrationsAgainstPostgreSQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if health.SchemaVersion != 4 {
-		t.Fatalf("schema version = %d, want 4", health.SchemaVersion)
+	if health.SchemaVersion != 5 {
+		t.Fatalf("schema version = %d, want 5", health.SchemaVersion)
 	}
 	var tableCount int
 	if err := db.pool.QueryRow(ctx, `
@@ -77,8 +79,8 @@ func TestMigrationsAgainstPostgreSQL(t *testing.T) {
 	).Scan(&migrationCount); err != nil {
 		t.Fatal(err)
 	}
-	if migrationCount != 4 {
-		t.Fatalf("migration rows = %d, want 4", migrationCount)
+	if migrationCount != 5 {
+		t.Fatalf("migration rows = %d, want 5", migrationCount)
 	}
 
 	insert := func() error {
@@ -119,6 +121,290 @@ func TestMigrationsAgainstPostgreSQL(t *testing.T) {
 	}
 	if successes != 1 || conflicts != 1 {
 		t.Fatalf("concurrent inbox inserts: successes = %d, conflicts = %d", successes, conflicts)
+	}
+}
+
+func TestIngestEventConcurrentDuplicates(t *testing.T) {
+	db := openIntegrationDB(t)
+	tenantID := "tenant-" + uuid.NewString()
+	first := newIntegrationRepository(t, db, tenantID, "worker-1")
+	second := newIntegrationRepository(t, db, tenantID, "worker-2")
+	defer first.Close()
+	defer second.Close()
+	submission := decodeIntegrationDetection(t, "event-duplicate", "incident-duplicate", 1, 360)
+
+	const workers = 10
+	start := make(chan struct{})
+	results := make(chan eventmodel.Result, workers)
+	errs := make(chan error, workers)
+	for index := 0; index < workers; index++ {
+		repository := first
+		if index%2 == 1 {
+			repository = second
+		}
+		go func() {
+			<-start
+			result, err := repository.IngestEvent(t.Context(), submission)
+			results <- result
+			errs <- err
+		}()
+	}
+	close(start)
+
+	replayed := 0
+	var want eventmodel.Result
+	for index := 0; index < workers; index++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("IngestEvent: %v", err)
+		}
+		result := <-results
+		if index == 0 {
+			want = result
+		} else if result.EventID != want.EventID ||
+			result.IncidentID != want.IncidentID ||
+			result.IncidentVersion != want.IncidentVersion ||
+			result.Disposition != want.Disposition {
+			t.Fatalf("result %d = %+v, want %+v", index, result, want)
+		}
+		if result.Replayed {
+			replayed++
+		}
+	}
+	if replayed != workers-1 {
+		t.Fatalf("replayed results = %d, want %d", replayed, workers-1)
+	}
+	if want.IncidentVersion != 1 || want.Disposition != eventmodel.DispositionApplied {
+		t.Fatalf("first result = %+v", want)
+	}
+
+	var inboxCount, incidentCount, outboxCount int
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT
+			(SELECT count(*) FROM waybill.inbox_events
+			 WHERE tenant_id = $1 AND event_id = 'event-duplicate'),
+			(SELECT count(*) FROM waybill.incidents
+			 WHERE tenant_id = $1 AND source_incident_key = 'incident-duplicate'),
+			(SELECT count(*) FROM waybill.outbox_events
+			 WHERE tenant_id = $1 AND aggregate_type = 'incident')
+	`, tenantID).Scan(&inboxCount, &incidentCount, &outboxCount); err != nil {
+		t.Fatal(err)
+	}
+	if inboxCount != 1 || incidentCount != 1 || outboxCount != 1 {
+		t.Fatalf(
+			"durable counts = inbox:%d incident:%d outbox:%d",
+			inboxCount,
+			incidentCount,
+			outboxCount,
+		)
+	}
+}
+
+func TestIngestEventReplaysStoredResultAndRejectsCollision(t *testing.T) {
+	db := openIntegrationDB(t)
+	tenantID := "tenant-" + uuid.NewString()
+	repository := newIntegrationRepository(t, db, tenantID, "worker-1")
+	defer repository.Close()
+
+	original := decodeIntegrationDetection(t, "event-replay", "incident-replay", 1, 360)
+	first, err := repository.IngestEvent(t.Context(), original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := repository.IngestEvent(t.Context(), original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !replayed.Replayed {
+		t.Fatal("duplicate event did not report replay")
+	}
+	firstJSON, err := first.ResponseJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayedJSON, err := replayed.ResponseJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(firstJSON, replayedJSON) {
+		t.Fatalf("replayed result = %s, want %s", replayedJSON, firstJSON)
+	}
+
+	collision := decodeIntegrationDetection(t, "event-replay", "incident-replay", 1, 180)
+	if _, err := repository.IngestEvent(t.Context(), collision); !errors.Is(
+		err,
+		eventmodel.ErrEventIdentityConflict,
+	) {
+		t.Fatalf("identity collision error = %v", err)
+	}
+}
+
+func TestIngestEventCorrectionBeforeTargetConverges(t *testing.T) {
+	db := openIntegrationDB(t)
+	firstTenant := "tenant-" + uuid.NewString()
+	secondTenant := "tenant-" + uuid.NewString()
+	first := newIntegrationRepository(t, db, firstTenant, "worker-1")
+	second := newIntegrationRepository(t, db, secondTenant, "worker-2")
+	defer first.Close()
+	defer second.Close()
+
+	target := decodeIntegrationDetection(t, "event-target", "incident-correction", 1, 360)
+	correction := decodeIntegrationCorrection(
+		t,
+		"event-correction",
+		"incident-correction",
+		2,
+		"event-target",
+		180,
+	)
+	pending, err := first.IngestEvent(t.Context(), correction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.Disposition != eventmodel.DispositionCorrectionPending {
+		t.Fatalf("correction-first result = %+v", pending)
+	}
+	if _, err := first.IngestEvent(t.Context(), target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.IngestEvent(t.Context(), target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.IngestEvent(t.Context(), correction); err != nil {
+		t.Fatal(err)
+	}
+
+	firstHash, firstState, firstVersion := readIncidentProjection(
+		t,
+		db,
+		firstTenant,
+		"incident-correction",
+	)
+	secondHash, secondState, secondVersion := readIncidentProjection(
+		t,
+		db,
+		secondTenant,
+		"incident-correction",
+	)
+	if firstHash != secondHash ||
+		firstState != string(eventmodel.TransportActive) ||
+		secondState != string(eventmodel.TransportActive) ||
+		firstVersion != secondVersion {
+		t.Fatalf(
+			"projections differ: first=%s/%s/%d second=%s/%s/%d",
+			firstHash,
+			firstState,
+			firstVersion,
+			secondHash,
+			secondState,
+			secondVersion,
+		)
+	}
+}
+
+func TestIngestEventReprojectsCorrectionWhenTargetBelongsToAnotherEpisode(t *testing.T) {
+	db := openIntegrationDB(t)
+	tenantID := "tenant-" + uuid.NewString()
+	repository := newIntegrationRepository(t, db, tenantID, "worker-1")
+	defer repository.Close()
+
+	correction := decodeIntegrationCorrection(
+		t,
+		"event-correction-other",
+		"incident-a",
+		2,
+		"event-target-other",
+		180,
+	)
+	if _, err := repository.IngestEvent(t.Context(), correction); err != nil {
+		t.Fatal(err)
+	}
+	target := decodeIntegrationDetection(t, "event-target-other", "incident-b", 1, 360)
+	if _, err := repository.IngestEvent(t.Context(), target); err != nil {
+		t.Fatal(err)
+	}
+
+	_, state, _ := readIncidentProjection(t, db, tenantID, "incident-a")
+	if state != string(eventmodel.TransportConflicted) {
+		t.Fatalf("correction incident state = %q, want conflicted", state)
+	}
+	_, state, _ = readIncidentProjection(t, db, tenantID, "incident-b")
+	if state != string(eventmodel.TransportActive) {
+		t.Fatalf("target incident state = %q, want active", state)
+	}
+}
+
+func TestIngestEventStaleEvidenceDoesNotAdvanceIncident(t *testing.T) {
+	db := openIntegrationDB(t)
+	tenantID := "tenant-" + uuid.NewString()
+	repository := newIntegrationRepository(t, db, tenantID, "worker-1")
+	defer repository.Close()
+
+	newer := decodeIntegrationDetection(t, "event-newer", "incident-stale", 2, 180)
+	if _, err := repository.IngestEvent(t.Context(), newer); err != nil {
+		t.Fatal(err)
+	}
+	older := decodeIntegrationDetection(t, "event-older", "incident-stale", 1, 360)
+	result, err := repository.IngestEvent(t.Context(), older)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Disposition != eventmodel.DispositionStale || result.IncidentVersion != 1 {
+		t.Fatalf("stale result = %+v", result)
+	}
+	var outboxCount int
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT count(*)
+		FROM waybill.outbox_events
+		WHERE tenant_id = $1 AND aggregate_type = 'incident'
+	`, tenantID).Scan(&outboxCount); err != nil {
+		t.Fatal(err)
+	}
+	if outboxCount != 1 {
+		t.Fatalf("incident outbox count = %d, want 1", outboxCount)
+	}
+}
+
+func TestIngestEventOutboxConflictRollsBackEverything(t *testing.T) {
+	db := openIntegrationDB(t)
+	tenantID := "tenant-" + uuid.NewString()
+	repository := newIntegrationRepository(t, db, tenantID, "worker-1")
+	defer repository.Close()
+	submission := decodeIntegrationDetection(t, "event-rollback", "incident-rollback", 1, 360)
+	id := incidentID(tenantID, submission.Source(), submission.Record().IncidentKey)
+	outboxID := incidentOutboxID(tenantID, id, 1)
+	if _, err := db.pool.Exec(t.Context(), `
+		INSERT INTO waybill.outbox_events (
+			tenant_id, source, event_id, aggregate_type, aggregate_id,
+			aggregate_version, event_type, subject, payload, event_time,
+			data_schema, payload_canonical
+		) VALUES (
+			$1, $2, $3, 'incident', 'conflicting-incident',
+			99, 'test', 'incident/conflict', '{}'::jsonb, clock_timestamp(),
+			'urn:waybill-guardian:schema:incident-snapshot:v1',
+			convert_to('{}', 'UTF8')
+		)
+	`, tenantID, incidentOutboxSource, outboxID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repository.IngestEvent(t.Context(), submission); !errors.Is(
+		err,
+		ErrUniqueConflict,
+	) {
+		t.Fatalf("IngestEvent error = %v, want ErrUniqueConflict", err)
+	}
+	var inboxCount, incidentCount int
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT
+			(SELECT count(*) FROM waybill.inbox_events
+			 WHERE tenant_id = $1 AND event_id = 'event-rollback'),
+			(SELECT count(*) FROM waybill.incidents
+			 WHERE tenant_id = $1 AND source_incident_key = 'incident-rollback')
+	`, tenantID).Scan(&inboxCount, &incidentCount); err != nil {
+		t.Fatal(err)
+	}
+	if inboxCount != 0 || incidentCount != 0 {
+		t.Fatalf("rolled back counts = inbox:%d incident:%d", inboxCount, incidentCount)
 	}
 }
 
@@ -270,6 +556,72 @@ func TestHistoryGovernanceMigrationQuarantinesLegacyActiveRun(t *testing.T) {
 	}
 }
 
+func TestEventIngestionMigrationPreservesHistoricalOutbox(t *testing.T) {
+	db := openIntegrationDB(t)
+	resetDatabaseToMigration(t, db, 4)
+	tenantID := "legacy-outbox-" + uuid.NewString()
+	if _, err := db.pool.Exec(t.Context(), `
+		INSERT INTO waybill.outbox_events (
+			tenant_id, source, event_id, aggregate_type, aggregate_id,
+			aggregate_version, event_type, subject, payload
+		) VALUES (
+			$1, 'urn:waybill-guardian', 'legacy-event', 'run', 'legacy-run',
+			1, 'com.waybill.audit.run_started.v1', 'run/legacy-run',
+			'{"run_id":"legacy-run"}'::jsonb
+		)
+	`, tenantID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.migrate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var (
+		status           string
+		eventTime        time.Time
+		dataSchema       string
+		payloadCanonical []byte
+	)
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT status, event_time, data_schema, payload_canonical
+		FROM waybill.outbox_events
+		WHERE tenant_id = $1 AND event_id = 'legacy-event'
+	`, tenantID).Scan(
+		&status,
+		&eventTime,
+		&dataSchema,
+		&payloadCanonical,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if status != "pending" {
+		t.Fatalf("historical outbox status = %q, want pending", status)
+	}
+	if eventTime.IsZero() ||
+		dataSchema != "urn:waybill-guardian:schema:run-audit:v1" ||
+		len(payloadCanonical) == 0 {
+		t.Fatalf(
+			"historical outbox metadata = time:%v schema:%q payload:%q",
+			eventTime,
+			dataSchema,
+			payloadCanonical,
+		)
+	}
+
+	var definition string
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT pg_get_constraintdef(oid)
+		FROM pg_constraint
+		WHERE connamespace = 'waybill'::regnamespace
+		  AND conname = 'inbox_events_outbox_fk'
+	`).Scan(&definition); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(definition, "MATCH FULL") {
+		t.Fatalf("nullable inbox outbox foreign key uses MATCH FULL: %s", definition)
+	}
+}
+
 func TestRepositoryTransactionRollsBackProjectionAuditAndOutbox(t *testing.T) {
 	db := openIntegrationDB(t)
 	tenantID := "tenant-" + uuid.NewString()
@@ -287,8 +639,13 @@ func TestRepositoryTransactionRollsBackProjectionAuditAndOutbox(t *testing.T) {
 	if _, err := db.pool.Exec(t.Context(), `
 		INSERT INTO waybill.outbox_events (
 			tenant_id, source, event_id, aggregate_type, aggregate_id,
-			aggregate_version, event_type, payload
-		) VALUES ($1, 'urn:waybill-guardian', $2, 'run', $3, 2, 'test', '{}'::jsonb)
+			aggregate_version, event_type, payload, event_time,
+			data_schema, payload_canonical
+		) VALUES (
+			$1, 'urn:waybill-guardian', $2, 'run', $3, 2, 'test', '{}'::jsonb,
+			clock_timestamp(), 'urn:waybill-guardian:schema:run-audit:v1',
+			convert_to('{}', 'UTF8')
+		)
 	`, tenantID, string(runID)+":"+eventID, runID); err != nil {
 		t.Fatal(err)
 	}
@@ -1238,6 +1595,76 @@ func resetDatabaseToMigration(t *testing.T, db *DB, targetVersion int64) {
 			t.Errorf("restore integration schema: %v", err)
 		}
 	})
+}
+
+func decodeIntegrationDetection(
+	t *testing.T,
+	eventID string,
+	incidentKey string,
+	version int64,
+	stopMinutes int,
+) eventmodel.Submission {
+	t.Helper()
+	body := fmt.Sprintf(
+		`{"specversion":"1.0","id":%q,"source":"urn:tms:integration","type":"com.waybill.tracking.delay.detected.v1","subject":"waybill/YD2026101001","time":"2026-10-10T12:30:00Z","datacontenttype":"application/json","dataschema":"urn:waybill-guardian:schema:delay-detected:v1","data":{"waybill_id":"YD2026101001","incident_key":%q,"source_version":%d,"event_time":"2026-10-10T12:28:31Z","record_time":"2026-10-10T12:30:00Z","location":{"code":"MY-N-SERVICE","name":"Mianyang North Service Area"},"business_step":"transporting","reason_code":"stop_duration_exceeded","observations":{"stop_minutes":%d}}}`,
+		eventID,
+		incidentKey,
+		version,
+		stopMinutes,
+	)
+	return decodeIntegrationSubmission(t, body)
+}
+
+func decodeIntegrationCorrection(
+	t *testing.T,
+	eventID string,
+	incidentKey string,
+	version int64,
+	targetID string,
+	stopMinutes int,
+) eventmodel.Submission {
+	t.Helper()
+	body := fmt.Sprintf(
+		`{"specversion":"1.0","id":%q,"source":"urn:tms:integration","type":"com.waybill.tracking.delay.corrected.v1","subject":"waybill/YD2026101001","time":"2026-10-10T12:45:00Z","datacontenttype":"application/json","dataschema":"urn:waybill-guardian:schema:delay-corrected:v1","data":{"waybill_id":"YD2026101001","incident_key":%q,"source_version":%d,"event_time":"2026-10-10T12:28:31Z","record_time":"2026-10-10T12:45:00Z","corrects":{"source":"urn:tms:integration","id":%q},"operation":"replace","replacement":{"location":{"code":"MY-S-SERVICE","name":"Mianyang South Service Area"},"business_step":"transporting","reason_code":"stop_duration_exceeded","observations":{"stop_minutes":%d}},"reason":"integration correction"}}`,
+		eventID,
+		incidentKey,
+		version,
+		targetID,
+		stopMinutes,
+	)
+	return decodeIntegrationSubmission(t, body)
+}
+
+func decodeIntegrationSubmission(t *testing.T, body string) eventmodel.Submission {
+	t.Helper()
+	submission, err := eventmodel.DecodeStructured(eventmodel.DecodeRequest{
+		ContentType: "application/cloudevents+json",
+		Body:        strings.NewReader(body),
+		Now:         time.Date(2026, 10, 10, 13, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return submission
+}
+
+func readIncidentProjection(
+	t *testing.T,
+	db *DB,
+	tenantID string,
+	incidentKey string,
+) (hash string, state string, version int64) {
+	t.Helper()
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT transport_hash, transport_state, version
+		FROM waybill.incidents
+		WHERE tenant_id = $1
+		  AND source = 'urn:tms:integration'
+		  AND source_incident_key = $2
+	`, tenantID, incidentKey).Scan(&hash, &state, &version); err != nil {
+		t.Fatal(err)
+	}
+	return hash, state, version
 }
 
 func newIntegrationRepository(
