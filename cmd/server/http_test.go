@@ -21,6 +21,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/guardian"
 	"github.com/Duang777/waybill-guardian/internal/httpauth"
 	"github.com/Duang777/waybill-guardian/internal/platform"
+	"github.com/Duang777/waybill-guardian/internal/storage"
 	"github.com/Duang777/waybill-guardian/internal/tools"
 )
 
@@ -510,6 +511,153 @@ func TestRuntimeStorageConfiguration(t *testing.T) {
 	}
 	if err := validateRuntimeModes("unknown", "jsonl", httpauth.ModeLocal); err == nil {
 		t.Fatal("unknown platform mode was accepted")
+	}
+}
+
+func TestEventConfigFromEnv(t *testing.T) {
+	clearEventConfigEnv(t)
+	config, err := eventConfigFromEnv(storage.ModePostgres)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.outboxEnabled ||
+		config.outboxBatchSize != 10 ||
+		config.outboxWorkers != 4 ||
+		config.outboxPoll != 250*time.Millisecond ||
+		config.outboxLeaseTTL != 30*time.Second ||
+		config.outboxStatsPoll != 15*time.Second ||
+		config.outboxTimeout != 10*time.Second ||
+		config.metricsAddr != "" {
+		t.Fatalf("default event config = %+v", config)
+	}
+
+	t.Setenv("OUTBOX_ENABLED", "true")
+	t.Setenv("OUTBOX_URL", "https://events.example.test/v1/events")
+	t.Setenv("OUTBOX_TOKEN", "secret-token")
+	t.Setenv("OUTBOX_BATCH_SIZE", "20")
+	t.Setenv("OUTBOX_CONCURRENCY", "5")
+	t.Setenv("OUTBOX_POLL_INTERVAL", "500ms")
+	t.Setenv("OUTBOX_LEASE_TTL", "45s")
+	t.Setenv("OUTBOX_STATS_INTERVAL", "20s")
+	t.Setenv("OUTBOX_HTTP_TIMEOUT", "8s")
+	t.Setenv("METRICS_ADDR", "127.0.0.1:9090")
+	config, err = eventConfigFromEnv(storage.ModePostgres)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.outboxEnabled ||
+		config.outboxURL != "https://events.example.test/v1/events" ||
+		config.outboxToken != "secret-token" ||
+		config.outboxBatchSize != 20 ||
+		config.outboxWorkers != 5 ||
+		config.outboxPoll != 500*time.Millisecond ||
+		config.outboxLeaseTTL != 45*time.Second ||
+		config.outboxStatsPoll != 20*time.Second ||
+		config.outboxTimeout != 8*time.Second ||
+		config.metricsAddr != "127.0.0.1:9090" {
+		t.Fatalf("configured event config = %+v", config)
+	}
+}
+
+func TestEventConfigFromEnvRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name        string
+		storageMode storage.Mode
+		key         string
+		value       string
+	}{
+		{
+			name:        "dispatcher with JSONL",
+			storageMode: storage.ModeJSONL,
+			key:         "OUTBOX_ENABLED",
+			value:       "true",
+		},
+		{
+			name:        "metrics with JSONL",
+			storageMode: storage.ModeJSONL,
+			key:         "METRICS_ADDR",
+			value:       "127.0.0.1:9090",
+		},
+		{
+			name:        "invalid enabled",
+			storageMode: storage.ModePostgres,
+			key:         "OUTBOX_ENABLED",
+			value:       "sometimes",
+		},
+		{
+			name:        "invalid batch",
+			storageMode: storage.ModePostgres,
+			key:         "OUTBOX_BATCH_SIZE",
+			value:       "101",
+		},
+		{
+			name:        "invalid workers",
+			storageMode: storage.ModePostgres,
+			key:         "OUTBOX_CONCURRENCY",
+			value:       "0",
+		},
+		{
+			name:        "invalid lease",
+			storageMode: storage.ModePostgres,
+			key:         "OUTBOX_LEASE_TTL",
+			value:       "0s",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clearEventConfigEnv(t)
+			t.Setenv(test.key, test.value)
+			if _, err := eventConfigFromEnv(test.storageMode); err == nil {
+				t.Fatalf("%s=%q was accepted", test.key, test.value)
+			}
+		})
+	}
+
+	clearEventConfigEnv(t)
+	t.Setenv("OUTBOX_ENABLED", "true")
+	if _, err := eventConfigFromEnv(storage.ModePostgres); err == nil {
+		t.Fatal("enabled dispatcher accepted missing URL and token")
+	}
+}
+
+func TestRunComponentsCancelsAndDrainsPeers(t *testing.T) {
+	failed := errors.New("listener failed")
+	peerStopped := make(chan struct{})
+	err := runComponents(t.Context(),
+		func(context.Context) error {
+			return failed
+		},
+		func(ctx context.Context) error {
+			<-ctx.Done()
+			close(peerStopped)
+			return nil
+		},
+	)
+	if !errors.Is(err, failed) {
+		t.Fatalf("runComponents error = %v, want listener failure", err)
+	}
+	select {
+	case <-peerStopped:
+	default:
+		t.Fatal("peer component was not drained")
+	}
+}
+
+func clearEventConfigEnv(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{
+		"OUTBOX_ENABLED",
+		"OUTBOX_URL",
+		"OUTBOX_TOKEN",
+		"OUTBOX_BATCH_SIZE",
+		"OUTBOX_CONCURRENCY",
+		"OUTBOX_POLL_INTERVAL",
+		"OUTBOX_LEASE_TTL",
+		"OUTBOX_STATS_INTERVAL",
+		"OUTBOX_HTTP_TIMEOUT",
+		"METRICS_ADDR",
+	} {
+		t.Setenv(name, "")
 	}
 }
 

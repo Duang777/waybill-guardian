@@ -24,6 +24,8 @@ web/  (React + 高德 JS API 或本地轨迹视图)
 cmd/server ── internal/guardian
                  ├─ agent:       hastekit Agent loop、pause/resume、模型 retry
                  ├─ tools:       7 个契约工具
+                 ├─ events:      CloudEvents 校验、canonical hash 和 incident reducer
+                 ├─ outbox:      有界 dispatcher、租约续期和确定性重试
                  ├─ approval:    pending → confirmed / rejected / expired
                  ├─ idempotency: 稳定 effect 身份、并发合并、结果回放
                  ├─ audit:       append-only JSONL、哈希链、SSE replay/live
@@ -53,6 +55,10 @@ cmd/server ── internal/guardian
 - `internal/guardian`：用例协调、run 锁、超时和启动恢复。
 - `internal/agent`：hastekit 组装、七个工具注册、HITL 和模型配置。
 - `internal/tools`：契约工具的 typed wrapper 和确定性数据集。
+- `internal/events`：入站 CloudEvents profile、canonical identity 和 incident 投影。
+- `internal/outbox`：transport-neutral dispatcher、租约处理和重试策略。
+- `internal/outboxhttp`：带 Bearer 认证的 structured CloudEvents HTTPS publisher。
+- `internal/metrics`：固定标签的入站和 outbox Prometheus 指标。
 - `internal/approval`：审批状态机和事件投影。
 - `internal/audit`：append-only JSONL、哈希校验、回放和订阅。
 - `internal/idempotency`：幂等键生成、校验、并发合并和结果回放。

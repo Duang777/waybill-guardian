@@ -15,6 +15,7 @@ HTTP 和 SSE 服务入口。handler 只做请求校验、协议转换和错误�
 | POST | `/api/approvals/:id/confirm` | 记录确认并恢复 run，返回 202 |
 | POST | `/api/approvals/:id/reject` | 记录驳回原因并恢复 run，返回 202 |
 | GET | `/api/waybills/:id` | 返回运单、轨迹、司机、天气和风险数据 |
+| POST | `/v1/events` | PostgreSQL 模式接收 structured CloudEvents，返回 202 |
 
 ## 设计决策
 
@@ -40,13 +41,18 @@ HTTP 和 SSE 服务入口。handler 只做请求校验、协议转换和错误�
   deadline，SSE 必须在 token 到期后退出。
 - run 和 approval 先从 `guardian.Service` 查询关联的 `waybill_id`，再做对象授权。列表按
   调用者的运单范围过滤。
+- `/v1/events` 要求 `event:ingest` capability，再按 JWT 中的 `event_sources`、
+  `event_types` 和运单范围做精确授权。本地模式只允许固定的本地 producer source。
+- `/v1/events` 只在 PostgreSQL 模式注册。相同事件的重放返回首次保存的响应字节，并设置
+  `Idempotent-Replayed: true`。
 - 非数字 `Last-Event-ID` 返回 400。游标超过当前末尾返回 409。
 - 错误响应统一为 `{"error":{"code":"...","message":"..."}}`。
 
 ## 启动配置
 
-`main.go` 读取 `HTTP_ADDR`、`DATA_DIR`、`APPROVAL_TTL`、`DEMO_STEP_DELAY`、`PLATFORM`、
-`AUTH_MODE`、JWT 配置和 Agent 模型变量。`HTTP_ADDR` 默认是 `127.0.0.1:8080`。
+`main.go` 读取 `HTTP_ADDR`、存储、认证、Agent、outbox 和 metrics 配置。`HTTP_ADDR` 默认是
+`127.0.0.1:8080`。`OUTBOX_ENABLED=true` 显式启动 dispatcher。`METRICS_ADDR` 设置独立的
+Prometheus listener。两项都要求 PostgreSQL 模式。
 local 模式只接受 loopback IP 字面量，HTTP handler 也拒绝 Host 不是 loopback IP 的请求。
 JWT 模式允许显式非 loopback IP。`PLATFORM=real` 缺少 PostgreSQL 或 JWT 认证时先返回配置
 错误；通过检查后仍会因真实 adapter 未实现而拒绝启动。

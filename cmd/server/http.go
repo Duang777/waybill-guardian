@@ -15,16 +15,24 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/approval"
 	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/events"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
 	"github.com/Duang777/waybill-guardian/internal/httpauth"
+	"github.com/Duang777/waybill-guardian/internal/metrics"
 	"github.com/Duang777/waybill-guardian/internal/platform"
 )
 
 type api struct {
-	service  *guardian.Service
-	access   *httpauth.Boundary
-	mux      *http.ServeMux
-	sseSlots chan struct{}
+	service      *guardian.Service
+	access       *httpauth.Boundary
+	eventStore   events.Ingestor
+	eventMetrics ingestObserver
+	mux          *http.ServeMux
+	sseSlots     chan struct{}
+}
+
+type ingestObserver interface {
+	ObserveIngest(metrics.IngestOutcome)
 }
 
 const (
@@ -33,11 +41,22 @@ const (
 )
 
 func newHandler(service *guardian.Service, access *httpauth.Boundary) http.Handler {
+	return newHandlerWithEvents(service, access, nil, nil)
+}
+
+func newHandlerWithEvents(
+	service *guardian.Service,
+	access *httpauth.Boundary,
+	eventStore events.Ingestor,
+	eventMetrics ingestObserver,
+) http.Handler {
 	server := &api{
-		service:  service,
-		access:   access,
-		mux:      http.NewServeMux(),
-		sseSlots: make(chan struct{}, maxSSESubscriptions),
+		service:      service,
+		access:       access,
+		eventStore:   eventStore,
+		eventMetrics: eventMetrics,
+		mux:          http.NewServeMux(),
+		sseSlots:     make(chan struct{}, maxSSESubscriptions),
 	}
 	server.mux.HandleFunc("POST /api/demo/trigger", server.triggerDemo)
 	server.mux.HandleFunc("GET /api/runs", server.listRuns)
@@ -50,10 +69,117 @@ func newHandler(service *guardian.Service, access *httpauth.Boundary) http.Handl
 	root := http.NewServeMux()
 	root.HandleFunc("GET /healthz", server.health)
 	root.Handle("/api/", authenticateAPI(access, server.mux))
+	if eventStore != nil {
+		eventMux := http.NewServeMux()
+		eventMux.HandleFunc("POST /v1/events", server.ingestEvent)
+		root.Handle("/v1/events", authenticateAPI(access, eventMux))
+	}
 	if access.Mode() == httpauth.ModeLocal {
 		return loopbackHostOnly(root)
 	}
 	return root
+}
+
+func (a *api) ingestEvent(w http.ResponseWriter, r *http.Request) {
+	_, grant, ok := a.grant(w, r, httpauth.IngestEvent)
+	if !ok {
+		a.observeIngest(metrics.IngestRejected)
+		return
+	}
+	submission, err := events.DecodeStructured(events.DecodeRequest{
+		ContentType:   r.Header.Get("Content-Type"),
+		ContentLength: r.ContentLength,
+		Body:          r.Body,
+		Now:           time.Now().UTC(),
+	})
+	if err != nil {
+		a.observeIngest(metrics.IngestRejected)
+		writeEventDecodeError(w, err)
+		return
+	}
+	record := submission.Record()
+	if !grant.AllowsEvent(record.Ref.Source, string(record.Type)) ||
+		!grant.Allows(record.WaybillID) {
+		a.observeIngest(metrics.IngestRejected)
+		a.writeAccessError(w, httpauth.ErrForbidden)
+		return
+	}
+	result, err := a.eventStore.IngestEvent(r.Context(), submission)
+	if err != nil {
+		a.observeIngest(metrics.IngestFailed)
+		writeEventStoreError(w, err)
+		return
+	}
+	body, err := result.ResponseJSON()
+	if err != nil {
+		a.observeIngest(metrics.IngestFailed)
+		writeProblem(w, http.StatusInternalServerError, "internal_error", "request failed")
+		return
+	}
+	if result.Replayed {
+		w.Header().Set("Idempotent-Replayed", "true")
+		a.observeIngest(metrics.IngestReplayed)
+	} else {
+		a.observeIngest(metrics.IngestAccepted)
+	}
+	writeRawJSON(w, http.StatusAccepted, body)
+}
+
+func (a *api) observeIngest(outcome metrics.IngestOutcome) {
+	if a.eventMetrics != nil {
+		a.eventMetrics.ObserveIngest(outcome)
+	}
+}
+
+func writeEventDecodeError(w http.ResponseWriter, err error) {
+	code, ok := events.DecodeErrorCode(err)
+	if !ok {
+		writeProblem(w, http.StatusInternalServerError, "internal_error", "request failed")
+		return
+	}
+	status := http.StatusBadRequest
+	switch code {
+	case events.DecodeInvalidContentType:
+		status = http.StatusUnsupportedMediaType
+	case events.DecodeBodyTooLarge:
+		status = http.StatusRequestEntityTooLarge
+	}
+	writeProblem(w, status, string(code), err.Error())
+}
+
+func writeEventStoreError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, events.ErrEventIdentityConflict):
+		writeProblem(
+			w,
+			http.StatusConflict,
+			"event_identity_conflict",
+			"event identity has different content",
+		)
+	case errors.Is(err, events.ErrLegacyEventIdentity):
+		writeProblem(
+			w,
+			http.StatusConflict,
+			"event_identity_legacy",
+			"event identity uses a legacy hash profile",
+		)
+	case errors.Is(err, events.ErrIncidentIdentityConflict):
+		writeProblem(
+			w,
+			http.StatusConflict,
+			"incident_identity_conflict",
+			"incident identity belongs to another waybill",
+		)
+	case errors.Is(err, events.ErrEventsUnavailable):
+		writeProblem(
+			w,
+			http.StatusServiceUnavailable,
+			"events_unavailable",
+			"event ingestion is temporarily unavailable",
+		)
+	default:
+		writeProblem(w, http.StatusInternalServerError, "internal_error", "request failed")
+	}
 }
 
 func authenticateAPI(access *httpauth.Boundary, next http.Handler) http.Handler {
@@ -517,6 +643,13 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func writeRawJSON(w http.ResponseWriter, status int, value []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_, _ = w.Write(value)
 }
 
 func writeProblem(w http.ResponseWriter, status int, code, message string) {

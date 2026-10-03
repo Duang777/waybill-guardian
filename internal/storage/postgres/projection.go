@@ -492,14 +492,16 @@ func (r *Repository) insertOutbox(
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO waybill.outbox_events (
 			tenant_id, source, event_id, aggregate_type, aggregate_id,
-			aggregate_version, event_type, subject, payload
+			aggregate_version, event_type, subject, payload, event_time,
+			data_content_type, data_schema, payload_canonical
 		) VALUES (
 			$1, 'urn:waybill-guardian', $2, 'run', $3,
-			$4, $5, $6, $7::jsonb
+			$4, $5, $6, $7::jsonb, $8,
+			'application/json', 'urn:waybill-guardian:schema:run-audit:v1', $9
 		)
 	`, r.tenantID, eventID, event.RunID, event.Seq,
 		"com.waybill.audit."+string(event.Type)+".v1",
-		"run/"+string(event.RunID), payload); err != nil {
+		"run/"+string(event.RunID), payload, event.TS, payload); err != nil {
 		return fmt.Errorf("insert PostgreSQL outbox event: %w", MapError(err))
 	}
 	return nil

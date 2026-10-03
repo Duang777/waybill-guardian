@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -62,7 +63,7 @@ func TestLocalBoundaryUsesTrustedIdentity(t *testing.T) {
 	if _, ok := principal.CredentialDeadline(); ok {
 		t.Fatal("local principal unexpectedly has a credential deadline")
 	}
-	for _, capability := range []Capability{Read, StartRun, DecideApproval} {
+	for _, capability := range []Capability{Read, StartRun, DecideApproval, IngestEvent} {
 		grant, grantErr := boundary.Grant(principal, capability)
 		if grantErr != nil {
 			t.Fatalf("grant %q: %v", capability, grantErr)
@@ -70,6 +71,19 @@ func TestLocalBoundaryUsesTrustedIdentity(t *testing.T) {
 		if grantErr := grant.Require("YD9999999999"); grantErr != nil {
 			t.Fatalf("local grant rejected a waybill: %v", grantErr)
 		}
+	}
+	grant, err := boundary.Grant(principal, IngestEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !grant.AllowsEvent(
+		LocalEventSource,
+		"com.waybill.tracking.delay.detected.v1",
+	) {
+		t.Fatal("local grant rejected the local event source")
+	}
+	if grant.AllowsEvent("urn:tms:region-east", "com.waybill.tracking.delay.detected.v1") {
+		t.Fatal("local grant accepted a non-local event source")
 	}
 }
 
@@ -263,6 +277,90 @@ func TestJWTBoundaryRejectsWrongTenantAndMissingRole(t *testing.T) {
 	}
 }
 
+func TestJWTBoundaryAuthorizesExactEventSourceAndType(t *testing.T) {
+	now := time.Date(2026, time.October, 4, 10, 0, 0, 0, time.UTC)
+	privateKey := newRSAKey(t)
+	boundary := newTestJWTBoundary(t, now, &privateKey.PublicKey)
+	claims := validClaims(now)
+	claims.Roles = []string{"event_producer"}
+	claims.EventSources = []string{"urn:tms:region-east"}
+	claims.EventTypes = []string{
+		"com.waybill.tracking.delay.detected.v1",
+		"com.waybill.tracking.delay.corrected.v1",
+	}
+	principal := authenticateClaims(t, boundary, privateKey, claims)
+	grant, err := boundary.Grant(principal, IngestEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !grant.AllowsEvent(
+		"urn:tms:region-east",
+		"com.waybill.tracking.delay.detected.v1",
+	) {
+		t.Fatal("configured event source and type were rejected")
+	}
+	if grant.AllowsEvent(
+		"urn:tms:region-west",
+		"com.waybill.tracking.delay.detected.v1",
+	) {
+		t.Fatal("unconfigured event source was accepted")
+	}
+	if grant.AllowsEvent("urn:tms:region-east", "com.waybill.unknown.v1") {
+		t.Fatal("unconfigured event type was accepted")
+	}
+}
+
+func TestJWTBoundaryRejectsInvalidEventProducerClaims(t *testing.T) {
+	now := time.Date(2026, time.October, 4, 10, 0, 0, 0, time.UTC)
+	privateKey := newRSAKey(t)
+	boundary := newTestJWTBoundary(t, now, &privateKey.PublicKey)
+	tests := []struct {
+		name    string
+		sources []string
+		types   []string
+	}{
+		{name: "missing sources", types: []string{"event.type"}},
+		{name: "missing types", sources: []string{"urn:source"}},
+		{
+			name:    "duplicate sources",
+			sources: []string{"urn:source", "urn:source"},
+			types:   []string{"event.type"},
+		},
+		{
+			name:    "duplicate types",
+			sources: []string{"urn:source"},
+			types:   []string{"event.type", "event.type"},
+		},
+		{
+			name:    "padded source",
+			sources: []string{" urn:source "},
+			types:   []string{"event.type"},
+		},
+		{
+			name:    "too many sources",
+			sources: repeatStrings("urn:source:", 17),
+			types:   []string{"event.type"},
+		},
+		{
+			name:    "too many types",
+			sources: []string{"urn:source"},
+			types:   repeatStrings("event.type.", 9),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			claims := validClaims(now)
+			claims.Roles = []string{"event_producer"}
+			claims.EventSources = test.sources
+			claims.EventTypes = test.types
+			request := bearerRequest(signToken(t, privateKey, claims))
+			if _, err := boundary.Authenticate(request); !errors.Is(err, ErrUnauthenticated) {
+				t.Fatalf("Authenticate() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestPrincipalFromRequiresAuthenticatedContext(t *testing.T) {
 	if _, err := PrincipalFrom(context.Background()); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatalf("PrincipalFrom() error = %v", err)
@@ -363,4 +461,12 @@ func newRSAKey(t *testing.T) *rsa.PrivateKey {
 		t.Fatal(err)
 	}
 	return key
+}
+
+func repeatStrings(prefix string, count int) []string {
+	values := make([]string, count)
+	for index := range count {
+		values[index] = fmt.Sprintf("%s%d", prefix, index)
+	}
+	return values
 }

@@ -5,34 +5,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
+	"strings"
+
+	"github.com/Duang777/waybill-guardian/internal/outbox"
 )
 
-var ErrStaleOutboxClaim = errors.New("outbox claim is stale")
-
-type OutboxDisposition string
-
-const (
-	OutboxPublished       OutboxDisposition = "published"
-	OutboxRetryableFailed OutboxDisposition = "retryable_failed"
-	OutboxPermanentFailed OutboxDisposition = "permanent_failed"
+var (
+	ErrStaleOutboxClaim     = errors.New("outbox claim is stale")
+	ErrOutboxNotRequeueable = errors.New("outbox event is not permanently failed")
 )
 
-type OutboxEvent struct {
-	Source           string
-	ID               string
-	AggregateType    string
-	AggregateID      string
-	AggregateVersion int64
-	Type             string
-	Subject          string
-	Payload          json.RawMessage
-	Attempt          int
-	CreatedAt        time.Time
-}
+var _ outbox.Store = (*Repository)(nil)
 
-type OutboxClaim struct {
-	event      OutboxEvent
+type outboxClaim struct {
+	event      outbox.Event
 	repository *Repository
 	source     string
 	eventID    string
@@ -40,22 +26,14 @@ type OutboxClaim struct {
 	fence      int64
 }
 
-func (c *OutboxClaim) Event() OutboxEvent {
+func (c *outboxClaim) Event() outbox.Event {
 	if c == nil {
-		return OutboxEvent{}
+		return outbox.Event{}
 	}
-	event := c.event
-	event.Payload = append(json.RawMessage(nil), c.event.Payload...)
-	return event
+	return c.event.Clone()
 }
 
-type OutboxResult struct {
-	Disposition OutboxDisposition
-	RetryAfter  time.Duration
-	ErrorCode   string
-}
-
-func (r *Repository) ClaimOutbox(ctx context.Context, limit int) ([]*OutboxClaim, error) {
+func (r *Repository) ClaimOutbox(ctx context.Context, limit int) ([]outbox.Claim, error) {
 	if err := r.checkOpen(); err != nil {
 		return nil, err
 	}
@@ -112,22 +90,24 @@ func (r *Repository) ClaimOutbox(ctx context.Context, limit int) ([]*OutboxClaim
 			RETURNING event.source, event.event_id, event.aggregate_type,
 			          event.aggregate_id, event.aggregate_version, event.event_type,
 			          COALESCE(event.subject, '') AS subject,
-			          event.payload, event.attempt,
-			          event.created_at, event.fencing_token
+			          event.event_time, event.data_content_type, event.data_schema,
+			          event.payload_canonical, event.attempt, event.created_at,
+			          event.fencing_token
 		)
 		SELECT source, event_id, aggregate_type, aggregate_id, aggregate_version,
-		       event_type, subject, payload, attempt, created_at, fencing_token
+		       event_type, subject, event_time, data_content_type, data_schema,
+		       payload_canonical, attempt, created_at, fencing_token
 		FROM claimed
 		ORDER BY created_at, source, event_id
-	`, r.tenantID, r.workerID, limit, r.leaseTTL.Seconds())
+	`, r.tenantID, r.workerID, limit, r.outboxLeaseTTL.Seconds())
 	if err != nil {
 		return nil, fmt.Errorf("claim PostgreSQL outbox events: %w", err)
 	}
 	defer rows.Close()
 
-	claims := make([]*OutboxClaim, 0, limit)
+	claims := make([]outbox.Claim, 0, limit)
 	for rows.Next() {
-		var claim OutboxClaim
+		var claim outboxClaim
 		var payload []byte
 		claim.repository = r
 		claim.owner = r.workerID
@@ -139,6 +119,9 @@ func (r *Repository) ClaimOutbox(ctx context.Context, limit int) ([]*OutboxClaim
 			&claim.event.AggregateVersion,
 			&claim.event.Type,
 			&claim.event.Subject,
+			&claim.event.Time,
+			&claim.event.DataContentType,
+			&claim.event.DataSchema,
 			&payload,
 			&claim.event.Attempt,
 			&claim.event.CreatedAt,
@@ -146,7 +129,8 @@ func (r *Repository) ClaimOutbox(ctx context.Context, limit int) ([]*OutboxClaim
 		); err != nil {
 			return nil, fmt.Errorf("scan PostgreSQL outbox claim: %w", err)
 		}
-		claim.event.Payload = append(json.RawMessage(nil), payload...)
+		claim.event.Data = append(json.RawMessage(nil), payload...)
+		claim.event.Time = claim.event.Time.UTC()
 		claim.event.CreatedAt = claim.event.CreatedAt.UTC()
 		claim.source = claim.event.Source
 		claim.eventID = claim.event.ID
@@ -158,10 +142,11 @@ func (r *Repository) ClaimOutbox(ctx context.Context, limit int) ([]*OutboxClaim
 	return claims, nil
 }
 
-func (r *Repository) RenewOutbox(ctx context.Context, claim *OutboxClaim) error {
+func (r *Repository) RenewOutbox(ctx context.Context, claim outbox.Claim) error {
 	if err := r.validateOutboxClaim(claim); err != nil {
 		return err
 	}
+	storedClaim := claim.(*outboxClaim)
 	tag, err := r.db.pool.Exec(ctx, `
 		UPDATE waybill.outbox_events
 		SET lease_deadline = clock_timestamp() + make_interval(secs => $6)
@@ -169,8 +154,8 @@ func (r *Repository) RenewOutbox(ctx context.Context, claim *OutboxClaim) error 
 		  AND status = 'publishing'
 		  AND lease_owner = $4 AND fencing_token = $5
 		  AND lease_deadline > clock_timestamp()
-	`, r.tenantID, claim.source, claim.eventID, claim.owner, claim.fence,
-		r.leaseTTL.Seconds())
+	`, r.tenantID, storedClaim.source, storedClaim.eventID, storedClaim.owner,
+		storedClaim.fence, r.outboxLeaseTTL.Seconds())
 	if err != nil {
 		return fmt.Errorf("renew PostgreSQL outbox lease: %w", err)
 	}
@@ -182,15 +167,16 @@ func (r *Repository) RenewOutbox(ctx context.Context, claim *OutboxClaim) error 
 
 func (r *Repository) CompleteOutbox(
 	ctx context.Context,
-	claim *OutboxClaim,
-	result OutboxResult,
+	claim outbox.Claim,
+	result outbox.Completion,
 ) error {
 	if err := r.validateOutboxClaim(claim); err != nil {
 		return err
 	}
-	if err := validateOutboxResult(result); err != nil {
+	if err := result.Validate(); err != nil {
 		return err
 	}
+	storedClaim := claim.(*outboxClaim)
 	tag, err := r.db.pool.Exec(ctx, `
 		UPDATE waybill.outbox_events
 		SET status = $6,
@@ -210,7 +196,8 @@ func (r *Repository) CompleteOutbox(
 		  AND status = 'publishing'
 		  AND lease_owner = $4 AND fencing_token = $5
 		  AND lease_deadline > clock_timestamp()
-	`, r.tenantID, claim.source, claim.eventID, claim.owner, claim.fence,
+	`, r.tenantID, storedClaim.source, storedClaim.eventID, storedClaim.owner,
+		storedClaim.fence,
 		result.Disposition, result.RetryAfter.Seconds(), result.ErrorCode)
 	if err != nil {
 		return fmt.Errorf("complete PostgreSQL outbox event: %w", err)
@@ -221,40 +208,102 @@ func (r *Repository) CompleteOutbox(
 	return nil
 }
 
-func (r *Repository) validateOutboxClaim(claim *OutboxClaim) error {
+func (r *Repository) OutboxStats(ctx context.Context) (outbox.Stats, error) {
+	if err := r.checkOpen(); err != nil {
+		return outbox.Stats{}, err
+	}
+	var stats outbox.Stats
+	if err := r.db.pool.QueryRow(ctx, `
+		SELECT
+			count(*) FILTER (WHERE status = 'pending'),
+			count(*) FILTER (WHERE status = 'publishing'),
+			count(*) FILTER (WHERE status = 'published'),
+			count(*) FILTER (WHERE status = 'retryable_failed'),
+			count(*) FILTER (WHERE status = 'permanent_failed'),
+			min(created_at) FILTER (WHERE status <> 'published')
+		FROM waybill.outbox_events
+		WHERE tenant_id = $1
+	`, r.tenantID).Scan(
+		&stats.Pending,
+		&stats.Publishing,
+		&stats.Published,
+		&stats.RetryableFailed,
+		&stats.PermanentFailed,
+		&stats.OldestUnpublishedAt,
+	); err != nil {
+		return outbox.Stats{}, fmt.Errorf("read PostgreSQL outbox stats: %w", err)
+	}
+	if stats.OldestUnpublishedAt != nil {
+		oldest := stats.OldestUnpublishedAt.UTC()
+		stats.OldestUnpublishedAt = &oldest
+	}
+	return stats, nil
+}
+
+func (r *Repository) RequeueOutbox(
+	ctx context.Context,
+	request outbox.RequeueRequest,
+) error {
 	if err := r.checkOpen(); err != nil {
 		return err
 	}
-	if claim == nil ||
-		claim.repository != r ||
-		claim.source == "" ||
-		claim.eventID == "" ||
-		claim.owner != r.workerID ||
-		claim.fence <= 0 {
-		return ErrStaleOutboxClaim
+	if err := request.Validate(); err != nil {
+		return err
+	}
+	tag, err := r.db.pool.Exec(ctx, `
+		WITH target AS MATERIALIZED (
+			SELECT requeue_count, COALESCE(last_error_code, 'legacy_unknown') AS failure_code
+			FROM waybill.outbox_events
+			WHERE tenant_id = $1 AND source = $2 AND event_id = $3
+			  AND status = 'permanent_failed'
+			FOR UPDATE
+		),
+		recorded AS (
+			INSERT INTO waybill.outbox_requeues (
+				tenant_id, source, event_id, requeue_no, failure_code,
+				actor, reason, requeued_at
+			)
+			SELECT $1, $2, $3, target.requeue_count + 1, target.failure_code,
+			       $4, $5, clock_timestamp()
+			FROM target
+			RETURNING requeue_no, requeued_at
+		)
+		UPDATE waybill.outbox_events event
+		SET status = 'pending',
+		    available_at = clock_timestamp(),
+		    last_error_code = NULL,
+		    lease_owner = NULL,
+		    lease_deadline = NULL,
+		    requeue_count = recorded.requeue_no,
+		    last_requeued_at = recorded.requeued_at,
+		    last_requeued_by = $4,
+		    last_requeue_reason = $5
+		FROM recorded
+		WHERE event.tenant_id = $1 AND event.source = $2 AND event.event_id = $3
+	`, r.tenantID, strings.TrimSpace(request.Source), strings.TrimSpace(request.EventID),
+		strings.TrimSpace(request.Actor), strings.TrimSpace(request.Reason))
+	if err != nil {
+		return fmt.Errorf("requeue PostgreSQL outbox event: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrOutboxNotRequeueable
 	}
 	return nil
 }
 
-func validateOutboxResult(result OutboxResult) error {
-	if result.RetryAfter < 0 {
-		return fmt.Errorf("outbox retry delay cannot be negative")
+func (r *Repository) validateOutboxClaim(claim outbox.Claim) error {
+	if err := r.checkOpen(); err != nil {
+		return err
 	}
-	switch result.Disposition {
-	case OutboxPublished:
-		if result.RetryAfter != 0 || result.ErrorCode != "" {
-			return fmt.Errorf("published outbox result cannot include retry or error fields")
-		}
-	case OutboxRetryableFailed:
-		if result.ErrorCode == "" {
-			return fmt.Errorf("retryable outbox failure requires an error code")
-		}
-	case OutboxPermanentFailed:
-		if result.RetryAfter != 0 || result.ErrorCode == "" {
-			return fmt.Errorf("permanent outbox failure requires only an error code")
-		}
-	default:
-		return fmt.Errorf("unsupported outbox disposition %q", result.Disposition)
+	storedClaim, ok := claim.(*outboxClaim)
+	if !ok ||
+		storedClaim == nil ||
+		storedClaim.repository != r ||
+		storedClaim.source == "" ||
+		storedClaim.eventID == "" ||
+		storedClaim.owner != r.workerID ||
+		storedClaim.fence <= 0 {
+		return ErrStaleOutboxClaim
 	}
 	return nil
 }

@@ -28,10 +28,12 @@ import (
 
 type testJWTClaims struct {
 	jwt.RegisteredClaims
-	TenantID   string   `json:"tenant_id"`
-	Roles      []string `json:"roles"`
-	WaybillAll bool     `json:"waybill_all"`
-	WaybillIDs []string `json:"waybill_ids"`
+	TenantID     string   `json:"tenant_id"`
+	Roles        []string `json:"roles"`
+	WaybillAll   bool     `json:"waybill_all"`
+	WaybillIDs   []string `json:"waybill_ids"`
+	EventSources []string `json:"event_sources,omitempty"`
+	EventTypes   []string `json:"event_types,omitempty"`
 }
 
 func TestJWTHandlerRequiresAuthenticationOnEveryAPIRoute(t *testing.T) {
