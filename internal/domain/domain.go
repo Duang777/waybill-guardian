@@ -6,6 +6,7 @@ type WaybillID string
 type DriverID string
 type CarrierID string
 type ApprovalID string
+type EffectID string
 type IdempotencyKey string
 
 type Action string
