@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 
@@ -58,4 +59,13 @@ type Draft struct {
 	Actor   Actor
 	Type    EventType
 	Payload any
+}
+
+type Journal interface {
+	Append(context.Context, domain.RunID, Draft) (Event, error)
+	Replay(context.Context, domain.RunID, Seq) ([]Event, error)
+	Subscribe(context.Context, domain.RunID, Seq) (*Subscription, error)
+	AllEvents() []Event
+	Verify(domain.RunID) error
+	Close() error
 }

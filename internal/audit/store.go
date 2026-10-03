@@ -118,10 +118,6 @@ func (s *Store) Append(ctx context.Context, runID domain.RunID, draft Draft) (Ev
 	if runID == "" || draft.EventID == "" || draft.Type == "" {
 		return Event{}, fmt.Errorf("run_id, event_id, and type are required")
 	}
-	payload, err := Redact(draft.Payload)
-	if err != nil {
-		return Event{}, err
-	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -139,18 +135,7 @@ func (s *Store) Append(ctx context.Context, runID domain.RunID, draft Draft) (Ev
 	if len(run.events) > 0 {
 		prevHash = run.events[len(run.events)-1].Hash
 	}
-	event := Event{
-		SchemaVersion: 1,
-		EventID:       draft.EventID,
-		Seq:           Seq(len(run.events) + 1),
-		TS:            s.clock().UTC(),
-		RunID:         runID,
-		Actor:         draft.Actor,
-		Type:          draft.Type,
-		Payload:       payload,
-		PrevHash:      prevHash,
-	}
-	event.Hash, err = hashEvent(event)
+	event, err := BuildEvent(runID, Seq(len(run.events)+1), prevHash, s.clock(), draft)
 	if err != nil {
 		return Event{}, err
 	}
@@ -432,6 +417,45 @@ func verifyEvents(runID domain.RunID, events []Event) error {
 		prevHash = event.Hash
 	}
 	return nil
+}
+
+func VerifyEvents(runID domain.RunID, events []Event) error {
+	return verifyEvents(runID, events)
+}
+
+func BuildEvent(
+	runID domain.RunID,
+	seq Seq,
+	prevHash string,
+	now time.Time,
+	draft Draft,
+) (Event, error) {
+	if runID == "" || draft.EventID == "" || draft.Type == "" {
+		return Event{}, fmt.Errorf("run_id, event_id, and type are required")
+	}
+	if seq == 0 {
+		return Event{}, fmt.Errorf("audit seq must be positive")
+	}
+	payload, err := Redact(draft.Payload)
+	if err != nil {
+		return Event{}, err
+	}
+	event := Event{
+		SchemaVersion: 1,
+		EventID:       draft.EventID,
+		Seq:           seq,
+		TS:            now.UTC(),
+		RunID:         runID,
+		Actor:         draft.Actor,
+		Type:          draft.Type,
+		Payload:       payload,
+		PrevHash:      prevHash,
+	}
+	event.Hash, err = hashEvent(event)
+	if err != nil {
+		return Event{}, err
+	}
+	return event, nil
 }
 
 func hashEvent(event Event) (string, error) {

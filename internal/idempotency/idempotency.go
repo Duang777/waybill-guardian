@@ -96,14 +96,14 @@ type reconciliationPayload struct {
 }
 
 type Store struct {
-	journal *audit.Store
+	journal audit.Journal
 	lookup  LookupFunc
 
 	mu      sync.Mutex
 	entries map[domain.IdempotencyKey]*entry
 }
 
-func NewStore(journal *audit.Store, lookup LookupFunc) (*Store, error) {
+func NewStore(journal audit.Journal, lookup LookupFunc) (*Store, error) {
 	if journal == nil {
 		return nil, fmt.Errorf("audit journal is required")
 	}

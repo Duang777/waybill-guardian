@@ -73,7 +73,7 @@ type Service struct {
 	ttl    time.Duration
 
 	clients   platform.Clients
-	journal   *audit.Store
+	journal   audit.Journal
 	approvals *approval.Store
 	effects   *idempotency.Store
 	registry  *guardtools.Registry

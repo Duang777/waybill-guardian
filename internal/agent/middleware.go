@@ -15,10 +15,10 @@ import (
 
 type AuditMiddleware struct {
 	agents.NoopMiddleware
-	journal *audit.Store
+	journal audit.Journal
 }
 
-func NewAuditMiddleware(journal *audit.Store) *AuditMiddleware {
+func NewAuditMiddleware(journal audit.Journal) *AuditMiddleware {
 	return &AuditMiddleware{journal: journal}
 }
 

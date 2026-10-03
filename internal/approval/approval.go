@@ -147,7 +147,7 @@ func (item Item) Identity() (idempotency.Identity, error) {
 }
 
 type Store struct {
-	journal *audit.Store
+	journal audit.Journal
 	clock   func() time.Time
 
 	mu        sync.Mutex
@@ -180,7 +180,7 @@ type reconciliationRequiredPayload struct {
 	Items      []ItemExecution   `json:"items"`
 }
 
-func NewStore(journal *audit.Store, clock func() time.Time) (*Store, error) {
+func NewStore(journal audit.Journal, clock func() time.Time) (*Store, error) {
 	if journal == nil {
 		return nil, fmt.Errorf("audit journal is required")
 	}
