@@ -81,19 +81,25 @@ func TestScenarioAgentPausesThenExecutesApprovedWrites(t *testing.T) {
 
 	items := make([]approval.Item, 0, len(outcome.Interrupts))
 	callIDs := make([]string, 0, len(outcome.Interrupts))
+	effectIDs := make(map[domain.EffectID]struct{}, len(outcome.Interrupts))
+	window := "incident-agent/plan-1"
 	for _, interrupt := range outcome.Interrupts {
+		var arguments map[string]json.RawMessage
+		if err := json.Unmarshal(interrupt.Arguments, &arguments); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := arguments["effect_id"]; ok {
+			t.Fatal("model-facing arguments contain effect_id")
+		}
+		if _, ok := arguments["idempotency_key"]; ok {
+			t.Fatal("model-facing arguments contain idempotency_key")
+		}
 		hash, err := idempotency.ArgumentsHash(string(interrupt.Arguments))
 		if err != nil {
 			t.Fatal(err)
 		}
-		var values map[string]json.RawMessage
-		if err := json.Unmarshal(interrupt.Arguments, &values); err != nil {
-			t.Fatal(err)
-		}
-		var key domain.IdempotencyKey
-		if err := json.Unmarshal(values["idempotency_key"], &key); err != nil {
-			t.Fatal(err)
-		}
+		identity := idempotency.Identify(interrupt.Action, runContext.WaybillID, window, hash)
+		effectIDs[identity.EffectID] = struct{}{}
 		callIDs = append(callIDs, interrupt.CallID)
 		items = append(items, approval.Item{
 			CallID:         interrupt.CallID,
@@ -101,8 +107,12 @@ func TestScenarioAgentPausesThenExecutesApprovedWrites(t *testing.T) {
 			WireName:       interrupt.WireName,
 			Params:         interrupt.Arguments,
 			ArgumentsHash:  hash,
-			IdempotencyKey: key,
+			EffectID:       identity.EffectID,
+			IdempotencyKey: identity.Key,
 		})
+	}
+	if len(effectIDs) != len(outcome.Interrupts) {
+		t.Fatalf("effect IDs = %d, interrupts = %d", len(effectIDs), len(outcome.Interrupts))
 	}
 	approvalID := approval.IDFor(runContext.RunID, callIDs)
 	if _, err := approvals.Create(context.Background(), approval.Approval{

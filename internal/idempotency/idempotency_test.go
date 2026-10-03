@@ -13,15 +13,19 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/domain"
 )
 
-func TestGenerate(t *testing.T) {
-	first := Generate(domain.ActionReassign, "YD2026101001", "incident-1/plan-1")
-	second := Generate(domain.ActionReassign, "YD2026101001", "incident-1/plan-1")
-	other := Generate(domain.ActionReassign, "YD2026101001", "incident-2/plan-1")
+func TestIdentify(t *testing.T) {
+	first := Identify(domain.ActionSendSMS, "YD2026101001", "incident-1/plan-1", "shipper-args")
+	second := Identify(domain.ActionSendSMS, "YD2026101001", "incident-1/plan-1", "shipper-args")
+	otherTarget := Identify(domain.ActionSendSMS, "YD2026101001", "incident-1/plan-1", "driver-args")
+	otherWindow := Identify(domain.ActionSendSMS, "YD2026101001", "incident-2/plan-1", "shipper-args")
 	if first != second {
-		t.Fatal("same business operation produced different keys")
+		t.Fatal("same logical effect produced different identities")
 	}
-	if first == other {
-		t.Fatal("different business windows produced the same key")
+	if first == otherTarget {
+		t.Fatal("same action with different arguments produced the same identity")
+	}
+	if first == otherWindow {
+		t.Fatal("different business windows produced the same identity")
 	}
 }
 
@@ -34,7 +38,7 @@ func TestConcurrentExecuteRunsEffectOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := Generate(domain.ActionReassign, "YD2026101001", "incident-1/plan-1")
+	identity := Identify(domain.ActionReassign, "YD2026101001", "incident-1/plan-1", "args-hash")
 	var calls atomic.Int64
 	const workers = 10
 	results := make([]Result, workers)
@@ -48,7 +52,8 @@ func TestConcurrentExecuteRunsEffectOnce(t *testing.T) {
 				RunID:         "run-concurrent",
 				CallID:        "call-" + string(rune('a'+index)),
 				Action:        domain.ActionReassign,
-				Key:           key,
+				EffectID:      identity.EffectID,
+				Key:           identity.Key,
 				ArgumentsHash: "args-hash",
 			}, func(context.Context) (json.RawMessage, error) {
 				calls.Add(1)
@@ -96,7 +101,8 @@ func TestMissingAndConflictingKeysAreRejected(t *testing.T) {
 
 	key := domain.IdempotencyKey("same-key")
 	_, err = store.Execute(context.Background(), Command{
-		RunID: "run-1", CallID: "call-1", Action: domain.ActionReassign, Key: key, ArgumentsHash: "first",
+		RunID: "run-1", CallID: "call-1", Action: domain.ActionReassign,
+		EffectID: "effect-1", Key: key, ArgumentsHash: "first",
 	}, func(context.Context) (json.RawMessage, error) {
 		return json.RawMessage(`{"ok":true}`), nil
 	})
@@ -104,7 +110,8 @@ func TestMissingAndConflictingKeysAreRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = store.Execute(context.Background(), Command{
-		RunID: "run-1", CallID: "call-2", Action: domain.ActionReassign, Key: key, ArgumentsHash: "second",
+		RunID: "run-1", CallID: "call-2", Action: domain.ActionReassign,
+		EffectID: "effect-1", Key: key, ArgumentsHash: "second",
 	}, func(context.Context) (json.RawMessage, error) {
 		t.Fatal("conflicting effect must not run")
 		return nil, nil
@@ -127,6 +134,7 @@ func TestSucceededMatchesDurableCommand(t *testing.T) {
 		RunID:         "run-1",
 		CallID:        "call-1",
 		Action:        domain.ActionReassign,
+		EffectID:      "effect-1",
 		Key:           "key-1",
 		ArgumentsHash: "args-hash",
 	}

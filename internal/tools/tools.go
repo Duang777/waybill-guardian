@@ -52,32 +52,43 @@ type GetRoadWeatherOutput struct {
 }
 
 type ReassignInput struct {
-	WaybillID      string `json:"waybill_id" jsonschema_description:"Waybill identifier"`
-	CarrierID      string `json:"carrier_id" jsonschema_description:"Target carrier identifier"`
-	IdempotencyKey string `json:"idempotency_key" jsonschema_description:"Stable key for this business effect"`
+	WaybillID string `json:"waybill_id" jsonschema_description:"Waybill identifier"`
+	CarrierID string `json:"carrier_id" jsonschema_description:"Target carrier identifier"`
 }
 
 type ReassignOutput = platform.ReassignOrder
 
 type CreateClaimInput struct {
-	WaybillID      string `json:"waybill_id" jsonschema_description:"Waybill identifier"`
-	ClaimType      string `json:"claim_type" jsonschema_description:"Claim category"`
-	IdempotencyKey string `json:"idempotency_key" jsonschema_description:"Stable key for this business effect"`
+	WaybillID string `json:"waybill_id" jsonschema_description:"Waybill identifier"`
+	ClaimType string `json:"claim_type" jsonschema_description:"Claim category"`
 }
 
 type CreateClaimOutput = platform.ClaimOrder
 
 type SendSMSInput struct {
-	Phone          string            `json:"phone" jsonschema_description:"Destination mobile number"`
-	TemplateID     string            `json:"template_id" jsonschema_description:"Notification template identifier"`
-	Params         map[string]string `json:"params" jsonschema_description:"Template variables"`
-	IdempotencyKey string            `json:"idempotency_key" jsonschema_description:"Stable key for this business effect"`
+	Phone      string            `json:"phone" jsonschema_description:"Destination mobile number"`
+	TemplateID string            `json:"template_id" jsonschema_description:"Notification template identifier"`
+	Params     map[string]string `json:"params" jsonschema_description:"Template variables"`
 }
 
 type SendSMSOutput = platform.SMSReceipt
 
 type Handlers struct {
 	clients platform.Clients
+}
+
+type idempotencyKeyContextKey struct{}
+
+func WithIdempotencyKey(ctx context.Context, key domain.IdempotencyKey) context.Context {
+	return context.WithValue(ctx, idempotencyKeyContextKey{}, key)
+}
+
+func idempotencyKeyFromContext(ctx context.Context) (domain.IdempotencyKey, error) {
+	key, _ := ctx.Value(idempotencyKeyContextKey{}).(domain.IdempotencyKey)
+	if key == "" {
+		return "", fmt.Errorf("server-generated idempotency key is required")
+	}
+	return key, nil
 }
 
 func NewHandlers(clients platform.Clients) (*Handlers, error) {
@@ -136,13 +147,14 @@ func (h *Handlers) Reassign(ctx context.Context, in ReassignInput) (ReassignOutp
 	if in.CarrierID == "" {
 		return ReassignOutput{}, fmt.Errorf("carrier_id is required")
 	}
-	if in.IdempotencyKey == "" {
-		return ReassignOutput{}, fmt.Errorf("idempotency_key is required")
+	key, err := idempotencyKeyFromContext(ctx)
+	if err != nil {
+		return ReassignOutput{}, err
 	}
 	return h.clients.TMS.Reassign(ctx, platform.ReassignRequest{
 		WaybillID:      domain.WaybillID(in.WaybillID),
 		CarrierID:      domain.CarrierID(in.CarrierID),
-		IdempotencyKey: domain.IdempotencyKey(in.IdempotencyKey),
+		IdempotencyKey: key,
 	})
 }
 
@@ -153,13 +165,14 @@ func (h *Handlers) CreateClaim(ctx context.Context, in CreateClaimInput) (Create
 	if in.ClaimType == "" {
 		return CreateClaimOutput{}, fmt.Errorf("claim_type is required")
 	}
-	if in.IdempotencyKey == "" {
-		return CreateClaimOutput{}, fmt.Errorf("idempotency_key is required")
+	key, err := idempotencyKeyFromContext(ctx)
+	if err != nil {
+		return CreateClaimOutput{}, err
 	}
 	return h.clients.TMS.CreateClaim(ctx, platform.CreateClaimRequest{
 		WaybillID:      domain.WaybillID(in.WaybillID),
 		ClaimType:      in.ClaimType,
-		IdempotencyKey: domain.IdempotencyKey(in.IdempotencyKey),
+		IdempotencyKey: key,
 	})
 }
 
@@ -170,14 +183,15 @@ func (h *Handlers) SendSMS(ctx context.Context, in SendSMSInput) (SendSMSOutput,
 	if in.Params == nil {
 		return SendSMSOutput{}, fmt.Errorf("params is required")
 	}
-	if in.IdempotencyKey == "" {
-		return SendSMSOutput{}, fmt.Errorf("idempotency_key is required")
+	key, err := idempotencyKeyFromContext(ctx)
+	if err != nil {
+		return SendSMSOutput{}, err
 	}
 	return h.clients.Notification.SendSMS(ctx, platform.SendSMSRequest{
 		Phone:          in.Phone,
 		TemplateID:     in.TemplateID,
 		Params:         in.Params,
-		IdempotencyKey: domain.IdempotencyKey(in.IdempotencyKey),
+		IdempotencyKey: key,
 	})
 }
 

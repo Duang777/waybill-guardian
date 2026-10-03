@@ -10,7 +10,8 @@
 
 - 七个工具与 [`contract.yaml`](./contract.yaml) 对齐。四个只读工具自动执行，三个写工具强制审批。
 - hastekit v0.0.24 负责 Agent loop、typed tools、文件历史和 HITL pause/resume。
-- 服务端重算幂等键。同一业务 effect 并发执行十次时，platform 只收到一次调用。
+- 服务端从方案与业务参数生成 effect ID 和幂等键。同一业务 effect 并发执行十次时，platform
+  只收到一次调用。
 - 每个 run 使用一份 append-only JSONL。事件包含连续序号、前序哈希和当前哈希。
 - SSE 支持 `Last-Event-ID` 续传。前端按 `(run_id, seq)` 去重。
 - 审批支持确认、驳回和超时。首选运力被驳回后，Agent 会提交第二个候选方案。

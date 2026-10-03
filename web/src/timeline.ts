@@ -135,6 +135,7 @@ const approvalExecutionFailedSchema = z
         .object({
           call_id: z.string().min(1),
           action: z.string().min(1),
+          effect_id: z.string().uuid(),
           idempotency_key: z.string().min(1),
           status: z.enum(["succeeded", "failed", "started", "indeterminate", "missing"]),
         })

@@ -11,6 +11,7 @@ import (
 
 	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/google/uuid"
 )
 
 var (
@@ -18,6 +19,8 @@ var (
 	ErrKeyConflict   = errors.New("idempotency key was already used with different arguments")
 	ErrIndeterminate = errors.New("previous execution has no durable result")
 )
+
+var effectNamespace = uuid.MustParse("cb7d4ee2-ec1d-5a91-bf19-bc062ac8bcaf")
 
 type State string
 
@@ -32,8 +35,14 @@ type Command struct {
 	RunID         domain.RunID
 	CallID        string
 	Action        domain.Action
+	EffectID      domain.EffectID
 	Key           domain.IdempotencyKey
 	ArgumentsHash string
+}
+
+type Identity struct {
+	EffectID domain.EffectID
+	Key      domain.IdempotencyKey
 }
 
 type Result struct {
@@ -50,6 +59,7 @@ type entry struct {
 
 type writeStartedPayload struct {
 	Key           domain.IdempotencyKey `json:"idempotency_key"`
+	EffectID      domain.EffectID       `json:"effect_id,omitempty"`
 	CallID        string                `json:"call_id"`
 	Action        domain.Action         `json:"action"`
 	ArgumentsHash string                `json:"arguments_hash"`
@@ -57,6 +67,7 @@ type writeStartedPayload struct {
 
 type writeResultPayload struct {
 	Key           domain.IdempotencyKey `json:"idempotency_key"`
+	EffectID      domain.EffectID       `json:"effect_id,omitempty"`
 	CallID        string                `json:"call_id"`
 	Action        domain.Action         `json:"action"`
 	ArgumentsHash string                `json:"arguments_hash"`
@@ -88,6 +99,7 @@ func NewStore(journal *audit.Store) (*Store, error) {
 					RunID:         event.RunID,
 					CallID:        payload.CallID,
 					Action:        payload.Action,
+					EffectID:      payload.EffectID,
 					Key:           payload.Key,
 					ArgumentsHash: payload.ArgumentsHash,
 				},
@@ -108,6 +120,7 @@ func NewStore(journal *audit.Store) (*Store, error) {
 					RunID:         event.RunID,
 					CallID:        payload.CallID,
 					Action:        payload.Action,
+					EffectID:      payload.EffectID,
 					Key:           payload.Key,
 					ArgumentsHash: payload.ArgumentsHash,
 				},
@@ -120,9 +133,19 @@ func NewStore(journal *audit.Store) (*Store, error) {
 	return store, nil
 }
 
-func Generate(action domain.Action, waybillID domain.WaybillID, businessWindow string) domain.IdempotencyKey {
-	sum := sha256.Sum256([]byte(string(action) + "|" + string(waybillID) + "|" + businessWindow))
-	return domain.IdempotencyKey(hex.EncodeToString(sum[:]))
+func Identify(
+	action domain.Action,
+	waybillID domain.WaybillID,
+	businessWindow string,
+	argumentsHash string,
+) Identity {
+	name := string(action) + "|" + string(waybillID) + "|" + businessWindow + "|" + argumentsHash
+	effectID := domain.EffectID(uuid.NewSHA1(effectNamespace, []byte(name)).String())
+	sum := sha256.Sum256([]byte(effectID))
+	return Identity{
+		EffectID: effectID,
+		Key:      domain.IdempotencyKey(hex.EncodeToString(sum[:])),
+	}
 }
 
 func ArgumentsHash(raw string) (string, error) {
@@ -146,14 +169,17 @@ func (s *Store) Execute(
 	if command.Key == "" {
 		return Result{}, ErrMissingKey
 	}
-	if command.RunID == "" || command.CallID == "" || command.Action == "" || command.ArgumentsHash == "" {
-		return Result{}, fmt.Errorf("run id, call id, action, and arguments hash are required")
+	if command.RunID == "" || command.CallID == "" || command.Action == "" ||
+		command.EffectID == "" || command.ArgumentsHash == "" {
+		return Result{}, fmt.Errorf("run id, call id, action, effect id, and arguments hash are required")
 	}
 	for {
 		s.mu.Lock()
 		existing := s.entries[command.Key]
 		if existing != nil {
-			if existing.ArgumentsHash != command.ArgumentsHash || existing.Action != command.Action {
+			if existing.ArgumentsHash != command.ArgumentsHash ||
+				existing.Action != command.Action ||
+				existing.EffectID != command.EffectID {
 				s.mu.Unlock()
 				return Result{}, ErrKeyConflict
 			}
@@ -167,6 +193,7 @@ func (s *Store) Execute(
 					Type:    audit.EventDuplicateSuppressed,
 					Payload: map[string]any{
 						"idempotency_key": command.Key,
+						"effect_id":       command.EffectID,
 						"action":          command.Action,
 						"call_id":         command.CallID,
 					},
@@ -198,6 +225,7 @@ func (s *Store) Execute(
 			Type:    audit.EventWriteStarted,
 			Payload: writeStartedPayload{
 				Key:           command.Key,
+				EffectID:      command.EffectID,
 				CallID:        command.CallID,
 				Action:        command.Action,
 				ArgumentsHash: command.ArgumentsHash,
@@ -212,6 +240,7 @@ func (s *Store) Execute(
 		eventType := audit.EventWriteExecuted
 		payload := writeResultPayload{
 			Key:           command.Key,
+			EffectID:      command.EffectID,
 			CallID:        command.CallID,
 			Action:        command.Action,
 			ArgumentsHash: command.ArgumentsHash,
@@ -254,6 +283,7 @@ func (s *Store) Lookup(command Command) (State, bool) {
 	if current == nil ||
 		current.RunID != command.RunID ||
 		current.Action != command.Action ||
+		current.EffectID != command.EffectID ||
 		current.ArgumentsHash != command.ArgumentsHash {
 		return "", false
 	}

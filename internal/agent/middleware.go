@@ -126,27 +126,21 @@ func (m *IdempotencyMiddleware) WrapToolCall(next agents.ToolCallFunc) agents.To
 		if err != nil {
 			return nil, err
 		}
-		key, err := keyFromArguments(call.Arguments)
-		if err != nil {
-			return nil, err
-		}
-		window := fmt.Sprintf("%s/plan-%d", runContext.IncidentID, runContext.PlanVersion)
-		expected := idempotency.Generate(action, runContext.WaybillID, window)
-		if key != expected {
-			return nil, fmt.Errorf("%w: got %q", idempotency.ErrMissingKey, key)
-		}
 		hash, err := idempotency.ArgumentsHash(call.Arguments)
 		if err != nil {
 			return nil, err
 		}
+		window := fmt.Sprintf("%s/plan-%d", runContext.IncidentID, runContext.PlanVersion)
+		identity := idempotency.Identify(action, runContext.WaybillID, window, hash)
 		result, err := m.store.Execute(ctx, idempotency.Command{
 			RunID:         runContext.RunID,
 			CallID:        call.CallID,
 			Action:        action,
-			Key:           key,
+			EffectID:      identity.EffectID,
+			Key:           identity.Key,
 			ArgumentsHash: hash,
 		}, func(ctx context.Context) (json.RawMessage, error) {
-			response, err := next(ctx, tool, call)
+			response, err := next(guardtools.WithIdempotencyKey(ctx, identity.Key), tool, call)
 			if err != nil {
 				return nil, err
 			}
@@ -188,20 +182,4 @@ func runIDFromCall(call *agents.ToolCall) (domain.RunID, error) {
 		return "", fmt.Errorf("run_id is missing from tool context")
 	}
 	return domain.RunID(value), nil
-}
-
-func keyFromArguments(raw string) (domain.IdempotencyKey, error) {
-	var values map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &values); err != nil {
-		return "", fmt.Errorf("decode write arguments: %w", err)
-	}
-	value := values["idempotency_key"]
-	if len(value) == 0 {
-		return "", idempotency.ErrMissingKey
-	}
-	var key string
-	if err := json.Unmarshal(value, &key); err != nil || key == "" {
-		return "", idempotency.ErrMissingKey
-	}
-	return domain.IdempotencyKey(key), nil
 }

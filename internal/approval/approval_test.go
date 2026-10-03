@@ -196,8 +196,9 @@ func TestRebuildsPartiallyFailedApproval(t *testing.T) {
 		CallID:         "call-sms",
 		Action:         domain.ActionSendSMS,
 		WireName:       "notify_send_sms",
-		Params:         json.RawMessage(`{"idempotency_key":"key-sms"}`),
+		Params:         json.RawMessage(`{"phone":"13800001234"}`),
 		ArgumentsHash:  "hash-sms",
+		EffectID:       "effect-sms",
 		IdempotencyKey: "key-sms",
 	})
 	created, err := store.Create(context.Background(), value)
@@ -214,12 +215,14 @@ func TestRebuildsPartiallyFailedApproval(t *testing.T) {
 		{
 			CallID:         "call-reassign",
 			Action:         domain.ActionReassign,
+			EffectID:       "effect-key",
 			IdempotencyKey: "key",
 			Status:         ExecutionSucceeded,
 		},
 		{
 			CallID:         "call-sms",
 			Action:         domain.ActionSendSMS,
+			EffectID:       "effect-sms",
 			IdempotencyKey: "key-sms",
 			Status:         ExecutionFailed,
 		},
@@ -254,9 +257,8 @@ func TestRebuildsPartiallyFailedApproval(t *testing.T) {
 
 func testApproval(runID, callID string) Approval {
 	params, _ := json.Marshal(map[string]string{
-		"waybill_id":      "YD2026101001",
-		"carrier_id":      "CARRIER-SW-42",
-		"idempotency_key": "key",
+		"waybill_id": "YD2026101001",
+		"carrier_id": "CARRIER-SW-42",
 	})
 	return Approval{
 		ID:        IDFor(domain.RunID(runID), []string{callID}),
@@ -268,6 +270,7 @@ func testApproval(runID, callID string) Approval {
 			WireName:       "tms_reassign",
 			Params:         params,
 			ArgumentsHash:  "hash",
+			EffectID:       "effect-key",
 			IdempotencyKey: "key",
 		}},
 		Reason: "fatigue and extended stop",

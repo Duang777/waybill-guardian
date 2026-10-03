@@ -25,7 +25,7 @@ handler 校验参数，调用 `internal/platform` 接口，再返回 typed resul
 
 - 四个读工具设置 `ReadOnlyHint`，不需要审批。
 - 三个写工具设置 `RequiresApproval` 和 `IdempotentHint`。
-- 每个写工具 schema 都包含 `idempotency_key`。
+- 写工具 schema 只包含业务参数。middleware 通过 context 注入服务端生成的幂等键。
 - `waybill_id` 必须匹配 `YD` 加十位数字。
 - handler 校验空字符串和缺失对象。业务约束由 platform 实现。
 

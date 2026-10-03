@@ -587,6 +587,7 @@ func (s *Service) approvalEffectResults(value approval.Approval) ([]approval.Ite
 			RunID:         value.RunID,
 			CallID:        item.CallID,
 			Action:        item.Action,
+			EffectID:      item.EffectID,
 			Key:           item.IdempotencyKey,
 			ArgumentsHash: item.ArgumentsHash,
 		})
@@ -609,6 +610,7 @@ func (s *Service) approvalEffectResults(value approval.Approval) ([]approval.Ite
 		results = append(results, approval.ItemExecution{
 			CallID:         item.CallID,
 			Action:         item.Action,
+			EffectID:       item.EffectID,
 			IdempotencyKey: item.IdempotencyKey,
 			Status:         status,
 		})
@@ -726,22 +728,21 @@ func (s *Service) createApproval(
 ) (approval.Approval, error) {
 	items := make([]approval.Item, 0, len(outcome.Interrupts))
 	callIDs := make([]string, 0, len(outcome.Interrupts))
+	window := fmt.Sprintf("%s/plan-%d", run.IncidentID, planVersion)
 	for _, interrupt := range outcome.Interrupts {
 		hash, err := idempotency.ArgumentsHash(string(interrupt.Arguments))
 		if err != nil {
 			return approval.Approval{}, err
 		}
-		key, err := idempotencyKey(interrupt.Arguments)
-		if err != nil {
-			return approval.Approval{}, err
-		}
+		identity := idempotency.Identify(interrupt.Action, run.WaybillID, window, hash)
 		items = append(items, approval.Item{
 			CallID:         interrupt.CallID,
 			Action:         interrupt.Action,
 			WireName:       interrupt.WireName,
 			Params:         interrupt.Arguments,
 			ArgumentsHash:  hash,
-			IdempotencyKey: key,
+			EffectID:       identity.EffectID,
+			IdempotencyKey: identity.Key,
 		})
 		callIDs = append(callIDs, interrupt.CallID)
 	}
@@ -854,18 +855,6 @@ func interruptsFromApproval(value approval.Approval) []agentkit.Interrupt {
 		})
 	}
 	return result
-}
-
-func idempotencyKey(raw json.RawMessage) (domain.IdempotencyKey, error) {
-	var values map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &values); err != nil {
-		return "", err
-	}
-	var key string
-	if err := json.Unmarshal(values["idempotency_key"], &key); err != nil || key == "" {
-		return "", idempotency.ErrMissingKey
-	}
-	return domain.IdempotencyKey(key), nil
 }
 
 func IsNotFound(err error) bool {

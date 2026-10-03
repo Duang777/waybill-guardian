@@ -23,7 +23,7 @@ pending → confirmed → executed
 一次 hastekit pause 中的所有写调用组成一个不可变审批批次。主要字段包括：
 
 - `id`、`run_id`、`sdk_run_id`、`waybill_id` 和 `plan_version`。
-- `items[]`：`call_id`、action、wire name、完整参数、参数哈希和幂等键。
+- `items[]`：`call_id`、action、wire name、完整参数、参数哈希、服务端 effect ID 和幂等键。
 - `reason` 和 `evidence`。
 - `status`、`requested_at`、`expires_at`、`decided_by`、`decided_at` 和 `reject_reason`。
 
