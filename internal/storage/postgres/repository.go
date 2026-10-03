@@ -17,22 +17,24 @@ import (
 var ErrRepositoryClosed = errors.New("PostgreSQL repository is closed")
 
 type RepositoryConfig struct {
-	TenantID     string
-	WorkerID     string
-	LeaseTTL     time.Duration
-	PollInterval time.Duration
-	Clock        func() time.Time
-	EffectLookup idempotency.LookupFunc
+	TenantID       string
+	WorkerID       string
+	LeaseTTL       time.Duration
+	OutboxLeaseTTL time.Duration
+	PollInterval   time.Duration
+	Clock          func() time.Time
+	EffectLookup   idempotency.LookupFunc
 }
 
 type Repository struct {
-	db           *DB
-	tenantID     string
-	workerID     string
-	leaseTTL     time.Duration
-	pollInterval time.Duration
-	clock        func() time.Time
-	effectLookup idempotency.LookupFunc
+	db             *DB
+	tenantID       string
+	workerID       string
+	leaseTTL       time.Duration
+	outboxLeaseTTL time.Duration
+	pollInterval   time.Duration
+	clock          func() time.Time
+	effectLookup   idempotency.LookupFunc
 
 	mu            sync.Mutex
 	closed        bool
@@ -53,6 +55,9 @@ func NewRepository(db *DB, config RepositoryConfig) (*Repository, error) {
 	if config.LeaseTTL <= 0 {
 		config.LeaseTTL = 30 * time.Second
 	}
+	if config.OutboxLeaseTTL <= 0 {
+		config.OutboxLeaseTTL = 30 * time.Second
+	}
 	if config.PollInterval <= 0 {
 		config.PollInterval = 250 * time.Millisecond
 	}
@@ -60,14 +65,15 @@ func NewRepository(db *DB, config RepositoryConfig) (*Repository, error) {
 		config.Clock = time.Now
 	}
 	return &Repository{
-		db:            db,
-		tenantID:      config.TenantID,
-		workerID:      config.WorkerID,
-		leaseTTL:      config.LeaseTTL,
-		pollInterval:  config.PollInterval,
-		clock:         config.Clock,
-		effectLookup:  config.EffectLookup,
-		subscriptions: make(map[uint64]context.CancelFunc),
+		db:             db,
+		tenantID:       config.TenantID,
+		workerID:       config.WorkerID,
+		leaseTTL:       config.LeaseTTL,
+		outboxLeaseTTL: config.OutboxLeaseTTL,
+		pollInterval:   config.PollInterval,
+		clock:          config.Clock,
+		effectLookup:   config.EffectLookup,
+		subscriptions:  make(map[uint64]context.CancelFunc),
 	}, nil
 }
 

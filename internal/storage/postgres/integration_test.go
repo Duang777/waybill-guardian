@@ -20,6 +20,7 @@ import (
 	eventmodel "github.com/Duang777/waybill-guardian/internal/events"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
 	"github.com/Duang777/waybill-guardian/internal/idempotency"
+	outboxmodel "github.com/Duang777/waybill-guardian/internal/outbox"
 	guardtools "github.com/Duang777/waybill-guardian/internal/tools"
 	"github.com/google/uuid"
 	"github.com/hastekit/agent-sdk-go/pkg/agents/history"
@@ -802,6 +803,7 @@ func TestOutboxClaimRenewCompleteAndReclaimAreFenced(t *testing.T) {
 		t.Fatalf("first outbox claims = %d, want 1", len(claims))
 	}
 	firstClaim := claims[0]
+	firstStoredClaim := firstClaim.(*outboxClaim)
 	if event := firstClaim.Event(); event.AggregateVersion != 1 || event.Attempt != 1 {
 		t.Fatalf("first outbox event = %+v", event)
 	}
@@ -817,7 +819,7 @@ func TestOutboxClaimRenewCompleteAndReclaimAreFenced(t *testing.T) {
 		UPDATE waybill.outbox_events
 		SET lease_deadline = clock_timestamp() - interval '1 second'
 		WHERE tenant_id = $1 AND source = $2 AND event_id = $3
-	`, tenantID, firstClaim.source, firstClaim.eventID); err != nil {
+	`, tenantID, firstStoredClaim.source, firstStoredClaim.eventID); err != nil {
 		t.Fatal(err)
 	}
 	claims, err = second.ClaimOutbox(t.Context(), 10)
@@ -828,11 +830,16 @@ func TestOutboxClaimRenewCompleteAndReclaimAreFenced(t *testing.T) {
 		t.Fatalf("reclaimed outbox events = %d, want 1", len(claims))
 	}
 	secondClaim := claims[0]
+	secondStoredClaim := secondClaim.(*outboxClaim)
 	if event := secondClaim.Event(); event.AggregateVersion != 1 || event.Attempt != 2 {
 		t.Fatalf("reclaimed outbox event = %+v", event)
 	}
-	if secondClaim.fence <= firstClaim.fence {
-		t.Fatalf("reclaimed fence = %d, first fence = %d", secondClaim.fence, firstClaim.fence)
+	if secondStoredClaim.fence <= firstStoredClaim.fence {
+		t.Fatalf(
+			"reclaimed fence = %d, first fence = %d",
+			secondStoredClaim.fence,
+			firstStoredClaim.fence,
+		)
 	}
 	if err := second.RenewOutbox(t.Context(), secondClaim); err != nil {
 		t.Fatalf("renew current outbox claim: %v", err)
@@ -840,13 +847,13 @@ func TestOutboxClaimRenewCompleteAndReclaimAreFenced(t *testing.T) {
 	if err := first.RenewOutbox(t.Context(), firstClaim); !errors.Is(err, ErrStaleOutboxClaim) {
 		t.Fatalf("stale outbox renewal = %v, want ErrStaleOutboxClaim", err)
 	}
-	if err := first.CompleteOutbox(t.Context(), firstClaim, OutboxResult{
-		Disposition: OutboxPublished,
+	if err := first.CompleteOutbox(t.Context(), firstClaim, outboxmodel.Completion{
+		Disposition: outboxmodel.Published,
 	}); !errors.Is(err, ErrStaleOutboxClaim) {
 		t.Fatalf("stale outbox completion = %v, want ErrStaleOutboxClaim", err)
 	}
-	if err := second.CompleteOutbox(t.Context(), secondClaim, OutboxResult{
-		Disposition: OutboxPublished,
+	if err := second.CompleteOutbox(t.Context(), secondClaim, outboxmodel.Completion{
+		Disposition: outboxmodel.Published,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -859,8 +866,9 @@ func TestOutboxClaimRenewCompleteAndReclaimAreFenced(t *testing.T) {
 		t.Fatalf("next outbox claim = %+v", claims)
 	}
 	nextClaim := claims[0]
-	if err := first.CompleteOutbox(t.Context(), nextClaim, OutboxResult{
-		Disposition: OutboxRetryableFailed,
+	nextStoredClaim := nextClaim.(*outboxClaim)
+	if err := first.CompleteOutbox(t.Context(), nextClaim, outboxmodel.Completion{
+		Disposition: outboxmodel.RetryableFailed,
 		RetryAfter:  time.Hour,
 		ErrorCode:   "broker_unavailable",
 	}); err != nil {
@@ -877,7 +885,7 @@ func TestOutboxClaimRenewCompleteAndReclaimAreFenced(t *testing.T) {
 		UPDATE waybill.outbox_events
 		SET available_at = clock_timestamp() - interval '1 second'
 		WHERE tenant_id = $1 AND source = $2 AND event_id = $3
-	`, tenantID, nextClaim.source, nextClaim.eventID); err != nil {
+	`, tenantID, nextStoredClaim.source, nextStoredClaim.eventID); err != nil {
 		t.Fatal(err)
 	}
 	claims, err = second.ClaimOutbox(t.Context(), 10)
@@ -887,8 +895,8 @@ func TestOutboxClaimRenewCompleteAndReclaimAreFenced(t *testing.T) {
 	if len(claims) != 1 || claims[0].Event().Attempt != 2 {
 		t.Fatalf("retryable outbox claims = %+v", claims)
 	}
-	if err := second.CompleteOutbox(t.Context(), claims[0], OutboxResult{
-		Disposition: OutboxPublished,
+	if err := second.CompleteOutbox(t.Context(), claims[0], outboxmodel.Completion{
+		Disposition: outboxmodel.Published,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -900,16 +908,131 @@ func TestOutboxClaimRenewCompleteAndReclaimAreFenced(t *testing.T) {
 		SELECT status, published_at, lease_owner
 		FROM waybill.outbox_events
 		WHERE tenant_id = $1 AND source = $2 AND event_id = $3
-	`, tenantID, nextClaim.source, nextClaim.eventID).Scan(
+	`, tenantID, nextStoredClaim.source, nextStoredClaim.eventID).Scan(
 		&status,
 		&publishedAt,
 		&leaseOwner,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if status != string(OutboxPublished) || publishedAt == nil || leaseOwner != nil {
+	if status != string(outboxmodel.Published) || publishedAt == nil || leaseOwner != nil {
 		t.Fatalf("completed outbox state = status %q published %v owner %v",
 			status, publishedAt, leaseOwner)
+	}
+}
+
+func TestOutboxPermanentFailureRequiresAuditedExactRequeue(t *testing.T) {
+	db := openIntegrationDB(t)
+	tenantID := "tenant-" + uuid.NewString()
+	repository := newIntegrationRepository(t, db, tenantID, "worker-1")
+	defer repository.Close()
+
+	runID := domain.RunID(uuid.NewString())
+	appendStarted(t, repository, runID)
+	runCtx, release, err := repository.AcquireRun(t.Context(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.Append(runCtx, runID, toolCallDraft("blocked-next")); err != nil {
+		t.Fatal(err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+
+	claims, err := repository.ClaimOutbox(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 1 {
+		t.Fatalf("initial claims = %d, want 1", len(claims))
+	}
+	first := claims[0]
+	event := first.Event()
+	if event.Time.IsZero() ||
+		event.DataContentType != "application/json" ||
+		event.DataSchema != "urn:waybill-guardian:schema:run-audit:v1" ||
+		len(event.Data) == 0 {
+		t.Fatalf("claimed event metadata = %+v", event)
+	}
+	if err := repository.CompleteOutbox(t.Context(), first, outboxmodel.Completion{
+		Disposition: outboxmodel.PermanentFailed,
+		ErrorCode:   "downstream_rejected",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := repository.OutboxStats(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Pending != 1 || stats.PermanentFailed != 1 ||
+		stats.OldestUnpublishedAt == nil {
+		t.Fatalf("outbox stats after permanent failure = %+v", stats)
+	}
+	blocked, err := repository.ClaimOutbox(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocked) != 0 {
+		t.Fatalf("claims behind permanent failure = %+v, want none", blocked)
+	}
+	if err := repository.RequeueOutbox(t.Context(), outboxmodel.RequeueRequest{
+		Source:  event.Source,
+		EventID: "missing",
+		Actor:   "operator@example.com",
+		Reason:  "downstream contract repaired",
+	}); !errors.Is(err, ErrOutboxNotRequeueable) {
+		t.Fatalf("requeue wrong event error = %v, want ErrOutboxNotRequeueable", err)
+	}
+	if err := repository.RequeueOutbox(t.Context(), outboxmodel.RequeueRequest{
+		Source:  event.Source,
+		EventID: event.ID,
+		Actor:   "operator@example.com",
+		Reason:  "downstream contract repaired",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		status       string
+		requeueCount int
+		requeuedBy   string
+		reason       string
+	)
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT status, requeue_count, last_requeued_by, last_requeue_reason
+		FROM waybill.outbox_events
+		WHERE tenant_id = $1 AND source = $2 AND event_id = $3
+	`, tenantID, event.Source, event.ID).Scan(
+		&status,
+		&requeueCount,
+		&requeuedBy,
+		&reason,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if status != "pending" ||
+		requeueCount != 1 ||
+		requeuedBy != "operator@example.com" ||
+		reason != "downstream contract repaired" {
+		t.Fatalf(
+			"requeue audit = status:%q count:%d actor:%q reason:%q",
+			status,
+			requeueCount,
+			requeuedBy,
+			reason,
+		)
+	}
+
+	retried, err := repository.ClaimOutbox(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(retried) != 1 ||
+		retried[0].Event().ID != event.ID ||
+		retried[0].Event().Attempt != 2 {
+		t.Fatalf("requeued claims = %+v", retried)
 	}
 }
 
@@ -1675,10 +1798,11 @@ func newIntegrationRepository(
 ) *Repository {
 	t.Helper()
 	repository, err := NewRepository(db, RepositoryConfig{
-		TenantID:     tenantID,
-		WorkerID:     workerID,
-		LeaseTTL:     5 * time.Second,
-		PollInterval: 10 * time.Millisecond,
+		TenantID:       tenantID,
+		WorkerID:       workerID,
+		LeaseTTL:       5 * time.Second,
+		OutboxLeaseTTL: 5 * time.Second,
+		PollInterval:   10 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
