@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -232,6 +233,57 @@ func TestApprovalExpiresAndResumesWithoutManualRecovery(t *testing.T) {
 	}
 	if mock.WriteCount(domain.ActionReassign) != 0 || mock.WriteCount(domain.ActionSendSMS) != 0 {
 		t.Fatal("expired approvals executed writes")
+	}
+}
+
+func TestLateConfirmExpiresAndResumesBeforeTimer(t *testing.T) {
+	clients, mock, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clockNanos atomic.Int64
+	clockNanos.Store(time.Date(2026, 10, 3, 8, 0, 0, 0, time.UTC).UnixNano())
+	clock := func() time.Time {
+		return time.Unix(0, clockNanos.Load()).UTC()
+	}
+	service, err := Open(Config{
+		DataDir:     t.TempDir(),
+		Clients:     clients,
+		Clock:       clock,
+		ApprovalTTL: time.Hour,
+		StepDelay:   0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+
+	run, err := service.StartDemo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := waitForApproval(t, service, run.RunID)
+	clockNanos.Store(first.ExpiresAt.UnixNano())
+
+	if _, err := service.Decide(context.Background(), first.ID, DecisionRequest{
+		Kind:      approval.DecisionConfirm,
+		DecidedBy: "late-reviewer",
+	}); !errors.Is(err, approval.ErrDecisionConflict) {
+		t.Fatalf("late confirm error = %v, want ErrDecisionConflict", err)
+	}
+	expired, err := service.GetApproval(first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired.Status != approval.StatusExpired {
+		t.Fatalf("expired approval status = %q", expired.Status)
+	}
+	second := waitForDifferentApproval(t, service, run.RunID, first.ID)
+	if second.PlanVersion != 2 {
+		t.Fatalf("replacement plan version = %d, want 2", second.PlanVersion)
+	}
+	if mock.WriteCount(domain.ActionReassign) != 0 || mock.WriteCount(domain.ActionSendSMS) != 0 {
+		t.Fatal("late confirmation executed writes")
 	}
 }
 

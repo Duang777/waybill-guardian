@@ -123,6 +123,62 @@ func TestRejectRequiresReasonAndExpiryDefaultsToReject(t *testing.T) {
 	}
 }
 
+func TestConfirmHonorsExpiryBoundary(t *testing.T) {
+	now := time.Date(2026, 10, 3, 8, 0, 0, 0, time.UTC)
+	journal, err := audit.Open(t.TempDir(), func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	store, err := NewStore(journal, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := now.Add(time.Minute)
+	beforeDeadline := testApproval("run-before-deadline", "call-before-deadline")
+	beforeDeadline.ExpiresAt = deadline
+	beforeDeadline, err = store.Create(context.Background(), beforeDeadline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = deadline.Add(-time.Nanosecond)
+	confirmed, err := store.Decide(context.Background(), beforeDeadline.ID, Decision{
+		Kind:      DecisionConfirm,
+		DecidedBy: "reviewer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if confirmed.Status != StatusConfirmed {
+		t.Fatalf("status before deadline = %q", confirmed.Status)
+	}
+
+	atDeadline := testApproval("run-at-deadline", "call-at-deadline")
+	atDeadline.ExpiresAt = deadline
+	atDeadline, err = store.Create(context.Background(), atDeadline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = deadline
+	if _, err := store.Decide(context.Background(), atDeadline.ID, Decision{
+		Kind:      DecisionConfirm,
+		DecidedBy: "reviewer",
+	}); !errors.Is(err, ErrDecisionConflict) {
+		t.Fatalf("confirm at deadline error = %v, want ErrDecisionConflict", err)
+	}
+	expired, err := store.Get(atDeadline.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired.Status != StatusExpired {
+		t.Fatalf("status at deadline = %q, want expired", expired.Status)
+	}
+	if expired.DecidedBy != "system" || expired.DecidedAt == nil || !expired.DecidedAt.Equal(deadline) {
+		t.Fatalf("expiry decision = %+v", expired)
+	}
+}
+
 func testApproval(runID, callID string) Approval {
 	params, _ := json.Marshal(map[string]string{
 		"waybill_id":      "YD2026101001",
