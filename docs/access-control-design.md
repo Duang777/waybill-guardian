@@ -136,6 +136,7 @@ func (p Principal) Subject() string
 func (p Principal) CredentialDeadline() (time.Time, bool)
 func (g Grant) Require(domain.WaybillID) error
 func (g Grant) Allows(domain.WaybillID) bool
+func (g Grant) AllowsEvent(source, eventType string) bool
 ```
 
 `Boundary` 只接受 RS256。它验证签名、精确 issuer、audience、subject、tenant、`iat`、`exp`
@@ -145,11 +146,14 @@ func (g Grant) Allows(domain.WaybillID) bool
 - `viewer` 授予 `read`。
 - `dispatcher` 授予 `run:create`。
 - `operator` 授予 `approval:decide`。
+- `event_producer` 授予 `event:ingest`。
 
 `Boundary.Grant` 先要求 Principal tenant 等于进程 `TENANT_ID`，再检查角色。
-`Grant.Require` 和 `Grant.Allows` 隐藏 wildcard 与 ID 集合表示。local Principal 拥有三个
-角色和全部运单范围。JWT Principal 还保存经验证的凭据截止时间；HTTP middleware 将它转成
-请求 context deadline，长时间线在 token 到期后停止。
+`Grant.Require` 和 `Grant.Allows` 隐藏 wildcard 与 ID 集合表示。`Grant.AllowsEvent` 对
+source 和 type 做精确匹配。`event_producer` JWT 必须包含非空、无重复且有数量上限的
+`event_sources` 和 `event_types`。local Principal 拥有四个角色和全部运单范围，但事件
+source 固定为 `urn:waybill-guardian:local-producer`。JWT Principal 还保存经验证的凭据截止
+时间；HTTP middleware 将它转成请求 context deadline，长时间线在 token 到期后停止。
 
 ```text
 cmd/server/main.go       配置、fail-fast、依赖组装
@@ -172,6 +176,7 @@ cmd/server/http.go       路由、资源解析、problem 映射
 | `GET /api/approvals` | `read` | 每个摘要的 `WaybillID` |
 | approval confirm、reject | `approval:decide` | `GetApproval(id).WaybillID` |
 | `GET /api/waybills/{id}` | `read` | 已校验的 path ID |
+| `POST /v1/events` | `event:ingest` | 已校验的 source、type 和 `data.waybill_id` |
 
 缺失或无效身份返回 `401 unauthenticated` 和 `WWW-Authenticate: Bearer`。已认证但租户、
 角色或运单范围不符返回 `403 forbidden`。列表静默过滤无权对象并保持空数组为 `[]`。

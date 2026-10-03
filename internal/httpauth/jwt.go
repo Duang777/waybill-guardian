@@ -12,10 +12,12 @@ import (
 
 type jwtClaims struct {
 	jwt.RegisteredClaims
-	TenantID   string   `json:"tenant_id"`
-	Roles      []string `json:"roles"`
-	WaybillAll bool     `json:"waybill_all"`
-	WaybillIDs []string `json:"waybill_ids"`
+	TenantID     string   `json:"tenant_id"`
+	Roles        []string `json:"roles"`
+	WaybillAll   bool     `json:"waybill_all"`
+	WaybillIDs   []string `json:"waybill_ids"`
+	EventSources []string `json:"event_sources"`
+	EventTypes   []string `json:"event_types"`
 }
 
 type jwtVerifier struct {
@@ -107,11 +109,16 @@ func principalFromClaims(claims jwtClaims) (Principal, error) {
 	if err != nil {
 		return Principal{}, err
 	}
+	eventAccess, err := parseEventScope(roles, claims.EventSources, claims.EventTypes)
+	if err != nil {
+		return Principal{}, err
+	}
 	return Principal{
-		subject:  Subject(claims.Subject),
-		tenantID: TenantID(claims.TenantID),
-		roles:    roles,
-		scope:    scope,
+		subject:    Subject(claims.Subject),
+		tenantID:   TenantID(claims.TenantID),
+		roles:      roles,
+		scope:      scope,
+		eventScope: eventAccess,
 	}, nil
 }
 
@@ -123,7 +130,7 @@ func parseRoles(values []string) (map[Role]struct{}, error) {
 	for _, value := range values {
 		role := Role(value)
 		switch role {
-		case RoleViewer, RoleDispatcher, RoleOperator:
+		case RoleViewer, RoleDispatcher, RoleOperator, RoleEventProducer:
 		default:
 			return nil, ErrUnauthenticated
 		}
@@ -133,6 +140,43 @@ func parseRoles(values []string) (map[Role]struct{}, error) {
 		roles[role] = struct{}{}
 	}
 	return roles, nil
+}
+
+func parseEventScope(
+	roles map[Role]struct{},
+	sources []string,
+	eventTypes []string,
+) (eventScope, error) {
+	if _, producer := roles[RoleEventProducer]; !producer {
+		return eventScope{}, nil
+	}
+	if len(sources) == 0 || len(sources) > 16 ||
+		len(eventTypes) == 0 || len(eventTypes) > 8 {
+		return eventScope{}, ErrUnauthenticated
+	}
+	parsed := eventScope{
+		sources: make(map[string]struct{}, len(sources)),
+		types:   make(map[string]struct{}, len(eventTypes)),
+	}
+	for _, source := range sources {
+		if source == "" || source != strings.TrimSpace(source) {
+			return eventScope{}, ErrUnauthenticated
+		}
+		if _, exists := parsed.sources[source]; exists {
+			return eventScope{}, ErrUnauthenticated
+		}
+		parsed.sources[source] = struct{}{}
+	}
+	for _, eventType := range eventTypes {
+		if eventType == "" || eventType != strings.TrimSpace(eventType) {
+			return eventScope{}, ErrUnauthenticated
+		}
+		if _, exists := parsed.types[eventType]; exists {
+			return eventScope{}, ErrUnauthenticated
+		}
+		parsed.types[eventType] = struct{}{}
+	}
+	return parsed, nil
 }
 
 func parseWaybillScope(all bool, values []string) (waybillScope, error) {

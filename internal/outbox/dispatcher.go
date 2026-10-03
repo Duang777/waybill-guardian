@@ -43,6 +43,12 @@ type Dispatcher struct {
 	retryMax      time.Duration
 }
 
+type StatsMonitor struct {
+	store    Store
+	observer Observer
+	interval time.Duration
+}
+
 func NewDispatcher(config DispatcherConfig) (*Dispatcher, error) {
 	if config.Store == nil {
 		return nil, fmt.Errorf("outbox store is required")
@@ -102,6 +108,52 @@ func NewDispatcher(config DispatcherConfig) (*Dispatcher, error) {
 		retryBase:     config.RetryBase,
 		retryMax:      config.RetryMax,
 	}, nil
+}
+
+func NewStatsMonitor(
+	store Store,
+	observer Observer,
+	interval time.Duration,
+) (*StatsMonitor, error) {
+	if store == nil {
+		return nil, fmt.Errorf("outbox store is required")
+	}
+	if observer == nil {
+		return nil, fmt.Errorf("outbox observer is required")
+	}
+	if interval <= 0 {
+		return nil, fmt.Errorf("outbox stats interval must be positive")
+	}
+	return &StatsMonitor{
+		store:    store,
+		observer: observer,
+		interval: interval,
+	}, nil
+}
+
+func (m *StatsMonitor) Run(ctx context.Context) error {
+	m.refresh(ctx)
+	ticker := time.NewTicker(m.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			m.refresh(ctx)
+		}
+	}
+}
+
+func (m *StatsMonitor) refresh(ctx context.Context) {
+	stats, err := m.store.OutboxStats(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			m.observer.ObserveStoreError(StoreStats)
+		}
+		return
+	}
+	m.observer.ObserveStats(stats.Clone())
 }
 
 func (d *Dispatcher) Run(ctx context.Context) error {

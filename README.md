@@ -67,8 +67,18 @@ cd waybill-guardian
 | `PG_MIN_CONNS` | `0` | PostgreSQL 连接池最小连接数 |
 | `PG_STARTUP_TIMEOUT` | `30s` | PostgreSQL 连接、检查和迁移的总超时 |
 | `TENANT_ID` | `local-demo` | HTTP 授权和 PostgreSQL 数据的租户边界；JWT 模式必须显式设置 |
-| `INSTANCE_ID` | 随机 UUID | PostgreSQL run 和 effect 租约的 worker 身份 |
-| `RUN_LEASE_TTL` | `30s` | PostgreSQL run、effect 和 outbox 租约时长 |
+| `INSTANCE_ID` | 随机 UUID | PostgreSQL run、effect 和 outbox 租约的 worker 身份 |
+| `RUN_LEASE_TTL` | `30s` | PostgreSQL run 和 effect 租约时长 |
+| `OUTBOX_ENABLED` | `false` | 在 PostgreSQL 模式显式启动 outbox dispatcher |
+| `OUTBOX_URL` | 空 | dispatcher 的 CloudEvents HTTP endpoint |
+| `OUTBOX_TOKEN` | 空 | dispatcher 启动时必填的 Bearer token |
+| `OUTBOX_BATCH_SIZE` | `10` | 每次 claim 的最大事件数，范围 1 到 100 |
+| `OUTBOX_CONCURRENCY` | `4` | 同时发布的最大事件数，范围 1 到 100 |
+| `OUTBOX_POLL_INTERVAL` | `250ms` | 无可发布事件或 claim 失败后的轮询间隔 |
+| `OUTBOX_LEASE_TTL` | `30s` | outbox claim 租约时长 |
+| `OUTBOX_STATS_INTERVAL` | `15s` | outbox 指标快照刷新间隔 |
+| `OUTBOX_HTTP_TIMEOUT` | `10s` | 单次下游发布超时 |
+| `METRICS_ADDR` | 空 | 独立 Prometheus listener；例如 `127.0.0.1:9090` |
 | `CHECKPOINT_KEY_ID` | `local-v1` | checkpoint 加密密钥版本 |
 | `CHECKPOINT_ENCRYPTION_KEY` | 空 | PostgreSQL 模式必填，Base64 编码的 32 字节 AES-256 key |
 | `AGENT_MODE` | `demo` | `demo` 使用确定性模型；`online` 调用外部模型 |
@@ -86,11 +96,17 @@ BACKEND_PORT=18080 WEB_PORT=15173 DATA_DIR=/tmp/waybill-demo ./scripts/demo.sh
 
 `AUTH_MODE=jwt` 验证 RS256 签名、issuer、audience、`iat`、`nbf` 和 `exp`。JWT 还必须包含
 `sub`、`tenant_id`、`roles`，以及 `waybill_all=true` 或非空 `waybill_ids`。可用角色为
-`viewer`、`dispatcher` 和 `operator`，分别允许读取、启动 run 和决定审批。服务忽略
+`viewer`、`dispatcher`、`operator` 和 `event_producer`。`event_producer` token 还必须包含
+非空且无重复的 `event_sources` 和 `event_types`。服务忽略
 `X-Actor`，并把已验证的 `sub` 写入 `decided_by`。请求 context 的 deadline 不晚于 JWT
 有效期，因此时间线 SSE 会在凭据到期时断开。JWT 模式可以监听显式非 loopback IP，但服务
 本身不终止 TLS。远程部署必须放在 HTTPS 入口后。`PLATFORM=real` 要求
 `STORAGE=postgres` 和 `AUTH_MODE=jwt`，真实 adapter 尚未实现，因此仍会拒绝启动。
+
+`STORAGE=postgres` 注册 `POST /v1/events`。JSONL 模式不注册该路由。dispatcher 默认关闭，
+因为首次启用会按 aggregate 顺序发布已有的 pending 事件。除 loopback 测试地址外，
+`OUTBOX_URL` 必须使用 HTTPS。设置 `METRICS_ADDR` 后，独立 listener 在 `/metrics` 暴露
+固定标签的入站和 outbox 指标。
 
 ### 使用在线模型
 

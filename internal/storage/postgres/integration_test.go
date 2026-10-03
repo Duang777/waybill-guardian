@@ -8,6 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -21,6 +24,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/guardian"
 	"github.com/Duang777/waybill-guardian/internal/idempotency"
 	outboxmodel "github.com/Duang777/waybill-guardian/internal/outbox"
+	"github.com/Duang777/waybill-guardian/internal/outboxhttp"
 	guardtools "github.com/Duang777/waybill-guardian/internal/tools"
 	"github.com/google/uuid"
 	"github.com/hastekit/agent-sdk-go/pkg/agents/history"
@@ -1034,6 +1038,193 @@ func TestOutboxPermanentFailureRequiresAuditedExactRequeue(t *testing.T) {
 		retried[0].Event().Attempt != 2 {
 		t.Fatalf("requeued claims = %+v", retried)
 	}
+}
+
+func TestOutboxRedeliveryKeepsIdentityAndConsumerAppliesOnce(t *testing.T) {
+	db := openIntegrationDB(t)
+	tenantID := "tenant-" + uuid.NewString()
+	repository, err := NewRepository(db, RepositoryConfig{
+		TenantID:       tenantID,
+		WorkerID:       "worker-1",
+		LeaseTTL:       5 * time.Second,
+		OutboxLeaseTTL: 150 * time.Millisecond,
+		PollInterval:   10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+
+	runID := domain.RunID(uuid.NewString())
+	appendStarted(t, repository, runID)
+
+	consumerConnection, err := db.pool.Acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumerConnection.Release()
+	if _, err := consumerConnection.Exec(t.Context(), `
+		CREATE TEMP TABLE test_consumer_inbox (
+			source text NOT NULL,
+			event_id text NOT NULL,
+			PRIMARY KEY (source, event_id)
+		);
+		CREATE TEMP TABLE test_consumer_state (
+			singleton boolean PRIMARY KEY DEFAULT true,
+			transitions integer NOT NULL
+		);
+		INSERT INTO test_consumer_state (transitions) VALUES (0);
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	var consumerMu sync.Mutex
+	requestBodies := make([][]byte, 0, 2)
+	consumer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer consumer-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		body, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			http.Error(w, "read body", http.StatusInternalServerError)
+			return
+		}
+		var envelope struct {
+			Source string `json:"source"`
+			ID     string `json:"id"`
+		}
+		if json.Unmarshal(body, &envelope) != nil {
+			http.Error(w, "decode body", http.StatusBadRequest)
+			return
+		}
+		tx, beginErr := consumerConnection.Begin(r.Context())
+		if beginErr != nil {
+			http.Error(w, "begin", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback(context.Background())
+		tag, insertErr := tx.Exec(r.Context(), `
+			INSERT INTO test_consumer_inbox (source, event_id)
+			VALUES ($1, $2)
+			ON CONFLICT DO NOTHING
+		`, envelope.Source, envelope.ID)
+		if insertErr != nil {
+			http.Error(w, "insert", http.StatusInternalServerError)
+			return
+		}
+		if tag.RowsAffected() == 1 {
+			if _, updateErr := tx.Exec(r.Context(), `
+				UPDATE test_consumer_state
+				SET transitions = transitions + 1
+				WHERE singleton = true
+			`); updateErr != nil {
+				http.Error(w, "update", http.StatusInternalServerError)
+				return
+			}
+		}
+		if commitErr := tx.Commit(r.Context()); commitErr != nil {
+			http.Error(w, "commit", http.StatusInternalServerError)
+			return
+		}
+		consumerMu.Lock()
+		requestBodies = append(requestBodies, append([]byte(nil), body...))
+		consumerMu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer consumer.Close()
+
+	publisher, err := outboxhttp.New(outboxhttp.Config{
+		URL:     consumer.URL,
+		Token:   "consumer-token",
+		Timeout: time.Second,
+		Client:  consumer.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &failFirstCompletionStore{Store: repository}
+	dispatcher, err := outboxmodel.NewDispatcher(outboxmodel.DispatcherConfig{
+		Store:         store,
+		Publisher:     publisher,
+		BatchSize:     1,
+		Concurrency:   1,
+		PollInterval:  10 * time.Millisecond,
+		LeaseTTL:      150 * time.Millisecond,
+		StatsInterval: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	dispatchDone := make(chan error, 1)
+	go func() {
+		dispatchDone <- dispatcher.Run(ctx)
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var status string
+		if err := db.pool.QueryRow(t.Context(), `
+			SELECT status
+			FROM waybill.outbox_events
+			WHERE tenant_id = $1 AND aggregate_type = 'run' AND aggregate_version = 1
+		`, tenantID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status == "published" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("outbox event was not published after the lost completion")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-dispatchDone; err != nil {
+		t.Fatal(err)
+	}
+
+	var inboxCount, transitions int
+	if err := consumerConnection.QueryRow(t.Context(), `
+		SELECT
+			(SELECT count(*) FROM test_consumer_inbox),
+			(SELECT transitions FROM test_consumer_state WHERE singleton = true)
+	`).Scan(&inboxCount, &transitions); err != nil {
+		t.Fatal(err)
+	}
+	consumerMu.Lock()
+	defer consumerMu.Unlock()
+	if len(requestBodies) != 2 {
+		t.Fatalf("consumer request count = %d, want 2", len(requestBodies))
+	}
+	if !bytes.Equal(requestBodies[0], requestBodies[1]) {
+		t.Fatalf("redelivered event changed:\n%s\n%s", requestBodies[0], requestBodies[1])
+	}
+	if inboxCount != 1 || transitions != 1 {
+		t.Fatalf("consumer state = inbox:%d transitions:%d, want 1 and 1", inboxCount, transitions)
+	}
+}
+
+type failFirstCompletionStore struct {
+	outboxmodel.Store
+	mu     sync.Mutex
+	failed bool
+}
+
+func (s *failFirstCompletionStore) CompleteOutbox(
+	ctx context.Context,
+	claim outboxmodel.Claim,
+	result outboxmodel.Completion,
+) error {
+	s.mu.Lock()
+	if !s.failed {
+		s.failed = true
+		s.mu.Unlock()
+		return errors.New("simulated completion loss")
+	}
+	s.mu.Unlock()
+	return s.Store.CompleteOutbox(ctx, claim, result)
 }
 
 func TestPrepareRecoveryQuarantinesOnlyDamagedRun(t *testing.T) {

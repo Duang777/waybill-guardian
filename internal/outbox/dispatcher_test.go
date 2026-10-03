@@ -208,6 +208,46 @@ func TestNewDispatcherRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
+func TestStatsMonitorRefreshesImmediatelyAndStops(t *testing.T) {
+	store := &fakeStore{stats: Stats{Pending: 7}}
+	observer := &fakeObserver{statsObserved: make(chan Stats, 1)}
+	monitor, err := NewStatsMonitor(store, observer, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- monitor.Run(ctx)
+	}()
+	if got := receive(t, observer.statsObserved); got.Pending != 7 {
+		t.Fatalf("observed stats = %+v", got)
+	}
+	cancel()
+	if err := receive(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNewStatsMonitorRejectsInvalidConfiguration(t *testing.T) {
+	store := &fakeStore{}
+	observer := &fakeObserver{}
+	tests := []struct {
+		store    Store
+		observer Observer
+		interval time.Duration
+	}{
+		{observer: observer, interval: time.Second},
+		{store: store, interval: time.Second},
+		{store: store, observer: observer},
+	}
+	for _, test := range tests {
+		if _, err := NewStatsMonitor(test.store, test.observer, test.interval); err == nil {
+			t.Fatalf("NewStatsMonitor accepted invalid config %+v", test)
+		}
+	}
+}
+
 func newTestDispatcher(t *testing.T, config DispatcherConfig) *Dispatcher {
 	t.Helper()
 	if config.PollInterval == 0 {

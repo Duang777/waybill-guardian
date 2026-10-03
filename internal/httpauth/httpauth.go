@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/events"
 )
 
 var (
@@ -29,16 +30,21 @@ type Role string
 type Capability string
 
 const (
-	RoleViewer     Role = "viewer"
-	RoleDispatcher Role = "dispatcher"
-	RoleOperator   Role = "operator"
+	RoleViewer        Role = "viewer"
+	RoleDispatcher    Role = "dispatcher"
+	RoleOperator      Role = "operator"
+	RoleEventProducer Role = "event_producer"
 
 	Read           Capability = "read"
 	StartRun       Capability = "run:create"
 	DecideApproval Capability = "approval:decide"
+	IngestEvent    Capability = "event:ingest"
 )
 
-const localSubject Subject = "local-demo-reviewer"
+const (
+	localSubject     Subject = "local-demo-reviewer"
+	LocalEventSource         = "urn:waybill-guardian:local-producer"
+)
 
 type Config struct {
 	Mode     Mode
@@ -59,6 +65,7 @@ type Principal struct {
 	tenantID   TenantID
 	roles      map[Role]struct{}
 	scope      waybillScope
+	eventScope eventScope
 	validUntil time.Time
 }
 
@@ -81,7 +88,8 @@ type Boundary struct {
 }
 
 type Grant struct {
-	scope waybillScope
+	scope      waybillScope
+	eventScope eventScope
 }
 
 type tokenVerifier interface {
@@ -91,6 +99,11 @@ type tokenVerifier interface {
 type waybillScope struct {
 	all bool
 	ids map[domain.WaybillID]struct{}
+}
+
+type eventScope struct {
+	sources map[string]struct{}
+	types   map[string]struct{}
 }
 
 type principalContextKey struct{}
@@ -119,11 +132,19 @@ func New(config Config) (*Boundary, error) {
 				subject:  localSubject,
 				tenantID: config.TenantID,
 				roles: map[Role]struct{}{
-					RoleViewer:     {},
-					RoleDispatcher: {},
-					RoleOperator:   {},
+					RoleViewer:        {},
+					RoleDispatcher:    {},
+					RoleOperator:      {},
+					RoleEventProducer: {},
 				},
 				scope: waybillScope{all: true},
+				eventScope: eventScope{
+					sources: map[string]struct{}{LocalEventSource: {}},
+					types: map[string]struct{}{
+						string(events.DelayDetectedType):  {},
+						string(events.DelayCorrectedType): {},
+					},
+				},
 			},
 		}, nil
 	case ModeJWT:
@@ -180,7 +201,10 @@ func (b *Boundary) Grant(principal Principal, capability Capability) (Grant, err
 	if _, ok := principal.roles[required]; !ok {
 		return Grant{}, ErrForbidden
 	}
-	return Grant{scope: principal.scope}, nil
+	return Grant{
+		scope:      principal.scope,
+		eventScope: principal.eventScope,
+	}, nil
 }
 
 func PrincipalFrom(ctx context.Context) (Principal, error) {
@@ -206,6 +230,12 @@ func (g Grant) Allows(id domain.WaybillID) bool {
 	return ok
 }
 
+func (g Grant) AllowsEvent(source, eventType string) bool {
+	_, sourceAllowed := g.eventScope.sources[source]
+	_, typeAllowed := g.eventScope.types[eventType]
+	return sourceAllowed && typeAllowed
+}
+
 func roleFor(capability Capability) (Role, bool) {
 	switch capability {
 	case Read:
@@ -214,6 +244,8 @@ func roleFor(capability Capability) (Role, bool) {
 		return RoleDispatcher, true
 	case DecideApproval:
 		return RoleOperator, true
+	case IngestEvent:
+		return RoleEventProducer, true
 	default:
 		return "", false
 	}

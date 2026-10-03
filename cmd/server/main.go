@@ -20,6 +20,9 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/guardian"
 	"github.com/Duang777/waybill-guardian/internal/httpauth"
 	"github.com/Duang777/waybill-guardian/internal/idempotency"
+	"github.com/Duang777/waybill-guardian/internal/metrics"
+	"github.com/Duang777/waybill-guardian/internal/outbox"
+	"github.com/Duang777/waybill-guardian/internal/outboxhttp"
 	"github.com/Duang777/waybill-guardian/internal/platform"
 	"github.com/Duang777/waybill-guardian/internal/storage"
 	postgresstore "github.com/Duang777/waybill-guardian/internal/storage/postgres"
@@ -28,6 +31,19 @@ import (
 )
 
 const defaultHTTPAddr = "127.0.0.1:8080"
+
+type eventRuntimeConfig struct {
+	outboxEnabled   bool
+	outboxURL       string
+	outboxToken     string
+	outboxBatchSize int
+	outboxWorkers   int
+	outboxPoll      time.Duration
+	outboxLeaseTTL  time.Duration
+	outboxStatsPoll time.Duration
+	outboxTimeout   time.Duration
+	metricsAddr     string
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -53,6 +69,10 @@ func run() error {
 	if err := validateRuntimeModes(platformMode, storageMode, authMode); err != nil {
 		return err
 	}
+	eventConfig, err := eventConfigFromEnv(storageMode)
+	if err != nil {
+		return err
+	}
 	tenantID, err := tenantIDFromEnv(authMode)
 	if err != nil {
 		return err
@@ -62,6 +82,7 @@ func run() error {
 		return err
 	}
 	var database *postgresstore.DB
+	var repository *postgresstore.Repository
 	var databaseConfig postgresstore.Config
 	if storageMode == storage.ModePostgres {
 		databaseConfig, err = postgresConfigFromEnv()
@@ -102,12 +123,13 @@ func run() error {
 		if keyErr != nil {
 			return keyErr
 		}
-		repository, repositoryErr := postgresstore.NewRepository(
+		repository, err = postgresstore.NewRepository(
 			database,
 			postgresstore.RepositoryConfig{
-				TenantID: string(tenantID),
-				WorkerID: envOr("INSTANCE_ID", uuid.NewString()),
-				LeaseTTL: durationEnv("RUN_LEASE_TTL", 30*time.Second),
+				TenantID:       string(tenantID),
+				WorkerID:       envOr("INSTANCE_ID", uuid.NewString()),
+				LeaseTTL:       durationEnv("RUN_LEASE_TTL", 30*time.Second),
+				OutboxLeaseTTL: eventConfig.outboxLeaseTTL,
 				EffectLookup: func(
 					ctx context.Context,
 					command idempotency.Command,
@@ -129,8 +151,8 @@ func run() error {
 				},
 			},
 		)
-		if repositoryErr != nil {
-			return repositoryErr
+		if err != nil {
+			return err
 		}
 		historyCtx, cancelHistory := context.WithTimeout(
 			context.Background(),
@@ -168,22 +190,129 @@ func run() error {
 		return err
 	}
 
+	var recorder *metrics.Recorder
+	var dispatcher *outbox.Dispatcher
+	var statsMonitor *outbox.StatsMonitor
+	if storageMode == storage.ModePostgres {
+		recorder = metrics.New(time.Now)
+		if eventConfig.outboxEnabled {
+			publisher, publisherErr := outboxhttp.New(outboxhttp.Config{
+				URL:     eventConfig.outboxURL,
+				Token:   eventConfig.outboxToken,
+				Timeout: eventConfig.outboxTimeout,
+			})
+			if publisherErr != nil {
+				return publisherErr
+			}
+			dispatcher, err = outbox.NewDispatcher(outbox.DispatcherConfig{
+				Store:         repository,
+				Publisher:     publisher,
+				Observer:      recorder,
+				BatchSize:     eventConfig.outboxBatchSize,
+				Concurrency:   eventConfig.outboxWorkers,
+				PollInterval:  eventConfig.outboxPoll,
+				LeaseTTL:      eventConfig.outboxLeaseTTL,
+				StatsInterval: eventConfig.outboxStatsPoll,
+			})
+			if err != nil {
+				return err
+			}
+		} else if eventConfig.metricsAddr != "" {
+			statsMonitor, err = outbox.NewStatsMonitor(
+				repository,
+				recorder,
+				eventConfig.outboxStatsPoll,
+			)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	listener, err := net.Listen("tcp", httpAddr)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", httpAddr, err)
+	}
+	defer listener.Close()
+	var metricsListener net.Listener
+	if eventConfig.metricsAddr != "" {
+		metricsListener, err = net.Listen("tcp", eventConfig.metricsAddr)
+		if err != nil {
+			return fmt.Errorf("listen for metrics on %s: %w", eventConfig.metricsAddr, err)
+		}
+		defer metricsListener.Close()
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	server := &http.Server{
 		Addr:              httpAddr,
-		Handler:           newHandler(service, access),
+		Handler:           newHandlerWithEvents(service, access, repository, recorder),
 		ReadHeaderTimeout: 5 * time.Second,
 		BaseContext: func(net.Listener) context.Context {
 			return ctx
 		},
 	}
 	slog.Info("waybill guardian listening", "addr", listener.Addr())
-	return serve(ctx, server, listener)
+	components := []runComponent{
+		func(ctx context.Context) error {
+			return serve(ctx, server, listener)
+		},
+	}
+	if dispatcher != nil {
+		components = append(components, dispatcher.Run)
+	}
+	if statsMonitor != nil {
+		components = append(components, statsMonitor.Run)
+	}
+	if metricsListener != nil {
+		metricsMux := http.NewServeMux()
+		metricsMux.Handle("GET /metrics", recorder.Handler())
+		metricsServer := &http.Server{
+			Addr:              eventConfig.metricsAddr,
+			Handler:           metricsMux,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		slog.Info("waybill metrics listening", "addr", metricsListener.Addr())
+		components = append(components, func(ctx context.Context) error {
+			return serve(ctx, metricsServer, metricsListener)
+		})
+	}
+	return runComponents(ctx, components...)
+}
+
+type runComponent func(context.Context) error
+
+func runComponents(ctx context.Context, components ...runComponent) error {
+	if len(components) == 0 {
+		return nil
+	}
+	componentCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan error, len(components))
+	for _, component := range components {
+		go func() {
+			results <- component(componentCtx)
+		}()
+	}
+
+	var errs []error
+	received := 0
+	select {
+	case err := <-results:
+		received++
+		if err != nil {
+			errs = append(errs, err)
+		}
+	case <-ctx.Done():
+	}
+	cancel()
+	for received < len(components) {
+		if err := <-results; err != nil {
+			errs = append(errs, err)
+		}
+		received++
+	}
+	return errors.Join(errs...)
 }
 
 func checkpointKeyFromEnv() ([]byte, error) {
@@ -216,6 +345,57 @@ func validateRuntimeModes(
 		return fmt.Errorf("PLATFORM must be mock or real")
 	}
 	return nil
+}
+
+func eventConfigFromEnv(storageMode storage.Mode) (eventRuntimeConfig, error) {
+	enabled, err := boolEnv("OUTBOX_ENABLED", false)
+	if err != nil {
+		return eventRuntimeConfig{}, err
+	}
+	config := eventRuntimeConfig{
+		outboxEnabled: enabled,
+		outboxURL:     strings.TrimSpace(os.Getenv("OUTBOX_URL")),
+		outboxToken:   strings.TrimSpace(os.Getenv("OUTBOX_TOKEN")),
+		metricsAddr:   strings.TrimSpace(os.Getenv("METRICS_ADDR")),
+	}
+	if storageMode != storage.ModePostgres {
+		if config.outboxEnabled || config.metricsAddr != "" {
+			return eventRuntimeConfig{}, fmt.Errorf(
+				"outbox dispatcher and metrics listener require STORAGE=postgres",
+			)
+		}
+		return config, nil
+	}
+	config.outboxBatchSize, err = positiveIntEnv("OUTBOX_BATCH_SIZE", 10, 100)
+	if err != nil {
+		return eventRuntimeConfig{}, err
+	}
+	config.outboxWorkers, err = positiveIntEnv("OUTBOX_CONCURRENCY", 4, 100)
+	if err != nil {
+		return eventRuntimeConfig{}, err
+	}
+	config.outboxPoll, err = strictDurationEnv("OUTBOX_POLL_INTERVAL", 250*time.Millisecond)
+	if err != nil {
+		return eventRuntimeConfig{}, err
+	}
+	config.outboxLeaseTTL, err = strictDurationEnv("OUTBOX_LEASE_TTL", 30*time.Second)
+	if err != nil {
+		return eventRuntimeConfig{}, err
+	}
+	config.outboxStatsPoll, err = strictDurationEnv("OUTBOX_STATS_INTERVAL", 15*time.Second)
+	if err != nil {
+		return eventRuntimeConfig{}, err
+	}
+	config.outboxTimeout, err = strictDurationEnv("OUTBOX_HTTP_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return eventRuntimeConfig{}, err
+	}
+	if config.outboxEnabled && (config.outboxURL == "" || config.outboxToken == "") {
+		return eventRuntimeConfig{}, fmt.Errorf(
+			"OUTBOX_URL and OUTBOX_TOKEN are required when OUTBOX_ENABLED=true",
+		)
+	}
+	return config, nil
 }
 
 func tenantIDFromEnv(authMode httpauth.Mode) (httpauth.TenantID, error) {
@@ -275,6 +455,30 @@ func postgresConfigFromEnv() (postgresstore.Config, error) {
 		MinConns:       minConns,
 		StartupTimeout: startupTimeout,
 	}, nil
+}
+
+func boolEnv(name string, fallback bool) (bool, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean", name)
+	}
+	return parsed, nil
+}
+
+func positiveIntEnv(name string, fallback, maximum int) (int, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 1 || parsed > maximum {
+		return 0, fmt.Errorf("%s must be an integer between 1 and %d", name, maximum)
+	}
+	return parsed, nil
 }
 
 func int32Env(name string, fallback int32) (int32, error) {
