@@ -49,8 +49,8 @@ func TestWriteEffectMiddlewareSeparatesSameActionEffects(t *testing.T) {
 		WaybillID:   "YD2026101001",
 		PlanVersion: 1,
 	}
-	shipper := testSMSCall("call-shipper", "13800001234", runContext)
-	driver := testSMSCall("call-driver", "13900005678", runContext)
+	shipper := testSMSCall("call-shipper", guardtools.RecipientShipper, runContext)
+	driver := testSMSCall("call-driver", guardtools.RecipientDriver, runContext)
 	items := []approval.Item{
 		materializeTestItem(t, registry, runContext, shipper),
 		materializeTestItem(t, registry, runContext, driver),
@@ -92,10 +92,10 @@ func TestWriteEffectMiddlewareSeparatesSameActionEffects(t *testing.T) {
 		if err := json.Unmarshal([]byte(call.Arguments), &arguments); err != nil {
 			return nil, err
 		}
-		calls[arguments.Phone]++
+		calls[string(arguments.Recipient)]++
 		return agents.ToolCallResult(
 			call,
-			fmt.Sprintf(`{"phone":%q,"effect_id":%q}`, arguments.Phone, identity.EffectID),
+			fmt.Sprintf(`{"recipient":%q,"effect_id":%q}`, arguments.Recipient, identity.EffectID),
 		), nil
 	})
 
@@ -110,7 +110,8 @@ func TestWriteEffectMiddlewareSeparatesSameActionEffects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls["13800001234"] != 1 || calls["13900005678"] != 1 {
+	if calls[string(guardtools.RecipientShipper)] != 1 ||
+		calls[string(guardtools.RecipientDriver)] != 1 {
 		t.Fatalf("effect calls = %#v, want one call per effect", calls)
 	}
 	if *replayed.Output.OfString != *first.Output.OfString {
@@ -178,15 +179,13 @@ func materializeTestItem(
 
 func testSMSCall(
 	callID string,
-	phone string,
+	recipient guardtools.NotificationRecipient,
 	runContext domain.RunContext,
 ) *agents.ToolCall {
 	arguments, _ := json.Marshal(guardtools.SendSMSInput{
-		Phone:      phone,
-		TemplateID: "waybill_reassigned",
-		Params: map[string]string{
-			"waybill_id": "YD2026101001",
-		},
+		WaybillID: "YD2026101001",
+		Recipient: recipient,
+		CarrierID: "CARRIER-SW-42",
 	})
 	return &agents.ToolCall{
 		FunctionCallMessage: &responses.FunctionCallMessage{

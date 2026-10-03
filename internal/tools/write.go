@@ -79,7 +79,7 @@ func (r *Registry) ParseWrite(wireName string, raw json.RawMessage) (CanonicalWr
 			return CanonicalWrite{}, validationErr
 		}
 		arguments = input.SendSMSInput
-		target = "phone/" + input.Phone
+		target = "waybill/" + input.WaybillID + "/recipient/" + string(input.Recipient)
 		legacyKey = input.IdempotencyKey
 	default:
 		return CanonicalWrite{}, fmt.Errorf("action %q is not a write tool", definition.Action)

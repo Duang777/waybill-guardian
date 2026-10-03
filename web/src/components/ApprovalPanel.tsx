@@ -237,7 +237,7 @@ function actionLabel(action: string): string {
     case "tms.create_claim":
       return "创建理赔单";
     case "notify.send_sms":
-      return "通知货主";
+      return "发送通知";
     default:
       return action;
   }
@@ -258,7 +258,14 @@ function actionDetail(
       : `${carrier.name} · 预计 ${carrier.eta_hours} 小时`;
   }
   if (action === "notify.send_sms") {
-    return `发送至 ${stringParam(params, "phone")}`;
+    const recipient = stringParam(params, "recipient");
+    if (recipient === "shipper") {
+      return "发送至货主";
+    }
+    if (recipient === "driver") {
+      return "发送至司机";
+    }
+    return `发送至 ${recipient}`;
   }
   return stringParam(params, "claim_type");
 }
