@@ -10,6 +10,7 @@
 
 - 七个工具与 [`contract.yaml`](./contract.yaml) 对齐。四个只读工具自动执行，三个写工具强制审批。
 - hastekit v0.0.24 负责 Agent loop、typed tools 和 HITL pause/resume；history 可使用本地文件或 PostgreSQL。
+- 模型和 Agent history 只接收业务证据白名单，不保存手机号、车牌、精确坐标或短信模板参数。
 - 服务端根据业务参数生成稳定 `effect_id` 和幂等键。同一 effect 并发执行十次时，platform 只收到一次调用。
 - 默认每个 run 使用一份 append-only JSONL。PostgreSQL 模式在同一事务提交业务投影、审计和 outbox。
 - SSE 支持 `Last-Event-ID` 续传。前端按 `(run_id, seq)` 去重。
@@ -53,6 +54,7 @@ cd waybill-guardian
 | `WEB_PORT` | `5173` | 前端端口 |
 | `DATA_DIR` | `./data` | 审计日志和 hastekit history 目录 |
 | `APPROVAL_TTL` | `10m` | 审批有效期，使用 Go duration 格式 |
+| `HISTORY_RETENTION` | `168h` | 已结束 Agent history 的保留期，必须为正数 |
 | `DEMO_STEP_DELAY` | `220ms` | 确定性模型每一步的演示延迟 |
 | `PLATFORM` | `mock` | `mock` 可用；`real` 会在 adapter 未实现时拒绝启动 |
 | `STORAGE` | `jsonl` | `jsonl` 用于离线演示；`postgres` 使用事务仓储 |
@@ -113,6 +115,7 @@ go test ./...
 go test -race ./...
 go vet ./...
 go build ./...
+./scripts/check-history-governance.sh
 ```
 
 使用 Docker 启动临时 PostgreSQL 17，验证迁移、事务、租约、加密 history 和浏览器完整流程：
@@ -163,9 +166,40 @@ outbox 和 Agent history 的唯一事实源。
 “外部平台成功，但本地成功事件还未写入”的窗口，系统不会自动重试未知结果。真实 adapter
 必须按幂等键查询或重试，否则不能启用真实写模式。
 
+- Agent history 使用 `history_schema_version=1`。本地文件用 sidecar 标记状态；PostgreSQL
+  使用 `privacy_schema_version=1`，并用 AES-256-GCM 加密 payload。
+- 服务启动时删除超过 `HISTORY_RETENTION` 的已结束 history。运行中的 history 和独立审计
+  事件不受该清理影响。
+- [`scripts/check-history-governance.sh`](./scripts/check-history-governance.sh) 扫描本地
+  history。设置 `DATABASE_URL` 后，脚本也检查 PostgreSQL history 的明文列。
+
 - 架构、恢复矩阵和取舍：[`docs/RFC-001.md`](./docs/RFC-001.md)
 - 真实平台接入与生产处置链路：[`docs/RFC-002.md`](./docs/RFC-002.md)
+- Agent history 隐私与保留策略：[`docs/history-governance.md`](./docs/history-governance.md)
 - hastekit 源码研究：[`docs/research/hastekit-v0.0.24.md`](./docs/research/hastekit-v0.0.24.md)
 - 三分钟演示讲稿：[`docs/demo-script.md`](./docs/demo-script.md)
 - 模块职责索引：[`AGENTS.md`](./AGENTS.md)
 - 第三方来源声明：[`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)
+
+### 删除 Agent history
+
+停止服务后，删除本地 history：
+
+```bash
+rm -rf "${DATA_DIR:-data}/hastekit"
+```
+
+PostgreSQL 模式按租户删除 history，并清理已结束 run 的 checkpoint 指针：
+
+```sql
+BEGIN;
+DELETE FROM waybill.agent_summaries WHERE tenant_id = :'tenant_id';
+DELETE FROM waybill.agent_checkpoints WHERE tenant_id = :'tenant_id';
+UPDATE waybill.runs
+SET sdk_run_id = NULL, checkpoint_version = 0
+WHERE tenant_id = :'tenant_id'
+  AND status IN ('completed', 'rejected', 'failed', 'manual_review');
+COMMIT;
+```
+
+不要清理运行中的 PostgreSQL run。删除 history 不会删除 `audit_events`。

@@ -40,7 +40,7 @@ cmd/server ── internal/guardian
 
 | 决策 | 选择 | 依据 |
 |---|---|---|
-| Agent runtime | hastekit/agent-sdk-go v0.0.24 | 使用 typed tools、file history、HITL pause/resume 和流式事件。在线模式只启用三次模型 retry，不配置 provider fallback |
+| Agent runtime | hastekit/agent-sdk-go v0.0.24 | 使用 typed tools、HITL pause/resume 和流式事件。统一 guard 限制模型与 history 数据，终态 history 默认保留 7 天 |
 | 人工审批 | SDK pause/resume 加持久化审批投影 | 写操作先暂停，人工决定落盘后才恢复同一个 thread。超时默认拒绝 |
 | 幂等 | 服务端从业务参数生成 `effect_id` 和 key | 模型不接触执行身份。同类写操作按目标和参数独立去重 |
 | 审计 | 每个 run 一份 append-only JSONL | `seq`、`prev_hash` 和 `hash` 支持完整性校验、回放和 SSE 续传 |

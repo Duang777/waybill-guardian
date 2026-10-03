@@ -27,9 +27,15 @@ go list -m github.com/hastekit/agent-sdk-go
 对账两份记录。完整源码证据见
 [`docs/research/hastekit-v0.0.24.md`](../../docs/research/hastekit-v0.0.24.md)。
 
-项目通过 `secureHistoryPersistence` 包装 SDK file persistence。history 目录权限为 `0700`。
-适配层在 SDK 首次写入前以 `0600` 预创建 conversation 文件，并在启动时修正已有文件权限，
-因为记录可能包含完整工具输入输出。
+项目通过 `historyGuard` 检查模型请求、模型响应、持久化消息、metadata 和 summary。guard
+拒绝手机号、车牌、精确坐标和短信供应商参数，并为 metadata 写入
+`history_schema_version=1`。两个 Engine 构造器固定安装同一个 guard。
+
+`secureHistoryPersistence` 包装 SDK file persistence。history 目录权限为 `0700`，JSONL 和
+sidecar 文件权限为 `0600`。每个 conversation 的 sidecar 保存 schema、thread 和终态时间。
+启动时删除无当前 sidecar 的旧 history，并只按 `HISTORY_RETENTION` 删除过期终态 history。
+PostgreSQL adapter 使用 AES-256-GCM 加密 payload，并通过 `privacy_schema_version=1` 拒绝
+未知格式。
 
 `Engine` 跟踪所有活动的 `AgentHandle`，并通过 middleware 单独跟踪实际工具调用。调用方取消
 context 或关闭 Engine 时，Engine 先发送 SDK stop，再等待 run 和已启动工具全部结束，最后
@@ -47,7 +53,7 @@ context 或关闭 Engine 时，Engine 先发送 SDK stop，再等待 run 和已�
 
 ## middleware 职责
 
-`guardian.Open` 安装两个项目 middleware：
+`guardian.Open` 安装业务 middleware：
 
 1. `AuditMiddleware` 记录工具调用和结果，并在写盘前脱敏。
 2. `WriteEffectMiddleware` 严格解析业务参数，校验 confirmed 审批中的 `call_id`、参数哈希和
@@ -55,7 +61,7 @@ context 或关闭 Engine 时，Engine 先发送 SDK stop，再等待 run 和已�
    交给 typed handler。
 
 hastekit 自己根据 `RequiresApproval` 在首次写调用前暂停。项目 middleware 在恢复执行时再次
-校验业务审批和幂等约束。
+校验业务审批和幂等约束。Engine 在这些 middleware 外层固定安装 `historyGuard`。
 
 ## system prompt
 

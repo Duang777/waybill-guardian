@@ -45,11 +45,10 @@ adapter.
 Both engine constructors install the same model and persistence guards:
 
 ```go
-guard := agent.NewHistoryGuard()
 engine, err := agent.NewEngineWithPersistence(
-	guard.Wrap(persistence),
+	persistence,
 	registry,
-	append([]agents.Middleware{guard.ModelMiddleware()}, middlewares...),
+	middlewares,
 	stepDelay,
 	modelConfig,
 )
@@ -252,7 +251,9 @@ before backend writes and that summaries use the same policy.
 8. A rerunnable repository script scans generated file history and PostgreSQL
    plaintext columns for prohibited fixture values.
 
-## Next implementation step
+## Implementation status
 
-Implement and test the allowlisted read outputs and role-based notification
-intent before changing either persistence implementation.
+The allowlisted tools, shared guard, file sidecars, PostgreSQL schema migration,
+and startup retention pass are implemented. Run
+`scripts/check-history-governance.sh` after a demo to scan local history. Set
+`DATABASE_URL` to include PostgreSQL plaintext columns in the same check.
