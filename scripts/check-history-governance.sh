@@ -8,6 +8,7 @@ HISTORY_SCAN_DIR="${HISTORY_SCAN_DIR:-${DATA_DIR:-$ROOT_DIR/data}/hastekit}"
 PROHIBITED_PATTERN='13800001234|13961234567|川A8X6Q2|"(shipper_phone|phone|plate|license_plate|longitude|latitude|template_id|params)"[[:space:]]*:'
 failed=0
 history_files=0
+database_history_rows=0
 
 if [[ -d "$HISTORY_SCAN_DIR" ]]; then
 	while IFS= read -r -d '' file; do
@@ -45,6 +46,13 @@ if [[ -n "${DATABASE_URL:-}" ]]; then
 		failed=1
 	fi
 
+	database_history_rows="$(
+		psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atc "
+			SELECT
+				(SELECT count(*) FROM waybill.agent_checkpoints) +
+				(SELECT count(*) FROM waybill.agent_summaries)
+		"
+	)"
 	plaintext="$(
 		psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atc "
 			SELECT concat_ws('|', tenant_id, namespace, thread_id, sdk_run_id,
@@ -64,6 +72,10 @@ if [[ -n "${DATABASE_URL:-}" ]]; then
 	fi
 fi
 
+if [[ $((history_files + database_history_rows)) -eq 0 ]]; then
+	echo "No history artifacts found." >&2
+	exit 1
+fi
 if [[ "$failed" -ne 0 ]]; then
 	exit 1
 fi

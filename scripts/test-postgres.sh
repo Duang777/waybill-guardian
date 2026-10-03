@@ -54,4 +54,14 @@ if [[ "${SKIP_POSTGRES_E2E:-0}" != "1" ]]; then
 	export E2E_BACKEND_PORT="${E2E_BACKEND_PORT:-18211}"
 	export E2E_WEB_PORT="${E2E_WEB_PORT:-15211}"
 	npm --prefix "$ROOT_DIR/web" run verify:e2e
+
+	psql() {
+		shift
+		docker exec -i "$HISTORY_SCAN_PSQL_CONTAINER" \
+			psql --username waybill --dbname waybill "$@"
+	}
+	export -f psql
+	export HISTORY_SCAN_PSQL_CONTAINER="$CONTAINER"
+	unset HISTORY_SCAN_DIR DATA_DIR
+	"$ROOT_DIR/scripts/check-history-governance.sh"
 fi
