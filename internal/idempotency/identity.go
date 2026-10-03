@@ -16,6 +16,7 @@ type IdentityVersion string
 
 const (
 	IdentityLegacyV1 IdentityVersion = "legacy-v1"
+	IdentityEffectV0 IdentityVersion = "effect-v0"
 	IdentityEffectV1 IdentityVersion = "effect-v1"
 )
 
@@ -25,6 +26,7 @@ var (
 
 	proposalNamespace = uuid.MustParse("46eb81ef-2e6d-5ba6-8b9a-f72c924d8959")
 	effectNamespace   = uuid.MustParse("ea50d3aa-af21-5bb3-9bfd-6f35a36ce827")
+	effectV0Namespace = uuid.MustParse("cb7d4ee2-ec1d-5a91-bf19-bc062ac8bcaf")
 )
 
 type DerivationInput struct {
@@ -134,6 +136,30 @@ func LegacyIdentity(
 	}, nil
 }
 
+func EffectV0Identity(
+	runContext domain.RunContext,
+	action domain.Action,
+	argumentsHash string,
+) (Identity, error) {
+	if runContext.IncidentID == "" ||
+		runContext.WaybillID == "" ||
+		runContext.PlanVersion <= 0 ||
+		!action.IsWrite() ||
+		argumentsHash == "" {
+		return Identity{}, ErrInvalidIdentity
+	}
+	window := fmt.Sprintf("%s/plan-%d", runContext.IncidentID, runContext.PlanVersion)
+	name := string(action) + "|" + string(runContext.WaybillID) + "|" + window + "|" + argumentsHash
+	effectID := domain.EffectID(uuid.NewSHA1(effectV0Namespace, []byte(name)).String())
+	return Identity{
+		Version:       IdentityEffectV0,
+		EffectID:      effectID,
+		Key:           effectV0Key(effectID),
+		Action:        action,
+		ArgumentsHash: argumentsHash,
+	}, nil
+}
+
 func KeyForEffect(effectID domain.EffectID) domain.IdempotencyKey {
 	sum := sha256.Sum256([]byte("waybill-effect-key-v1\x00" + string(effectID)))
 	return domain.IdempotencyKey(hex.EncodeToString(sum[:]))
@@ -151,6 +177,10 @@ func (identity Identity) Validate() error {
 		if identity.Key != KeyForEffect(identity.EffectID) {
 			return ErrInvalidIdentity
 		}
+	case IdentityEffectV0:
+		if identity.Key != effectV0Key(identity.EffectID) {
+			return ErrInvalidIdentity
+		}
 	case IdentityLegacyV1:
 		if identity.EffectID != legacyEffectID(identity.Key) {
 			return ErrInvalidIdentity
@@ -164,6 +194,11 @@ func (identity Identity) Validate() error {
 func legacyEffectID(key domain.IdempotencyKey) domain.EffectID {
 	sum := sha256.Sum256([]byte(key))
 	return domain.EffectID("legacy-" + hex.EncodeToString(sum[:]))
+}
+
+func effectV0Key(effectID domain.EffectID) domain.IdempotencyKey {
+	sum := sha256.Sum256([]byte(effectID))
+	return domain.IdempotencyKey(hex.EncodeToString(sum[:]))
 }
 
 type executionContextKey struct{}

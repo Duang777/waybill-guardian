@@ -286,6 +286,74 @@ func TestCreateRejectsDuplicateCurrentIdentity(t *testing.T) {
 	}
 }
 
+func TestRebuildsEffectV0Approval(t *testing.T) {
+	dir := t.TempDir()
+	journal, err := audit.Open(dir, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(journal, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runContext := domain.RunContext{
+		RunID:       "run-effect-v0-rebuild",
+		IncidentID:  "incident-effect-v0-rebuild",
+		WaybillID:   "YD2026101001",
+		PlanVersion: 1,
+	}
+	identity, err := idempotency.EffectV0Identity(
+		runContext,
+		domain.ActionReassign,
+		"effect-v0-business-hash",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(context.Background(), Approval{
+		ID:          IDFor(runContext.RunID, []string{"call-effect-v0-rebuild"}),
+		RunID:       runContext.RunID,
+		WaybillID:   runContext.WaybillID,
+		PlanVersion: runContext.PlanVersion,
+		Items: []Item{{
+			CallID:         "call-effect-v0-rebuild",
+			Action:         domain.ActionReassign,
+			WireName:       "tms_reassign",
+			Params:         json.RawMessage(`{"waybill_id":"YD2026101001","carrier_id":"CARRIER-SW-42"}`),
+			ArgumentsHash:  identity.ArgumentsHash,
+			EffectID:       identity.EffectID,
+			IdempotencyKey: identity.Key,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopenedJournal, err := audit.Open(dir, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopenedJournal.Close()
+	reopened, err := NewStore(reopenedJournal, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := reopened.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveredIdentity, err := recovered.Items[0].Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recoveredIdentity != identity {
+		t.Fatalf("recovered identity = %+v, want %+v", recoveredIdentity, identity)
+	}
+}
+
 func TestAuthorizeUsesBusinessHashForCurrentAndFullHashForLegacy(t *testing.T) {
 	journal, err := audit.Open(t.TempDir(), time.Now)
 	if err != nil {
@@ -363,6 +431,62 @@ func TestAuthorizeUsesBusinessHashForCurrentAndFullHashForLegacy(t *testing.T) {
 	}
 	if !legacyAuthorization.LegacyAmbiguous {
 		t.Fatal("shared legacy key was not marked ambiguous")
+	}
+
+	v0RunContext := domain.RunContext{
+		RunID:       "run-effect-v0",
+		IncidentID:  "incident-effect-v0",
+		WaybillID:   "YD2026101001",
+		PlanVersion: 1,
+	}
+	v0Identity, err := idempotency.EffectV0Identity(
+		v0RunContext,
+		domain.ActionReassign,
+		"v0-business-hash",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v0 := Approval{
+		ID:          IDFor(v0RunContext.RunID, []string{"call-effect-v0"}),
+		RunID:       v0RunContext.RunID,
+		WaybillID:   v0RunContext.WaybillID,
+		PlanVersion: v0RunContext.PlanVersion,
+		Items: []Item{{
+			CallID:         "call-effect-v0",
+			Action:         domain.ActionReassign,
+			WireName:       "tms_reassign",
+			Params:         json.RawMessage(`{"waybill_id":"YD2026101001","carrier_id":"CARRIER-SW-42"}`),
+			ArgumentsHash:  v0Identity.ArgumentsHash,
+			EffectID:       v0Identity.EffectID,
+			IdempotencyKey: v0Identity.Key,
+		}},
+	}
+	v0, err = store.Create(context.Background(), v0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Decide(context.Background(), v0.ID, Decision{
+		Kind: DecisionConfirm,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	v0Authorization, err := store.Authorize(AuthorizationRequest{
+		RunID:                 v0.RunID,
+		CallID:                "call-effect-v0",
+		Action:                domain.ActionReassign,
+		WireName:              "tms_reassign",
+		BusinessArgumentsHash: v0Identity.ArgumentsHash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalized, err := v0Authorization.Item.Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized != v0Identity {
+		t.Fatalf("v0 identity = %+v, want %+v", normalized, v0Identity)
 	}
 }
 

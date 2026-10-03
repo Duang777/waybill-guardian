@@ -130,19 +130,25 @@ func (m *WriteEffectMiddleware) WrapToolCall(next agents.ToolCallFunc) agents.To
 		if err != nil {
 			return nil, err
 		}
-		if identity.Version == idempotency.IdentityEffectV1 {
-			expected, deriveErr := idempotency.Derive(idempotency.DerivationInput{
+		var expected idempotency.Identity
+		switch identity.Version {
+		case idempotency.IdentityEffectV1:
+			expected, err = idempotency.Derive(idempotency.DerivationInput{
 				RunContext: runContext,
 				Action:     action,
 				Target:     write.Target,
 				Arguments:  write.Arguments,
 			})
-			if deriveErr != nil {
-				return nil, deriveErr
-			}
-			if expected != identity {
-				return nil, idempotency.ErrInvalidIdentity
-			}
+		case idempotency.IdentityEffectV0:
+			expected, err = idempotency.EffectV0Identity(runContext, action, write.ArgumentsHash)
+		default:
+			expected = identity
+		}
+		if err != nil {
+			return nil, err
+		}
+		if expected != identity {
+			return nil, idempotency.ErrInvalidIdentity
 		}
 		command := idempotency.Command{
 			RunID:    runContext.RunID,

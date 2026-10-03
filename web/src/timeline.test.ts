@@ -118,6 +118,14 @@ describe("latestApproval", () => {
     };
 
     expect(approvalSchema.safeParse(approval).success).toBe(true);
+    const { identity_version: transitionalVersion, ...transitionalItem } = item;
+    expect(transitionalVersion).toBe("effect-v1");
+    expect(
+      approvalSchema.safeParse({
+        ...approval,
+        items: [transitionalItem],
+      }).success,
+    ).toBe(true);
     expect(
       approvalSchema.safeParse({
         ...approval,

@@ -123,8 +123,12 @@ func (item Item) Identity() (idempotency.Identity, error) {
 	if item.IdentityVersion == "" && item.EffectID == "" {
 		return idempotency.LegacyIdentity(item.Action, item.IdempotencyKey, item.ArgumentsHash)
 	}
+	version := item.IdentityVersion
+	if version == "" {
+		version = idempotency.IdentityEffectV0
+	}
 	identity := idempotency.Identity{
-		Version:       item.IdentityVersion,
+		Version:       version,
 		EffectID:      item.EffectID,
 		Key:           item.IdempotencyKey,
 		Action:        item.Action,
@@ -396,7 +400,7 @@ func (s *Store) Authorize(request AuthorizationRequest) (Authorization, error) {
 				item.WireName != request.WireName {
 				continue
 			}
-			if item.IdentityVersion == "" {
+			if item.IdentityVersion == "" && item.EffectID == "" {
 				if request.LegacyKey != item.IdempotencyKey ||
 					request.LegacyArgumentsHash != item.ArgumentsHash {
 					return Authorization{}, ErrApprovalNotGranted
@@ -596,14 +600,20 @@ func validateItems(items []Item) error {
 		if item.IdentityVersion == "" && item.EffectID == "" {
 			continue
 		}
+		version := item.IdentityVersion
+		if version == "" {
+			version = idempotency.IdentityEffectV0
+		}
 		identity := idempotency.Identity{
-			Version:       item.IdentityVersion,
+			Version:       version,
 			EffectID:      item.EffectID,
 			Key:           item.IdempotencyKey,
 			Action:        item.Action,
 			ArgumentsHash: item.ArgumentsHash,
 		}
-		if item.IdentityVersion != idempotency.IdentityEffectV1 || identity.Validate() != nil {
+		if identity.Validate() != nil ||
+			(item.IdentityVersion != "" &&
+				item.IdentityVersion != idempotency.IdentityEffectV1) {
 			return ErrInvalidEffectIdentity
 		}
 		if _, exists := effectIDs[item.EffectID]; exists {

@@ -134,6 +134,7 @@ const approvalItemBaseSchema = z
 
 const approvalItemSchema = z.union([
   approvalItemBaseSchema,
+  approvalItemBaseSchema.extend({ effect_id: effectIdSchema }).strict(),
   approvalItemBaseSchema
     .extend({
       identity_version: z.literal("effect-v1"),

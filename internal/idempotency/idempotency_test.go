@@ -246,6 +246,56 @@ func TestNewStoreReplaysLegacySuccessWithoutExecuting(t *testing.T) {
 	}
 }
 
+func TestNewStoreReplaysEffectV0SuccessWithoutExecuting(t *testing.T) {
+	journal, err := audit.Open(t.TempDir(), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runContext := domain.RunContext{
+		RunID:       "effect-v0-run",
+		IncidentID:  "effect-v0-incident",
+		WaybillID:   "YD2026101001",
+		PlanVersion: 1,
+	}
+	identity, err := EffectV0Identity(runContext, domain.ActionSendSMS, "effect-v0-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.Append(context.Background(), runContext.RunID, audit.Draft{
+		EventID: "write:" + string(identity.Key) + ":succeeded",
+		Actor:   audit.ActorSystem,
+		Type:    audit.EventWriteExecuted,
+		Payload: writeResultPayload{
+			Key:           identity.Key,
+			EffectID:      identity.EffectID,
+			CallID:        "effect-v0-call",
+			Action:        identity.Action,
+			ArgumentsHash: identity.ArgumentsHash,
+			Result:        json.RawMessage(`{"message_id":"SMS-v0"}`),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.Execute(context.Background(), Command{
+		RunID:    runContext.RunID,
+		CallID:   "effect-v0-call",
+		Identity: identity,
+	}, func(context.Context) (json.RawMessage, error) {
+		t.Fatal("effect-v0 success executed again")
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Duplicate || string(result.Value) != `{"message_id":"SMS-v0"}` {
+		t.Fatalf("effect-v0 replay = %+v", result)
+	}
+}
+
 func TestNewStoreRejectsPartiallyPopulatedIdentity(t *testing.T) {
 	journal, err := audit.Open(t.TempDir(), time.Now)
 	if err != nil {

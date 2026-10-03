@@ -343,6 +343,16 @@ func commandFromPayload(
 		if attempt == 0 {
 			attempt = 1
 		}
+	case version == "" && effectID != "" && attempt == 0:
+		identity = Identity{
+			Version:       IdentityEffectV0,
+			EffectID:      effectID,
+			Key:           key,
+			Action:        action,
+			ArgumentsHash: argumentsHash,
+		}
+		err = identity.Validate()
+		attempt = 1
 	case version == "" || effectID == "" || attempt <= 0:
 		return Command{}, 0, ErrInvalidIdentity
 	default:

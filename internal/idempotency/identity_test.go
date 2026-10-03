@@ -138,3 +138,24 @@ func TestExecutionContextRejectsMissingOrInvalidIdentity(t *testing.T) {
 		t.Fatalf("execution identity = %+v, want %+v", got, identity)
 	}
 }
+
+func TestEffectV0IdentityMatchesMergedMainAlgorithm(t *testing.T) {
+	identity, err := EffectV0Identity(domain.RunContext{
+		RunID:       "run-effects",
+		IncidentID:  "incident-effects",
+		WaybillID:   "YD2026101001",
+		PlanVersion: 1,
+	}, domain.ActionSendSMS, "args-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.EffectID != "38e4192b-48be-524e-9bc8-20c8cae9f245" {
+		t.Fatalf("effect id = %q", identity.EffectID)
+	}
+	if identity.Key != "14bb3f30392aa4eee584e394b9bab028f397e78d389614e9c00b54e383db291f" {
+		t.Fatalf("key = %q", identity.Key)
+	}
+	if err := identity.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
