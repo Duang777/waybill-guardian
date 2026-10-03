@@ -1,5 +1,15 @@
 package domain
 
+import (
+	"errors"
+	"fmt"
+	"regexp"
+)
+
+var ErrInvalidWaybillID = errors.New("invalid waybill id")
+
+var waybillIDPattern = regexp.MustCompile(`^YD[0-9]{10}$`)
+
 type RunID string
 type IncidentID string
 type WaybillID string
@@ -47,4 +57,11 @@ type RunContext struct {
 	IncidentID  IncidentID
 	WaybillID   WaybillID
 	PlanVersion int
+}
+
+func ValidateWaybillID(id WaybillID) error {
+	if !waybillIDPattern.MatchString(string(id)) {
+		return fmt.Errorf("%w: must match YD followed by 10 digits", ErrInvalidWaybillID)
+	}
+	return nil
 }

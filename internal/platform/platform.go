@@ -10,7 +10,10 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/domain"
 )
 
-var ErrNotImplemented = errors.New("real platform adapter is not implemented")
+var (
+	ErrNotFound       = errors.New("platform resource not found")
+	ErrNotImplemented = errors.New("real platform adapter is not implemented")
+)
 
 type EffectDisposition string
 

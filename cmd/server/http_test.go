@@ -168,6 +168,60 @@ func TestRejectValidationAndUnknownFields(t *testing.T) {
 	}
 }
 
+func TestWaybillErrorContract(t *testing.T) {
+	clients, _, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := guardian.Open(guardian.Config{DataDir: t.TempDir(), Clients: clients})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	server := httptest.NewServer(newHandler(service))
+	defer server.Close()
+
+	tests := []struct {
+		name       string
+		id         string
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:       "invalid identifier",
+			id:         "not-valid",
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "invalid_waybill_id",
+		},
+		{
+			name:       "missing waybill",
+			id:         "YD9999999999",
+			wantStatus: http.StatusNotFound,
+			wantCode:   "not_found",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response, err := http.Get(server.URL + "/api/waybills/" + test.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != test.wantStatus {
+				body, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want %d; body=%s", response.StatusCode, test.wantStatus, body)
+			}
+			var problem map[string]map[string]string
+			if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+				t.Fatal(err)
+			}
+			if problem["error"]["code"] != test.wantCode {
+				t.Fatalf("error code = %q, want %q", problem["error"]["code"], test.wantCode)
+			}
+		})
+	}
+}
+
 func TestParseLastEventID(t *testing.T) {
 	if value, err := parseLastEventID(""); err != nil || value != 0 {
 		t.Fatalf("empty cursor = %d, %v", value, err)

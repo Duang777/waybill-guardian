@@ -5,14 +5,11 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"regexp"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/idempotency"
 	"github.com/Duang777/waybill-guardian/internal/platform"
 )
-
-var waybillIDPattern = regexp.MustCompile(`^YD[0-9]{10}$`)
 
 //go:embed testdata/demo.json
 var demoData []byte
@@ -219,8 +216,5 @@ func executionKey(ctx context.Context, action domain.Action) (domain.Idempotency
 }
 
 func validateWaybillID(id string) error {
-	if !waybillIDPattern.MatchString(id) {
-		return fmt.Errorf("waybill_id must match YD followed by 10 digits")
-	}
-	return nil
+	return domain.ValidateWaybillID(domain.WaybillID(id))
 }
