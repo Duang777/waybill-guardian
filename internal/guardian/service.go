@@ -23,12 +23,13 @@ import (
 )
 
 type Config struct {
-	DataDir     string
-	Clients     platform.Clients
-	Clock       func() time.Time
-	ApprovalTTL time.Duration
-	StepDelay   time.Duration
-	Model       agentkit.ModelConfig
+	DataDir          string
+	Clients          platform.Clients
+	Clock            func() time.Time
+	ApprovalTTL      time.Duration
+	HistoryRetention time.Duration
+	StepDelay        time.Duration
+	Model            agentkit.ModelConfig
 }
 
 type RunCoordinator interface {
@@ -183,6 +184,10 @@ func openService(
 			middlewares,
 			config.StepDelay,
 			config.Model,
+			agentkit.HistoryPolicy{
+				Retention: config.HistoryRetention,
+				Clock:     config.Clock,
+			},
 		)
 	} else {
 		engine, err = agentkit.NewEngineWithPersistence(
@@ -232,10 +237,16 @@ func normalizeConfig(config Config) Config {
 	if config.ApprovalTTL <= 0 {
 		config.ApprovalTTL = 10 * time.Minute
 	}
+	if config.HistoryRetention == 0 {
+		config.HistoryRetention = 7 * 24 * time.Hour
+	}
 	return config
 }
 
 func validateConfig(config Config) error {
+	if config.HistoryRetention < 0 {
+		return fmt.Errorf("history retention must be positive")
+	}
 	if config.Clients.TMS == nil ||
 		config.Clients.Weather == nil ||
 		config.Clients.Notification == nil {
@@ -1021,6 +1032,9 @@ func (s *Service) createApproval(
 				interrupt.Action,
 				write.Action,
 			)
+		}
+		if err := write.ValidateRunContext(runContext); err != nil {
+			return approval.Approval{}, err
 		}
 		if write.LegacyKey != "" {
 			return approval.Approval{}, fmt.Errorf(

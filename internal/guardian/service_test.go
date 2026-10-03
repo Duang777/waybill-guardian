@@ -791,6 +791,20 @@ func TestOpenReleasesAuditLockAfterInitializationFailure(t *testing.T) {
 	}
 }
 
+func TestOpenRejectsNegativeHistoryRetention(t *testing.T) {
+	clients, _, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(Config{
+		DataDir:          t.TempDir(),
+		Clients:          clients,
+		HistoryRetention: -time.Second,
+	}); err == nil {
+		t.Fatal("Open accepted negative history retention")
+	}
+}
+
 func TestConcurrentCloseWaitsForResourceRelease(t *testing.T) {
 	dataDir := t.TempDir()
 	clients, _, err := tools.NewDemoClients()

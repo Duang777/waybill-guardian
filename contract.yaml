@@ -9,13 +9,13 @@
 read:
   tms.get_waybill:
     args: [waybill_id]
-    returns: 运单基础信息（起止点、货物、承运商、状态、时效要求）
+    returns: 运单运营证据（起止点、货物、承运商、状态、时效要求；不含联系方式）
   tms.get_tracking:
     args: [waybill_id]
-    returns: 轨迹点序列（时间、经纬度、速度、停留事件）
+    returns: 轨迹证据序列（时间、地点标签、速度、停留事件；不含精确坐标）
   tms.get_driver:
     args: [driver_id]
-    returns: 司机信息（姓名、电话、驾驶时长、疲劳预警）
+    returns: 司机运营证据（驾驶时长、疲劳预警；不含姓名、电话和车牌）
   ext.get_road_weather:
     args: [route]
     returns: 沿途路段天气（路段、天气现象、预警等级）
@@ -28,5 +28,5 @@ write:
     args: [waybill_id, claim_type]
     gate: 人工确认（approval pending → confirmed）
   notify.send_sms:
-    args: [phone, template_id, params]
+    args: [waybill_id, recipient, carrier_id]
     gate: 人工确认（与改派 / 赔付同一审批单，可选）

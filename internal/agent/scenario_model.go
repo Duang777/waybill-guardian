@@ -101,20 +101,14 @@ func (m *ScenarioModel) proposal(
 		CarrierID: carrierID,
 	}
 	shipperSMS := guardtools.SendSMSInput{
-		Phone:      "13800001234",
-		TemplateID: "waybill_reassigned",
-		Params: map[string]string{
-			"waybill_id": string(runContext.WaybillID),
-			"carrier_id": carrierID,
-		},
+		WaybillID: string(runContext.WaybillID),
+		Recipient: guardtools.RecipientShipper,
+		CarrierID: carrierID,
 	}
 	driverSMS := guardtools.SendSMSInput{
-		Phone:      "13961234567",
-		TemplateID: "waybill_reassigned_driver",
-		Params: map[string]string{
-			"waybill_id": string(runContext.WaybillID),
-			"carrier_id": carrierID,
-		},
+		WaybillID: string(runContext.WaybillID),
+		Recipient: guardtools.RecipientDriver,
+		CarrierID: carrierID,
 	}
 	return &responses.Response{Output: []responses.OutputMessageUnion{
 		assistantText(summary),

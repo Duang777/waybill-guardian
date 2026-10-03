@@ -127,9 +127,9 @@ describe("latestApproval", () => {
       action: "notify.send_sms",
       wire_name: "notify_send_sms",
       params: {
-        phone: "138****1234",
-        template_id: "delay",
-        params: {},
+        waybill_id: "YD2026101001",
+        recipient: "shipper",
+        carrier_id: "CARRIER-SW-42",
       },
       arguments_hash: "arguments-hash",
       identity_version: "effect-v1",

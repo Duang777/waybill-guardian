@@ -3,12 +3,15 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/idempotency"
+	"github.com/Duang777/waybill-guardian/internal/platform"
 	"github.com/hastekit/agent-sdk-go/pkg/agents"
 	"github.com/hastekit/agent-sdk-go/pkg/gateway/llm/responses"
 	"gopkg.in/yaml.v3"
@@ -108,19 +111,25 @@ func TestParseWriteCanonicalizesBusinessArguments(t *testing.T) {
 	registry := testRegistry(t)
 	first, err := registry.ParseWrite(
 		"notify_send_sms",
-		json.RawMessage(`{"phone":"13800001234","template_id":"delay","params":{"b":"2","a":"1"}}`),
+		json.RawMessage(
+			`{"waybill_id":"YD2026101001","recipient":"shipper","carrier_id":"CARRIER-SW-42"}`,
+		),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	second, err := registry.ParseWrite(
 		"notify_send_sms",
-		json.RawMessage(`{"params":{"a":"1","b":"2"},"template_id":"delay","phone":"13800001234"}`),
+		json.RawMessage(
+			`{"carrier_id":"CARRIER-SW-42","recipient":"shipper","waybill_id":"YD2026101001"}`,
+		),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Action != domain.ActionSendSMS || first.Target != "phone/13800001234" {
+	if first.Action != domain.ActionSendSMS ||
+		first.WaybillID != "YD2026101001" ||
+		first.Target != "waybill/YD2026101001/recipient/shipper" {
 		t.Fatalf("canonical write = %+v", first)
 	}
 	if string(first.Arguments) != string(second.Arguments) ||
@@ -129,6 +138,29 @@ func TestParseWriteCanonicalizesBusinessArguments(t *testing.T) {
 	}
 	if first.LegacyKey != "" {
 		t.Fatalf("business-only write has legacy key %q", first.LegacyKey)
+	}
+}
+
+func TestCanonicalWriteRejectsAnotherRunWaybill(t *testing.T) {
+	registry := testRegistry(t)
+	write, err := registry.ParseWrite(
+		"notify_send_sms",
+		json.RawMessage(
+			`{"waybill_id":"YD2026101001","recipient":"shipper","carrier_id":"CARRIER-SW-42"}`,
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := write.ValidateRunContext(domain.RunContext{
+		WaybillID: "YD2026101002",
+	}); err == nil {
+		t.Fatal("write for another waybill was accepted")
+	}
+	if err := write.ValidateRunContext(domain.RunContext{
+		WaybillID: "YD2026101001",
+	}); err != nil {
+		t.Fatalf("write for run waybill was rejected: %v", err)
 	}
 }
 
@@ -157,7 +189,7 @@ func TestParseWriteRejectsUnknownExecutionFields(t *testing.T) {
 	}
 }
 
-func TestReadToolExecutesDeterministically(t *testing.T) {
+func TestReadToolsReturnAllowlistedEvidence(t *testing.T) {
 	clients, _, err := NewDemoClients()
 	if err != nil {
 		t.Fatal(err)
@@ -170,27 +202,170 @@ func TestReadToolExecutesDeterministically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	definition, ok := registry.ByWireName("tms_get_waybill")
-	if !ok {
-		t.Fatal("tms_get_waybill is not registered")
+	calls := []struct {
+		wireName  string
+		arguments string
+	}{
+		{"tms_get_waybill", `{"waybill_id":"YD2026101001"}`},
+		{"tms_get_tracking", `{"waybill_id":"YD2026101001"}`},
+		{"tms_get_driver", `{"driver_id":"DRV-0286"}`},
+		{"ext_get_road_weather", `{"route":"杭州-成都"}`},
 	}
-	call := &agents.ToolCall{FunctionCallMessage: &responses.FunctionCallMessage{
-		ID:        "fc-1",
-		CallID:    "call-1",
-		Name:      definition.WireName,
-		Arguments: `{"waybill_id":"YD2026101001"}`,
-	}}
-	first, err := definition.Tool.Execute(context.Background(), call)
+	var transcript strings.Builder
+	for index, item := range calls {
+		definition, ok := registry.ByWireName(item.wireName)
+		if !ok {
+			t.Fatalf("%s is not registered", item.wireName)
+		}
+		call := &agents.ToolCall{FunctionCallMessage: &responses.FunctionCallMessage{
+			ID:        fmt.Sprintf("fc-%d", index),
+			CallID:    fmt.Sprintf("call-%d", index),
+			Name:      definition.WireName,
+			Arguments: item.arguments,
+		}}
+		first, err := definition.Tool.Execute(context.Background(), call)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := definition.Tool.Execute(context.Background(), call)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if *first.Output.OfString != *second.Output.OfString {
+			t.Fatalf("%s output is not deterministic", item.wireName)
+		}
+		transcript.WriteString(*first.Output.OfString)
+	}
+
+	output := transcript.String()
+	for _, expected := range []string{
+		"YD2026101001",
+		"CARRIER-SW-42",
+		"绵阳北服务区",
+		`"stop_hours":6`,
+		`"continuous_drive_hours":9`,
+		`"fatigue_alert":true`,
+		`"alert_level":"none"`,
+	} {
+		if !strings.Contains(output, expected) {
+			t.Errorf("tool output does not contain operational evidence %q: %s", expected, output)
+		}
+	}
+	for _, prohibited := range []string{
+		"13800001234",
+		"13961234567",
+		"川A8X6Q2",
+		`"shipper_phone"`,
+		`"phone"`,
+		`"plate"`,
+		`"longitude"`,
+		`"latitude"`,
+		"120.1551",
+		"30.2741",
+	} {
+		if strings.Contains(output, prohibited) {
+			t.Errorf("tool output contains prohibited value %q: %s", prohibited, output)
+		}
+	}
+}
+
+func TestSendSMSResolvesTransportDetailsInsideHandler(t *testing.T) {
+	clients, _, err := NewDemoClients()
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := definition.Tool.Execute(context.Background(), call)
+	notification := &recordingNotification{}
+	clients.Notification = notification
+	handlers, err := NewHandlers(clients)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *first.Output.OfString != *second.Output.OfString {
-		t.Fatalf("tool output is not deterministic")
+
+	for index, input := range []SendSMSInput{
+		{
+			WaybillID: "YD2026101001",
+			Recipient: RecipientShipper,
+			CarrierID: "CARRIER-SW-42",
+		},
+		{
+			WaybillID: "YD2026101001",
+			Recipient: RecipientDriver,
+			CarrierID: "CARRIER-SW-42",
+		},
+	} {
+		identity, err := idempotency.LegacyIdentity(
+			domain.ActionSendSMS,
+			domain.IdempotencyKey(fmt.Sprintf("sms-key-%d", index)),
+			"approved-arguments-hash",
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, err := idempotency.WithExecution(context.Background(), identity)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := handlers.SendSMS(ctx, input); err != nil {
+			t.Fatal(err)
+		}
 	}
+
+	if len(notification.requests) != 2 {
+		t.Fatalf("notification requests = %d, want 2", len(notification.requests))
+	}
+	assertSMSRequest(t, notification.requests[0], platform.SendSMSRequest{
+		Phone:          "13800001234",
+		TemplateID:     "waybill_reassigned",
+		Params:         map[string]string{"waybill_id": "YD2026101001", "carrier_id": "CARRIER-SW-42"},
+		IdempotencyKey: "sms-key-0",
+	})
+	assertSMSRequest(t, notification.requests[1], platform.SendSMSRequest{
+		Phone:          "13961234567",
+		TemplateID:     "waybill_reassigned_driver",
+		Params:         map[string]string{"waybill_id": "YD2026101001", "carrier_id": "CARRIER-SW-42"},
+		IdempotencyKey: "sms-key-1",
+	})
+}
+
+type recordingNotification struct {
+	requests []platform.SendSMSRequest
+}
+
+func (n *recordingNotification) SendSMS(
+	_ context.Context,
+	request platform.SendSMSRequest,
+) (platform.SMSReceipt, error) {
+	n.requests = append(n.requests, request)
+	return platform.SMSReceipt{MessageID: "message", Status: "sent"}, nil
+}
+
+func (*recordingNotification) LookupEffect(
+	context.Context,
+	platform.LookupEffectRequest,
+) (platform.EffectResult, error) {
+	return platform.EffectResult{Disposition: platform.EffectUnknown}, nil
+}
+
+func assertSMSRequest(t *testing.T, got, want platform.SendSMSRequest) {
+	t.Helper()
+	if got.Phone != want.Phone ||
+		got.TemplateID != want.TemplateID ||
+		got.IdempotencyKey != want.IdempotencyKey ||
+		!sameStringMap(got.Params, want.Params) {
+		t.Fatalf("SMS request = %+v, want %+v", got, want)
+	}
+}
+
+func sameStringMap(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func schemaRequired(t *testing.T, schema map[string]any) []string {

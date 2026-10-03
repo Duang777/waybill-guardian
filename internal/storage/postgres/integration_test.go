@@ -21,6 +21,7 @@ import (
 	guardtools "github.com/Duang777/waybill-guardian/internal/tools"
 	"github.com/google/uuid"
 	"github.com/hastekit/agent-sdk-go/pkg/agents/history"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestMigrationsAgainstPostgreSQL(t *testing.T) {
@@ -55,8 +56,8 @@ func TestMigrationsAgainstPostgreSQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if health.SchemaVersion != 3 {
-		t.Fatalf("schema version = %d, want 3", health.SchemaVersion)
+	if health.SchemaVersion != 4 {
+		t.Fatalf("schema version = %d, want 4", health.SchemaVersion)
 	}
 	var tableCount int
 	if err := db.pool.QueryRow(ctx, `
@@ -76,8 +77,8 @@ func TestMigrationsAgainstPostgreSQL(t *testing.T) {
 	).Scan(&migrationCount); err != nil {
 		t.Fatal(err)
 	}
-	if migrationCount != 3 {
-		t.Fatalf("migration rows = %d, want 3", migrationCount)
+	if migrationCount != 4 {
+		t.Fatalf("migration rows = %d, want 4", migrationCount)
 	}
 
 	insert := func() error {
@@ -118,6 +119,154 @@ func TestMigrationsAgainstPostgreSQL(t *testing.T) {
 	}
 	if successes != 1 || conflicts != 1 {
 		t.Fatalf("concurrent inbox inserts: successes = %d, conflicts = %d", successes, conflicts)
+	}
+}
+
+func TestHistoryGovernanceMigrationQuarantinesLegacyActiveRun(t *testing.T) {
+	db := openIntegrationDB(t)
+	resetDatabaseToMigration(t, db, 3)
+	tenantID := "legacy-" + uuid.NewString()
+	if _, err := db.pool.Exec(t.Context(), `
+		INSERT INTO waybill.incidents (
+			tenant_id, incident_id, source, source_incident_key,
+			waybill_id, kind, status
+		) VALUES ($1, 'incident-legacy', 'test', 'legacy-key',
+		          'YD2026101001', 'delay', 'awaiting_approval');
+		INSERT INTO waybill.runs (
+			tenant_id, run_id, incident_id, waybill_id, status,
+			sdk_run_id, checkpoint_version
+		) VALUES ($1, 'run-legacy', 'incident-legacy', 'YD2026101001',
+		          'awaiting_approval', 'sdk-run-legacy', 1);
+		INSERT INTO waybill.agent_checkpoints (
+			tenant_id, namespace, thread_id, sdk_run_id, checkpoint_version,
+			conversation_id, ciphertext, payload_hash, encryption_key_id,
+			group_id, metadata
+		) VALUES (
+			$1, 'waybill-demo', 'run-legacy', 'sdk-run-legacy', 1,
+			'conversation-legacy', decode('01', 'hex'), repeat('0', 64),
+			'legacy-key', 'default', '{"phone":"13800138000"}'::jsonb
+		);
+		INSERT INTO waybill.agent_summaries (
+			tenant_id, namespace, thread_id, summary_id, payload, payload_hash
+		) VALUES (
+			$1, 'waybill-demo', 'run-legacy', 'summary-legacy',
+			decode('01', 'hex'), repeat('0', 64)
+		);
+		INSERT INTO waybill.incidents (
+			tenant_id, incident_id, source, source_incident_key,
+			waybill_id, kind, status
+		) VALUES ($1, 'incident-terminal', 'test', 'terminal-key',
+		          'YD2026101001', 'delay', 'resolved');
+		INSERT INTO waybill.runs (
+			tenant_id, run_id, incident_id, waybill_id, status,
+			sdk_run_id, checkpoint_version, closed_at
+		) VALUES ($1, 'run-terminal', 'incident-terminal', 'YD2026101001',
+		          'completed', 'sdk-run-terminal', 1, clock_timestamp());
+		INSERT INTO waybill.agent_checkpoints (
+			tenant_id, namespace, thread_id, sdk_run_id, checkpoint_version,
+			conversation_id, ciphertext, payload_hash, encryption_key_id,
+			group_id, metadata
+		) VALUES (
+			$1, 'waybill-demo', 'run-terminal', 'sdk-run-terminal', 1,
+			'conversation-terminal', decode('01', 'hex'), repeat('0', 64),
+			'legacy-key', 'default', '{}'::jsonb
+		)
+	`, pgx.QueryExecModeSimpleProtocol, tenantID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.migrate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var (
+		runStatus      string
+		incidentStatus string
+		sdkRunID       *string
+		checkpoint     int64
+		closedAt       *time.Time
+	)
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT run.status, incident.status, run.sdk_run_id,
+		       run.checkpoint_version, run.closed_at
+		FROM waybill.runs run
+		JOIN waybill.incidents incident
+		  ON incident.tenant_id = run.tenant_id
+		 AND incident.incident_id = run.incident_id
+		WHERE run.tenant_id = $1 AND run.run_id = 'run-legacy'
+	`, tenantID).Scan(
+		&runStatus,
+		&incidentStatus,
+		&sdkRunID,
+		&checkpoint,
+		&closedAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus != "manual_review" ||
+		incidentStatus != "manual_review" ||
+		sdkRunID != nil ||
+		checkpoint != 0 ||
+		closedAt == nil {
+		t.Fatalf(
+			"migrated run = status:%s incident:%s sdk:%v checkpoint:%d closed:%v",
+			runStatus,
+			incidentStatus,
+			sdkRunID,
+			checkpoint,
+			closedAt,
+		)
+	}
+	var quarantineCount, checkpointCount, summaryCount int
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT
+			(SELECT count(*) FROM waybill.run_quarantines
+			  WHERE tenant_id = $1 AND run_id = 'run-legacy'),
+			(SELECT count(*) FROM waybill.agent_checkpoints WHERE tenant_id = $1),
+			(SELECT count(*) FROM waybill.agent_summaries WHERE tenant_id = $1)
+	`, tenantID).Scan(&quarantineCount, &checkpointCount, &summaryCount); err != nil {
+		t.Fatal(err)
+	}
+	if quarantineCount != 1 || checkpointCount != 0 || summaryCount != 0 {
+		t.Fatalf(
+			"migration rows = quarantine:%d checkpoints:%d summaries:%d",
+			quarantineCount,
+			checkpointCount,
+			summaryCount,
+		)
+	}
+	var metadataColumns, privacyColumns int
+	var terminalSDKRunID *string
+	var terminalCheckpoint int64
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT sdk_run_id, checkpoint_version
+		FROM waybill.runs
+		WHERE tenant_id = $1 AND run_id = 'run-terminal'
+	`, tenantID).Scan(&terminalSDKRunID, &terminalCheckpoint); err != nil {
+		t.Fatal(err)
+	}
+	if terminalSDKRunID != nil || terminalCheckpoint != 0 {
+		t.Fatalf(
+			"terminal run history pointer = sdk:%v checkpoint:%d, want nil and 0",
+			terminalSDKRunID,
+			terminalCheckpoint,
+		)
+	}
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT
+			count(*) FILTER (WHERE column_name = 'metadata'),
+			count(*) FILTER (WHERE column_name = 'privacy_schema_version')
+		FROM information_schema.columns
+		WHERE table_schema = 'waybill'
+		  AND table_name IN ('agent_checkpoints', 'agent_summaries')
+	`).Scan(&metadataColumns, &privacyColumns); err != nil {
+		t.Fatal(err)
+	}
+	if metadataColumns != 0 || privacyColumns != 2 {
+		t.Fatalf(
+			"history columns = metadata:%d privacy_schema_version:%d",
+			metadataColumns,
+			privacyColumns,
+		)
 	}
 }
 
@@ -500,7 +649,7 @@ func TestPrepareRecoveryQuarantinesOnlyDamagedRun(t *testing.T) {
 		t.Fatalf("quarantine rows = %d, want 1", quarantineCount)
 	}
 
-	history, err := NewConversationPersistence(db, HistoryConfig{
+	history, err := NewConversationPersistence(context.Background(), db, HistoryConfig{
 		TenantID: tenantID,
 		KeyID:    "test-key",
 		Key:      bytes.Repeat([]byte{0x24}, 32),
@@ -701,7 +850,7 @@ func TestConversationPersistenceSupportsIncrementalContinuation(t *testing.T) {
 	}()
 
 	key := bytes.Repeat([]byte{0x42}, 32)
-	persistence, err := NewConversationPersistence(db, HistoryConfig{
+	persistence, err := NewConversationPersistence(context.Background(), db, HistoryConfig{
 		TenantID: tenantID,
 		KeyID:    "test-key",
 		Key:      key,
@@ -749,7 +898,7 @@ func TestConversationPersistenceSupportsIncrementalContinuation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := NewConversationPersistence(db, HistoryConfig{
+	reopened, err := NewConversationPersistence(context.Background(), db, HistoryConfig{
 		TenantID: tenantID,
 		KeyID:    "test-key",
 		Key:      key,
@@ -787,6 +936,238 @@ func TestConversationPersistenceSupportsIncrementalContinuation(t *testing.T) {
 	}
 }
 
+func TestConversationPersistencePrunesOnlyExpiredTerminalHistory(t *testing.T) {
+	db := openIntegrationDB(t)
+	tenantID := "tenant-" + uuid.NewString()
+	repository := newIntegrationRepository(t, db, tenantID, "worker-retention")
+	defer repository.Close()
+	now := time.Now().UTC()
+	key := bytes.Repeat([]byte{0x52}, 32)
+	persistence, err := NewConversationPersistence(t.Context(), db, HistoryConfig{
+		TenantID:  tenantID,
+		KeyID:     "test-key",
+		Key:       key,
+		Clock:     func() time.Time { return now },
+		Retention: 365 * 24 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type fixture struct {
+		runID    domain.RunID
+		status   domain.RunStatus
+		closedAt *time.Time
+	}
+	expiredAt := now.Add(-2 * time.Hour)
+	recentAt := now.Add(-30 * time.Minute)
+	fixtures := []fixture{
+		{runID: domain.RunID("active-" + uuid.NewString()), status: domain.RunStarted},
+		{runID: domain.RunID("expired-" + uuid.NewString()), status: domain.RunFailed, closedAt: &expiredAt},
+		{runID: domain.RunID("recent-" + uuid.NewString()), status: domain.RunFailed, closedAt: &recentAt},
+	}
+	for _, value := range fixtures {
+		appendStarted(t, repository, value.runID)
+		leaseCtx, release, err := repository.AcquireRun(t.Context(), value.runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sdkRunID := "sdk-" + string(value.runID)
+		if err := persistence.SaveMessages(
+			leaseCtx,
+			"waybill-demo",
+			history.DefaultGroupID,
+			sdkRunID,
+			"",
+			string(value.runID),
+			"conversation-"+string(value.runID),
+			[]history.Message{{ID: "message-" + string(value.runID)}},
+			map[string]any{"history_schema_version": 1},
+		); err != nil {
+			t.Fatal(err)
+		}
+		if err := persistence.SaveSummary(leaseCtx, "waybill-demo", history.Summary{
+			ID:       "summary-" + string(value.runID),
+			ThreadID: string(value.runID),
+			Meta:     map[string]any{"history_schema_version": 1},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := release(); err != nil {
+			t.Fatal(err)
+		}
+		if value.closedAt != nil {
+			if _, err := db.pool.Exec(t.Context(), `
+				UPDATE waybill.runs
+				SET status = $3, closed_at = $4, updated_at = $4
+				WHERE tenant_id = $1 AND run_id = $2
+			`, tenantID, value.runID, value.status, value.closedAt); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	if _, err := NewConversationPersistence(t.Context(), db, HistoryConfig{
+		TenantID:  tenantID,
+		KeyID:     "test-key",
+		Key:       key,
+		Clock:     func() time.Time { return now },
+		Retention: time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range fixtures {
+		var (
+			checkpoints       int
+			summaries         int
+			sdkRunID          *string
+			checkpointVersion int64
+		)
+		if err := db.pool.QueryRow(t.Context(), `
+			SELECT
+				(SELECT count(*) FROM waybill.agent_checkpoints
+				  WHERE tenant_id = $1 AND thread_id = $2),
+				(SELECT count(*) FROM waybill.agent_summaries
+				  WHERE tenant_id = $1 AND thread_id = $2),
+				(SELECT sdk_run_id FROM waybill.runs
+				  WHERE tenant_id = $1 AND run_id = $2),
+				(SELECT checkpoint_version FROM waybill.runs
+				  WHERE tenant_id = $1 AND run_id = $2)
+		`, tenantID, value.runID).Scan(
+			&checkpoints,
+			&summaries,
+			&sdkRunID,
+			&checkpointVersion,
+		); err != nil {
+			t.Fatal(err)
+		}
+		want := 1
+		if value.runID == fixtures[1].runID {
+			want = 0
+		}
+		if checkpoints != want || summaries != want {
+			t.Fatalf(
+				"history for %s = checkpoints:%d summaries:%d, want %d each",
+				value.runID,
+				checkpoints,
+				summaries,
+				want,
+			)
+		}
+		if want == 0 && (sdkRunID != nil || checkpointVersion != 0) {
+			t.Fatalf(
+				"expired history pointer for %s = sdk:%v checkpoint:%d",
+				value.runID,
+				sdkRunID,
+				checkpointVersion,
+			)
+		}
+		if want == 1 && (sdkRunID == nil || checkpointVersion != 1) {
+			t.Fatalf(
+				"retained history pointer for %s = sdk:%v checkpoint:%d",
+				value.runID,
+				sdkRunID,
+				checkpointVersion,
+			)
+		}
+	}
+	var auditCount int
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT count(*)
+		FROM waybill.audit_events
+		WHERE tenant_id = $1 AND run_id = $2
+	`, tenantID, fixtures[1].runID).Scan(&auditCount); err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("expired run audit events = %d, want 1", auditCount)
+	}
+}
+
+func TestGuardianResumesPostgresHistoryAcrossInstances(t *testing.T) {
+	db := openIntegrationDB(t)
+	tenantID := "tenant-" + uuid.NewString()
+	key := bytes.Repeat([]byte{0x62}, 32)
+	clients, mock, err := guardtools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	openService := func(workerID string) *guardian.Service {
+		repository := newIntegrationRepository(t, db, tenantID, workerID)
+		persistence, err := NewConversationPersistence(t.Context(), db, HistoryConfig{
+			TenantID: tenantID,
+			KeyID:    "test-key",
+			Key:      key,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		service, err := guardian.OpenDurable(guardian.DurableConfig{
+			Config:      guardian.Config{Clients: clients},
+			Journal:     repository,
+			Effects:     repository,
+			History:     persistence,
+			Coordinator: repository,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return service
+	}
+
+	first := openService("worker-first")
+	run, err := first.StartDemo(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pending approval.Approval
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		pending, err = first.CurrentApproval(run.RunID)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, approval.ErrNotFound) {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if pending.ID == "" {
+		t.Fatal("timed out waiting for PostgreSQL-backed approval")
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second := openService("worker-second")
+	defer second.Close()
+	decided, err := second.Decide(t.Context(), pending.ID, guardian.DecisionRequest{
+		Kind:      approval.DecisionConfirm,
+		DecidedBy: "integration-reviewer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decided.Status != approval.StatusExecuted {
+		t.Fatalf("approval status = %q, want executed", decided.Status)
+	}
+	completed, err := second.GetRun(run.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.Status != domain.RunCompleted {
+		t.Fatalf("run status = %q, want completed", completed.Status)
+	}
+	if mock.WriteCount(domain.ActionReassign) != 1 ||
+		mock.WriteCount(domain.ActionSendSMS) != 2 {
+		t.Fatalf(
+			"writes = reassign:%d sms:%d",
+			mock.WriteCount(domain.ActionReassign),
+			mock.WriteCount(domain.ActionSendSMS),
+		)
+	}
+}
+
 func openIntegrationDB(t *testing.T) *DB {
 	t.Helper()
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
@@ -801,6 +1182,62 @@ func openIntegrationDB(t *testing.T) *DB {
 	}
 	t.Cleanup(db.Close)
 	return db
+}
+
+func resetDatabaseToMigration(t *testing.T, db *DB, targetVersion int64) {
+	t.Helper()
+	if _, err := db.pool.Exec(t.Context(), `
+		DROP SCHEMA IF EXISTS waybill CASCADE;
+		CREATE SCHEMA waybill;
+		CREATE TABLE waybill.schema_migrations (
+			version bigint PRIMARY KEY,
+			name text NOT NULL,
+			checksum text NOT NULL CHECK (checksum ~ '^[0-9a-f]{64}$'),
+			applied_at timestamptz NOT NULL DEFAULT now()
+		)
+	`, pgx.QueryExecModeSimpleProtocol); err != nil {
+		t.Fatal(err)
+	}
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, migration := range migrations {
+		if migration.Version > targetVersion {
+			break
+		}
+		tx, err := db.pool.Begin(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(
+			t.Context(),
+			migration.SQL,
+			pgx.QueryExecModeSimpleProtocol,
+		); err != nil {
+			_ = tx.Rollback(t.Context())
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(t.Context(), `
+			INSERT INTO waybill.schema_migrations (version, name, checksum)
+			VALUES ($1, $2, $3)
+		`, migration.Version, migration.Name, migration.Checksum); err != nil {
+			_ = tx.Rollback(t.Context())
+			t.Fatal(err)
+		}
+		if err := tx.Commit(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		if _, err := db.pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS waybill CASCADE`); err != nil {
+			t.Errorf("drop integration schema: %v", err)
+			return
+		}
+		if err := db.migrate(context.Background()); err != nil {
+			t.Errorf("restore integration schema: %v", err)
+		}
+	})
 }
 
 func newIntegrationRepository(

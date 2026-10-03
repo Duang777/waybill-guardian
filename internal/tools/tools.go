@@ -26,28 +26,63 @@ type GetWaybillInput struct {
 	WaybillID string `json:"waybill_id" jsonschema_description:"Waybill identifier"`
 }
 
-type GetWaybillOutput = platform.Waybill
+type CarrierEvidence struct {
+	ID             domain.CarrierID `json:"carrier_id"`
+	Name           string           `json:"name"`
+	ETAHours       int              `json:"eta_hours"`
+	ReliabilityPct float64          `json:"reliability_pct"`
+}
+
+type GetWaybillOutput struct {
+	WaybillID         domain.WaybillID  `json:"waybill_id"`
+	Origin            string            `json:"origin"`
+	Destination       string            `json:"destination"`
+	Cargo             string            `json:"cargo"`
+	CarrierID         domain.CarrierID  `json:"carrier_id"`
+	DriverID          domain.DriverID   `json:"driver_id"`
+	Status            string            `json:"status"`
+	SLAHours          int               `json:"sla_hours"`
+	CandidateCarriers []CarrierEvidence `json:"candidate_carriers"`
+}
 
 type GetTrackingInput struct {
 	WaybillID string `json:"waybill_id" jsonschema_description:"Waybill identifier"`
 }
 
+type TrackingEvidence struct {
+	Label      string  `json:"label"`
+	RecordedAt string  `json:"recorded_at"`
+	SpeedKPH   int     `json:"speed_kph"`
+	StopHours  float64 `json:"stop_hours,omitempty"`
+	Anomaly    bool    `json:"anomaly"`
+}
+
 type GetTrackingOutput struct {
-	Points []platform.TrackPoint `json:"points"`
+	Points []TrackingEvidence `json:"points"`
 }
 
 type GetDriverInput struct {
 	DriverID string `json:"driver_id" jsonschema_description:"Driver identifier"`
 }
 
-type GetDriverOutput = platform.Driver
+type GetDriverOutput struct {
+	DriverID           domain.DriverID `json:"driver_id"`
+	ContinuousDriveHrs float64         `json:"continuous_drive_hours"`
+	FatigueAlert       bool            `json:"fatigue_alert"`
+}
 
 type GetRoadWeatherInput struct {
 	Route string `json:"route" jsonschema_description:"Route in origin-destination form"`
 }
 
 type GetRoadWeatherOutput struct {
-	Segments []platform.RoadWeather `json:"segments"`
+	Segments []RoadWeatherEvidence `json:"segments"`
+}
+
+type RoadWeatherEvidence struct {
+	Segment    string `json:"segment"`
+	Condition  string `json:"condition"`
+	AlertLevel string `json:"alert_level"`
 }
 
 type ReassignInput struct {
@@ -64,10 +99,17 @@ type CreateClaimInput struct {
 
 type CreateClaimOutput = platform.ClaimOrder
 
+type NotificationRecipient string
+
+const (
+	RecipientShipper NotificationRecipient = "shipper"
+	RecipientDriver  NotificationRecipient = "driver"
+)
+
 type SendSMSInput struct {
-	Phone      string            `json:"phone" jsonschema_description:"Destination mobile number"`
-	TemplateID string            `json:"template_id" jsonschema_description:"Notification template identifier"`
-	Params     map[string]string `json:"params" jsonschema_description:"Template variables"`
+	WaybillID string                `json:"waybill_id" jsonschema_description:"Waybill identifier"`
+	Recipient NotificationRecipient `json:"recipient" jsonschema_description:"Business recipient role: shipper or driver"`
+	CarrierID string                `json:"carrier_id" jsonschema_description:"Assigned carrier identifier"`
 }
 
 type SendSMSOutput = platform.SMSReceipt
@@ -87,9 +129,32 @@ func (h *Handlers) GetWaybill(ctx context.Context, in GetWaybillInput) (GetWaybi
 	if err := validateWaybillID(in.WaybillID); err != nil {
 		return GetWaybillOutput{}, err
 	}
-	return h.clients.TMS.GetWaybill(ctx, platform.GetWaybillRequest{
+	waybill, err := h.clients.TMS.GetWaybill(ctx, platform.GetWaybillRequest{
 		WaybillID: domain.WaybillID(in.WaybillID),
 	})
+	if err != nil {
+		return GetWaybillOutput{}, err
+	}
+	carriers := make([]CarrierEvidence, 0, len(waybill.CandidateCarriers))
+	for _, carrier := range waybill.CandidateCarriers {
+		carriers = append(carriers, CarrierEvidence{
+			ID:             carrier.ID,
+			Name:           carrier.Name,
+			ETAHours:       carrier.ETAHours,
+			ReliabilityPct: carrier.ReliabilityPct,
+		})
+	}
+	return GetWaybillOutput{
+		WaybillID:         waybill.ID,
+		Origin:            waybill.Origin,
+		Destination:       waybill.Destination,
+		Cargo:             waybill.Cargo,
+		CarrierID:         waybill.CarrierID,
+		DriverID:          waybill.DriverID,
+		Status:            waybill.Status,
+		SLAHours:          waybill.SLAHours,
+		CandidateCarriers: carriers,
+	}, nil
 }
 
 func (h *Handlers) GetTracking(ctx context.Context, in GetTrackingInput) (GetTrackingOutput, error) {
@@ -102,16 +167,34 @@ func (h *Handlers) GetTracking(ctx context.Context, in GetTrackingInput) (GetTra
 	if err != nil {
 		return GetTrackingOutput{}, err
 	}
-	return GetTrackingOutput{Points: points}, nil
+	evidence := make([]TrackingEvidence, 0, len(points))
+	for _, point := range points {
+		evidence = append(evidence, TrackingEvidence{
+			Label:      point.Label,
+			RecordedAt: point.RecordedAt,
+			SpeedKPH:   point.SpeedKPH,
+			StopHours:  point.StopHours,
+			Anomaly:    point.Anomaly,
+		})
+	}
+	return GetTrackingOutput{Points: evidence}, nil
 }
 
 func (h *Handlers) GetDriver(ctx context.Context, in GetDriverInput) (GetDriverOutput, error) {
 	if in.DriverID == "" {
 		return GetDriverOutput{}, fmt.Errorf("driver_id is required")
 	}
-	return h.clients.TMS.GetDriver(ctx, platform.GetDriverRequest{
+	driver, err := h.clients.TMS.GetDriver(ctx, platform.GetDriverRequest{
 		DriverID: domain.DriverID(in.DriverID),
 	})
+	if err != nil {
+		return GetDriverOutput{}, err
+	}
+	return GetDriverOutput{
+		DriverID:           driver.ID,
+		ContinuousDriveHrs: driver.ContinuousDriveHrs,
+		FatigueAlert:       driver.FatigueAlert,
+	}, nil
 }
 
 func (h *Handlers) GetRoadWeather(ctx context.Context, in GetRoadWeatherInput) (GetRoadWeatherOutput, error) {
@@ -122,7 +205,15 @@ func (h *Handlers) GetRoadWeather(ctx context.Context, in GetRoadWeatherInput) (
 	if err != nil {
 		return GetRoadWeatherOutput{}, err
 	}
-	return GetRoadWeatherOutput{Segments: segments}, nil
+	evidence := make([]RoadWeatherEvidence, 0, len(segments))
+	for _, segment := range segments {
+		evidence = append(evidence, RoadWeatherEvidence{
+			Segment:    segment.Segment,
+			Condition:  segment.Condition,
+			AlertLevel: segment.AlertLevel,
+		})
+	}
+	return GetRoadWeatherOutput{Segments: evidence}, nil
 }
 
 func (h *Handlers) Reassign(ctx context.Context, in ReassignInput) (ReassignOutput, error) {
@@ -163,10 +254,31 @@ func (h *Handlers) SendSMS(ctx context.Context, in SendSMSInput) (SendSMSOutput,
 	if err != nil {
 		return SendSMSOutput{}, err
 	}
+	waybill, err := h.clients.TMS.GetWaybill(ctx, platform.GetWaybillRequest{
+		WaybillID: domain.WaybillID(in.WaybillID),
+	})
+	if err != nil {
+		return SendSMSOutput{}, err
+	}
+	phone := waybill.ShipperPhone
+	templateID := "waybill_reassigned"
+	if in.Recipient == RecipientDriver {
+		driver, driverErr := h.clients.TMS.GetDriver(ctx, platform.GetDriverRequest{
+			DriverID: waybill.DriverID,
+		})
+		if driverErr != nil {
+			return SendSMSOutput{}, driverErr
+		}
+		phone = driver.Phone
+		templateID = "waybill_reassigned_driver"
+	}
 	return h.clients.Notification.SendSMS(ctx, platform.SendSMSRequest{
-		Phone:          in.Phone,
-		TemplateID:     in.TemplateID,
-		Params:         in.Params,
+		Phone:      phone,
+		TemplateID: templateID,
+		Params: map[string]string{
+			"waybill_id": in.WaybillID,
+			"carrier_id": in.CarrierID,
+		},
 		IdempotencyKey: key,
 	})
 }
@@ -192,11 +304,14 @@ func validateCreateClaim(in CreateClaimInput) error {
 }
 
 func validateSendSMS(in SendSMSInput) error {
-	if in.Phone == "" || in.TemplateID == "" {
-		return fmt.Errorf("phone and template_id are required")
+	if err := validateWaybillID(in.WaybillID); err != nil {
+		return err
 	}
-	if in.Params == nil {
-		return fmt.Errorf("params is required")
+	if in.Recipient != RecipientShipper && in.Recipient != RecipientDriver {
+		return fmt.Errorf("recipient must be %q or %q", RecipientShipper, RecipientDriver)
+	}
+	if in.CarrierID == "" {
+		return fmt.Errorf("carrier_id is required")
 	}
 	return nil
 }

@@ -114,6 +114,9 @@ func (m *WriteEffectMiddleware) WrapToolCall(next agents.ToolCallFunc) agents.To
 		if write.Action != action {
 			return nil, fmt.Errorf("tool action %q does not match registered action %q", action, write.Action)
 		}
+		if err := write.ValidateRunContext(runContext); err != nil {
+			return nil, err
+		}
 		authorization, err := m.approvals.Authorize(approval.AuthorizationRequest{
 			RunID:                 runContext.RunID,
 			CallID:                call.CallID,

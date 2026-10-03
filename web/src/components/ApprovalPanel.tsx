@@ -237,7 +237,7 @@ function actionLabel(action: string): string {
     case "tms.create_claim":
       return "创建理赔单";
     case "notify.send_sms":
-      return "通知货主";
+      return "发送通知";
     default:
       return action;
   }
@@ -258,7 +258,15 @@ function actionDetail(
       : `${carrier.name} · 预计 ${carrier.eta_hours} 小时`;
   }
   if (action === "notify.send_sms") {
-    return `发送至 ${stringParam(params, "phone")}`;
+    const recipient = stringParam(params, "recipient");
+    const recipientLabel =
+      recipient === "shipper" ? "货主" : recipient === "driver" ? "司机" : recipient;
+    const carrierID = stringParam(params, "carrier_id");
+    const carrier =
+      view?.waybill.candidate_carriers.find(
+        (candidate) => candidate.carrier_id === carrierID,
+      )?.name ?? carrierID;
+    return `发送至${recipientLabel} · ${carrier}`;
   }
   return stringParam(params, "claim_type");
 }

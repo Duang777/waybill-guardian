@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/hastekit/agent-sdk-go/pkg/agents/history"
 )
@@ -18,8 +20,13 @@ func TestSecureHistoryRestrictsDirectoryAndFiles(t *testing.T) {
 	if err := os.WriteFile(existing, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	writeHistoryMetadataFixture(t, dir, historyMetadata{
+		SchemaVersion:  uint16(historySchemaVersion),
+		ConversationID: "existing",
+		ThreadID:       "thread-existing",
+	})
 
-	manager, err := openSecureHistory(dir)
+	manager, err := openSecureHistory(dir, HistoryPolicy{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,6 +34,7 @@ func TestSecureHistoryRestrictsDirectoryAndFiles(t *testing.T) {
 
 	assertFileMode(t, dir, 0o700)
 	assertFileMode(t, existing, 0o600)
+	assertFileMode(t, filepath.Join(dir, "existing.meta.json"), 0o600)
 
 	if err := manager.ConversationPersistenceAdapter.SaveMessages(
 		context.Background(),
@@ -42,6 +50,7 @@ func TestSecureHistoryRestrictsDirectoryAndFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertFileMode(t, filepath.Join(dir, "conversation-1.jsonl"), 0o600)
+	assertFileMode(t, filepath.Join(dir, "conversation-1.meta.json"), 0o600)
 
 	if err := manager.ConversationPersistenceAdapter.SaveSummary(
 		context.Background(),
@@ -57,11 +66,14 @@ func TestSecureHistoryRestrictsDirectoryAndFiles(t *testing.T) {
 
 func TestSecureHistoryRejectsLinkedConversationFiles(t *testing.T) {
 	tests := []struct {
-		name string
-		link func(string, string) error
+		name     string
+		fileName string
+		link     func(string, string) error
 	}{
-		{name: "symbolic link", link: os.Symlink},
-		{name: "hard link", link: os.Link},
+		{name: "symbolic JSONL link", fileName: "linked.jsonl", link: os.Symlink},
+		{name: "hard JSONL link", fileName: "linked.jsonl", link: os.Link},
+		{name: "symbolic metadata link", fileName: "linked.meta.json", link: os.Symlink},
+		{name: "hard metadata link", fileName: "linked.meta.json", link: os.Link},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -74,11 +86,11 @@ func TestSecureHistoryRejectsLinkedConversationFiles(t *testing.T) {
 			if err := os.WriteFile(target, []byte("do not touch"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if err := test.link(target, filepath.Join(dir, "linked.jsonl")); err != nil {
+			if err := test.link(target, filepath.Join(dir, test.fileName)); err != nil {
 				t.Fatal(err)
 			}
 
-			manager, err := openSecureHistory(dir)
+			manager, err := openSecureHistory(dir, HistoryPolicy{})
 			if manager != nil {
 				_ = manager.Close()
 				t.Fatal("openSecureHistory accepted a linked conversation file")
@@ -95,6 +107,205 @@ func TestSecureHistoryRejectsLinkedConversationFiles(t *testing.T) {
 				t.Fatalf("linked target was modified: %q", raw)
 			}
 		})
+	}
+}
+
+func TestSecureHistoryRemovesLegacyFilesBeforeReplay(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "history")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(dir, "legacy.jsonl")
+	if err := os.WriteFile(legacy, []byte(`{"legacy_phone":"13800138000"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manager, err := openSecureHistory(dir, HistoryPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("legacy history still exists: %v", err)
+	}
+}
+
+func TestSecureHistoryPrunesOnlyExpiredTerminalConversations(t *testing.T) {
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	retention := 24 * time.Hour
+	dir := filepath.Join(t.TempDir(), "history")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	expiredAt := now.Add(-retention - time.Second)
+	recentAt := now.Add(-retention + time.Second)
+	for _, fixture := range []struct {
+		id         string
+		terminalAt *time.Time
+	}{
+		{id: "active-old"},
+		{id: "terminal-expired", terminalAt: &expiredAt},
+		{id: "terminal-recent", terminalAt: &recentAt},
+	} {
+		if err := os.WriteFile(filepath.Join(dir, fixture.id+".jsonl"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		writeHistoryMetadataFixture(t, dir, historyMetadata{
+			SchemaVersion:  uint16(historySchemaVersion),
+			ConversationID: fixture.id,
+			ThreadID:       "thread-" + fixture.id,
+			TerminalAt:     fixture.terminalAt,
+		})
+		old := now.Add(-30 * 24 * time.Hour)
+		if err := os.Chtimes(filepath.Join(dir, fixture.id+".jsonl"), old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	manager, err := openSecureHistory(dir, HistoryPolicy{
+		Retention: retention,
+		Clock:     func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	assertHistoryConversationExists(t, dir, "active-old", true)
+	assertHistoryConversationExists(t, dir, "terminal-expired", false)
+	assertHistoryConversationExists(t, dir, "terminal-recent", true)
+}
+
+func TestSecureHistoryMarksTerminalConversation(t *testing.T) {
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	dir := filepath.Join(t.TempDir(), "history")
+	manager, err := openSecureHistory(dir, HistoryPolicy{
+		Clock: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	if err := manager.ConversationPersistenceAdapter.SaveMessages(
+		context.Background(),
+		Namespace,
+		history.DefaultGroupID,
+		"run-terminal",
+		"",
+		"thread-terminal",
+		"conversation-terminal",
+		nil,
+		map[string]any{"run_state": map[string]any{"status": "completed"}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := readHistoryMetadata(dir, "conversation-terminal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.TerminalAt == nil || !metadata.TerminalAt.Equal(now) {
+		t.Fatalf("terminal_at = %v, want %s", metadata.TerminalAt, now)
+	}
+}
+
+func TestSecureHistoryRecoversTerminalMarkerFromJSONL(t *testing.T) {
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	retention := time.Hour
+	dir := filepath.Join(t.TempDir(), "history")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fixtures := []struct {
+		id        string
+		updatedAt time.Time
+		want      bool
+	}{
+		{id: "interrupted-expired", updatedAt: now.Add(-2 * time.Hour), want: false},
+		{id: "interrupted-recent", updatedAt: now.Add(-30 * time.Minute), want: true},
+	}
+	for _, fixture := range fixtures {
+		record := map[string]any{
+			"type": "message",
+			"message": map[string]any{
+				"group_id":        history.DefaultGroupID,
+				"run_id":          "run-" + fixture.id,
+				"thread_id":       "thread-" + fixture.id,
+				"conversation_id": fixture.id,
+				"namespace":       Namespace,
+				"messages":        []history.Message{},
+				"meta": map[string]any{
+					historySchemaKey: historySchemaVersion,
+					"run_state":      map[string]any{"status": "completed"},
+				},
+				"created_at": fixture.updatedAt,
+				"updated_at": fixture.updatedAt,
+			},
+		}
+		raw, err := json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(
+			filepath.Join(dir, fixture.id+".jsonl"),
+			append(raw, '\n'),
+			0o600,
+		); err != nil {
+			t.Fatal(err)
+		}
+		writeHistoryMetadataFixture(t, dir, historyMetadata{
+			SchemaVersion:  uint16(historySchemaVersion),
+			ConversationID: fixture.id,
+			ThreadID:       "thread-" + fixture.id,
+		})
+	}
+
+	manager, err := openSecureHistory(dir, HistoryPolicy{
+		Retention: retention,
+		Clock:     func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	for _, fixture := range fixtures {
+		assertHistoryConversationExists(t, dir, fixture.id, fixture.want)
+	}
+	metadata, err := readHistoryMetadata(dir, "interrupted-recent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.TerminalAt == nil || !metadata.TerminalAt.Equal(fixtures[1].updatedAt) {
+		t.Fatalf("recovered terminal_at = %v, want %s", metadata.TerminalAt, fixtures[1].updatedAt)
+	}
+}
+
+func writeHistoryMetadataFixture(t *testing.T, dir string, metadata historyMetadata) {
+	t.Helper()
+	raw, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		historyMetadataPath(dir, metadata.ConversationID),
+		append(raw, '\n'),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertHistoryConversationExists(t *testing.T, dir, conversationID string, want bool) {
+	t.Helper()
+	for _, suffix := range []string{".jsonl", ".meta.json"} {
+		_, err := os.Stat(filepath.Join(dir, conversationID+suffix))
+		if want && err != nil {
+			t.Fatalf("%s%s missing: %v", conversationID, suffix, err)
+		}
+		if !want && !os.IsNotExist(err) {
+			t.Fatalf("%s%s still exists: %v", conversationID, suffix, err)
+		}
 	}
 }
 

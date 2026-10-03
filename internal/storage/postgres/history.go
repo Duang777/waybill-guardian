@@ -18,11 +18,17 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+const (
+	historyPrivacySchemaVersion int16 = 1
+	defaultHistoryRetention           = 7 * 24 * time.Hour
+)
+
 type HistoryConfig struct {
-	TenantID string
-	KeyID    string
-	Key      []byte
-	Clock    func() time.Time
+	TenantID  string
+	KeyID     string
+	Key       []byte
+	Clock     func() time.Time
+	Retention time.Duration
 }
 
 type ConversationPersistence struct {
@@ -39,6 +45,7 @@ type checkpointPayload struct {
 }
 
 func NewConversationPersistence(
+	ctx context.Context,
 	db *DB,
 	config HistoryConfig,
 ) (*ConversationPersistence, error) {
@@ -65,13 +72,23 @@ func NewConversationPersistence(
 	if config.Clock == nil {
 		config.Clock = time.Now
 	}
-	return &ConversationPersistence{
+	if config.Retention == 0 {
+		config.Retention = defaultHistoryRetention
+	}
+	if config.Retention < 0 {
+		return nil, fmt.Errorf("history retention must be positive")
+	}
+	persistence := &ConversationPersistence{
 		db:       db,
 		tenantID: config.TenantID,
 		keyID:    config.KeyID,
 		aead:     aead,
 		clock:    config.Clock,
-	}, nil
+	}
+	if err := persistence.prune(ctx, config.Clock().UTC().Add(-config.Retention)); err != nil {
+		return nil, err
+	}
+	return persistence, nil
 }
 
 func (p *ConversationPersistence) NewConversationID(context.Context) string {
@@ -97,7 +114,7 @@ func (p *ConversationPersistence) LoadMessages(
 	}
 	rows, err := p.db.pool.Query(ctx, `
 		SELECT sdk_run_id, COALESCE(previous_sdk_run_id, ''), conversation_id, group_id,
-		       ciphertext, payload_hash, encryption_key_id
+		       privacy_schema_version, ciphertext, payload_hash, encryption_key_id
 		FROM waybill.agent_checkpoints
 		WHERE tenant_id = $1 AND namespace = $2 AND thread_id = $3
 		ORDER BY checkpoint_version
@@ -113,16 +130,24 @@ func (p *ConversationPersistence) LoadMessages(
 		var runID, storedPreviousRunID, conversationID, groupID string
 		var ciphertext []byte
 		var payloadHash, keyID string
+		var privacySchemaVersion int16
 		if err := rows.Scan(
 			&runID,
 			&storedPreviousRunID,
 			&conversationID,
 			&groupID,
+			&privacySchemaVersion,
 			&ciphertext,
 			&payloadHash,
 			&keyID,
 		); err != nil {
 			return nil, fmt.Errorf("scan PostgreSQL checkpoint: %w", err)
+		}
+		if privacySchemaVersion != historyPrivacySchemaVersion {
+			return nil, fmt.Errorf(
+				"PostgreSQL checkpoint %q has unsupported privacy schema version",
+				runID,
+			)
 		}
 		raw, err := p.open(ciphertext, keyID, checkpointAAD(
 			p.tenantID,
@@ -190,18 +215,20 @@ func (p *ConversationPersistence) SaveMessages(
 	}
 
 	var (
-		version             int64
-		storedPreviousRunID string
-		storedThread        string
-		storedConversation  string
-		storedGroup         string
-		ciphertext          []byte
-		payloadHash         string
-		keyID               string
+		version              int64
+		storedPreviousRunID  string
+		storedThread         string
+		storedConversation   string
+		storedGroup          string
+		ciphertext           []byte
+		payloadHash          string
+		keyID                string
+		privacySchemaVersion int16
 	)
 	err = tx.QueryRow(ctx, `
 		SELECT checkpoint_version, COALESCE(previous_sdk_run_id, ''), thread_id,
-		       conversation_id, group_id, ciphertext, payload_hash, encryption_key_id
+		       conversation_id, group_id, privacy_schema_version, ciphertext,
+		       payload_hash, encryption_key_id
 		FROM waybill.agent_checkpoints
 		WHERE tenant_id = $1 AND namespace = $2 AND sdk_run_id = $3
 		FOR UPDATE
@@ -211,6 +238,7 @@ func (p *ConversationPersistence) SaveMessages(
 		&storedThread,
 		&storedConversation,
 		&storedGroup,
+		&privacySchemaVersion,
 		&ciphertext,
 		&payloadHash,
 		&keyID,
@@ -220,6 +248,12 @@ func (p *ConversationPersistence) SaveMessages(
 	case err == nil:
 		if storedThread != threadID {
 			return fmt.Errorf("SDK run %q belongs to another thread", runID)
+		}
+		if privacySchemaVersion != historyPrivacySchemaVersion {
+			return fmt.Errorf(
+				"PostgreSQL checkpoint %q has unsupported privacy schema version",
+				runID,
+			)
 		}
 		raw, err := p.open(
 			ciphertext,
@@ -280,31 +314,24 @@ func (p *ConversationPersistence) SaveMessages(
 	}
 	sum := sha256.Sum256(raw)
 	hash := hex.EncodeToString(sum[:])
-	metadata, err := json.Marshal(payload.Meta)
-	if err != nil {
-		return fmt.Errorf("encode PostgreSQL checkpoint metadata: %w", err)
-	}
-	if string(metadata) == "null" {
-		metadata = nil
-	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO waybill.agent_checkpoints (
 			tenant_id, namespace, thread_id, sdk_run_id, checkpoint_version,
 			previous_sdk_run_id, conversation_id, ciphertext, payload_hash,
-			encryption_key_id, group_id, metadata
+			encryption_key_id, group_id, privacy_schema_version
 		) VALUES (
 			$1, $2, $3, $4, $5,
 			NULLIF($6, ''), $7, $8, $9,
-			$10, $11, $12::jsonb
+			$10, $11, $12
 		)
 		ON CONFLICT (tenant_id, namespace, thread_id, checkpoint_version)
 		DO UPDATE SET
 			ciphertext = EXCLUDED.ciphertext,
 			payload_hash = EXCLUDED.payload_hash,
 			encryption_key_id = EXCLUDED.encryption_key_id,
-			metadata = EXCLUDED.metadata
+			privacy_schema_version = EXCLUDED.privacy_schema_version
 	`, p.tenantID, namespace, threadID, runID, version, previousRunID,
-		conversationID, sealed, hash, p.keyID, groupID, metadata); err != nil {
+		conversationID, sealed, hash, p.keyID, groupID, historyPrivacySchemaVersion); err != nil {
 		return fmt.Errorf("save PostgreSQL checkpoint: %w", MapError(err))
 	}
 	if _, err := tx.Exec(ctx, `
@@ -347,17 +374,65 @@ func (p *ConversationPersistence) SaveSummary(
 	sum := sha256.Sum256(raw)
 	if _, err := p.db.pool.Exec(ctx, `
 		INSERT INTO waybill.agent_summaries (
-			tenant_id, namespace, thread_id, summary_id, payload, payload_hash
-		) VALUES ($1, $2, $3, $4, $5, $6)
+			tenant_id, namespace, thread_id, summary_id, payload, payload_hash,
+			privacy_schema_version
+		) VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (tenant_id, namespace, thread_id)
 		DO UPDATE SET
 			summary_id = EXCLUDED.summary_id,
 			payload = EXCLUDED.payload,
 			payload_hash = EXCLUDED.payload_hash,
+			privacy_schema_version = EXCLUDED.privacy_schema_version,
 			updated_at = clock_timestamp()
 	`, p.tenantID, namespace, summary.ThreadID, summary.ID, sealed,
-		hex.EncodeToString(sum[:])); err != nil {
+		hex.EncodeToString(sum[:]), historyPrivacySchemaVersion); err != nil {
 		return fmt.Errorf("save PostgreSQL summary: %w", err)
+	}
+	return nil
+}
+
+func (p *ConversationPersistence) prune(ctx context.Context, cutoff time.Time) error {
+	tx, err := p.db.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin PostgreSQL history retention: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(context.Background())
+	}()
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM waybill.agent_summaries summary
+		USING waybill.runs run
+		WHERE summary.tenant_id = $1
+		  AND run.tenant_id = summary.tenant_id
+		  AND run.run_id = summary.thread_id
+		  AND run.status IN ('completed', 'rejected', 'failed', 'manual_review')
+		  AND run.closed_at < $2
+	`, p.tenantID, cutoff); err != nil {
+		return fmt.Errorf("prune PostgreSQL history summaries: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM waybill.agent_checkpoints checkpoint
+		USING waybill.runs run
+		WHERE checkpoint.tenant_id = $1
+		  AND run.tenant_id = checkpoint.tenant_id
+		  AND run.run_id = checkpoint.thread_id
+		  AND run.status IN ('completed', 'rejected', 'failed', 'manual_review')
+		  AND run.closed_at < $2
+	`, p.tenantID, cutoff); err != nil {
+		return fmt.Errorf("prune PostgreSQL history checkpoints: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE waybill.runs
+		SET sdk_run_id = NULL,
+		    checkpoint_version = 0
+		WHERE tenant_id = $1
+		  AND status IN ('completed', 'rejected', 'failed', 'manual_review')
+		  AND closed_at < $2
+	`, p.tenantID, cutoff); err != nil {
+		return fmt.Errorf("clear PostgreSQL history pointers: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit PostgreSQL history retention: %w", err)
 	}
 	return nil
 }

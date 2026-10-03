@@ -119,6 +119,7 @@ func NewEngine(
 	middlewares []agents.Middleware,
 	stepDelay time.Duration,
 	modelConfig ModelConfig,
+	historyPolicies ...HistoryPolicy,
 ) (*Engine, error) {
 	mode, onlineModel, err := prepareModel(modelConfig)
 	if err != nil {
@@ -127,7 +128,14 @@ func NewEngine(
 	if registry == nil {
 		return nil, fmt.Errorf("tool registry is required")
 	}
-	fileHistory, err := openSecureHistory(historyDir)
+	if len(historyPolicies) > 1 {
+		return nil, fmt.Errorf("at most one history policy is supported")
+	}
+	var historyPolicy HistoryPolicy
+	if len(historyPolicies) == 1 {
+		historyPolicy = historyPolicies[0]
+	}
+	fileHistory, err := openSecureHistory(historyDir, historyPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("open hastekit history: %w", err)
 	}
@@ -151,7 +159,7 @@ func NewEngineWithPersistence(
 	if err != nil {
 		return nil, err
 	}
-	manager := history.NewConversationManager(persistence)
+	manager := history.NewConversationManager(guardHistoryPersistence(persistence))
 	return newEngine(manager, registry, middlewares, stepDelay, mode, onlineModel), nil
 }
 
@@ -191,13 +199,15 @@ func newEngine(
 	var sdkAgent *agents.Agent
 	if mode == ModeOnline {
 		options.LLM = onlineModel
-		options.Middlewares = append(
-			append([]agents.Middleware(nil), middlewares...),
+		middlewares = append(
+			middlewares,
 			agentmiddleware.NewRetry(agentmiddleware.RetryConfig{MaxAttempts: 3}),
 		)
+	}
+	options.Middlewares = protectModelBoundary(middlewares)
+	if mode == ModeOnline {
 		sdkAgent = agents.NewAgent(options)
 	} else {
-		options.Middlewares = middlewares
 		sdkAgent = agents.NewAgent(options).WithLLM(NewScenarioModel(registry, stepDelay))
 	}
 	return &Engine{
@@ -208,6 +218,13 @@ func newEngine(
 		handles:   make(map[*agents.AgentHandle]struct{}),
 		closeDone: make(chan struct{}),
 	}
+}
+
+func protectModelBoundary(middlewares []agents.Middleware) []agents.Middleware {
+	protected := make([]agents.Middleware, 0, len(middlewares)+2)
+	protected = append(protected, historyGuard{})
+	protected = append(protected, middlewares...)
+	return append(protected, historyGuard{})
 }
 
 func newOnlineModel(config ModelConfig) (llm.Provider, error) {

@@ -27,13 +27,15 @@ handler 校验参数，调用 `internal/platform` 接口，再返回 typed resul
 - 三个写工具设置 `RequiresApproval` 和 `IdempotentHint`。
 - 写工具 schema 只包含业务参数，不包含 `effect_id` 或 `idempotency_key`。
 - Registry 严格解析写参数、拒绝未知字段，并生成 canonical JSON 和服务端目标。
+- 读工具返回显式白名单 DTO，不向模型暴露联系方式、车牌或精确坐标。
+- 短信工具只接收运单、业务接收方角色和承运商；handler 在审批后解析联系方式和固定模板。
 - `waybill_id` 必须匹配 `YD` 加十位数字。
 - handler 校验空字符串和缺失对象，从可信 execution context 读取幂等键。业务约束由
   platform 实现。
 
 ## 演示数据
 
-`testdata/demo.json` 通过 `go:embed` 编入服务。它包含一张杭州到成都运单、五个轨迹点、
+`testdata/demo.json` 通过 `go:embed` 编入服务。它包含一张杭州到成都运单、六个轨迹点、
 一名司机、沿途天气和两个候选承运商。数据不使用随机数，因此相同输入产生相同输出。
 
 ## 验证

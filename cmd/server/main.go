@@ -49,12 +49,13 @@ func run() error {
 		return err
 	}
 	var database *postgresstore.DB
+	var databaseConfig postgresstore.Config
 	if storageMode == storage.ModePostgres {
-		config, err := postgresConfigFromEnv()
+		databaseConfig, err = postgresConfigFromEnv()
 		if err != nil {
 			return err
 		}
-		database, err = postgresstore.Open(context.Background(), config)
+		database, err = postgresstore.Open(context.Background(), databaseConfig)
 		if err != nil {
 			return err
 		}
@@ -64,11 +65,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	historyRetention, err := strictDurationEnv("HISTORY_RETENTION", 7*24*time.Hour)
+	if err != nil {
+		return err
+	}
 	commonConfig := guardian.Config{
-		DataDir:     envOr("DATA_DIR", "data"),
-		Clients:     clients,
-		ApprovalTTL: durationEnv("APPROVAL_TTL", 10*time.Minute),
-		StepDelay:   durationEnv("DEMO_STEP_DELAY", 220*time.Millisecond),
+		DataDir:          envOr("DATA_DIR", "data"),
+		Clients:          clients,
+		ApprovalTTL:      durationEnv("APPROVAL_TTL", 10*time.Minute),
+		HistoryRetention: historyRetention,
+		StepDelay:        durationEnv("DEMO_STEP_DELAY", 220*time.Millisecond),
 		Model: agentkit.ModelConfig{
 			Mode:     envOr("AGENT_MODE", agentkit.ModeDemo),
 			APIStyle: envOr("LLM_API_STYLE", agentkit.APIStyleResponses),
@@ -114,14 +120,21 @@ func run() error {
 		if repositoryErr != nil {
 			return repositoryErr
 		}
+		historyCtx, cancelHistory := context.WithTimeout(
+			context.Background(),
+			databaseConfig.StartupTimeout,
+		)
 		history, historyErr := postgresstore.NewConversationPersistence(
+			historyCtx,
 			database,
 			postgresstore.HistoryConfig{
-				TenantID: tenantID,
-				KeyID:    envOr("CHECKPOINT_KEY_ID", "local-v1"),
-				Key:      key,
+				TenantID:  tenantID,
+				KeyID:     envOr("CHECKPOINT_KEY_ID", "local-v1"),
+				Key:       key,
+				Retention: historyRetention,
 			},
 		)
+		cancelHistory()
 		if historyErr != nil {
 			return historyErr
 		}
