@@ -125,20 +125,27 @@ const approvalExecutedSchema = z
   })
   .strict();
 
+const approvalExecutionItemBaseSchema = z
+  .object({
+    call_id: z.string().min(1),
+    action: z.string().min(1),
+    idempotency_key: z.string().min(1),
+    status: z.enum(["succeeded", "failed", "started", "indeterminate", "missing"]),
+  })
+  .strict();
+
 const approvalExecutionFailedSchema = z
   .object({
     approval_id: z.string().min(1),
     status: z.enum(["partially_failed", "failed"]),
     failed_at: z.string(),
     items: z.array(
-      z
-        .object({
-          call_id: z.string().min(1),
-          action: z.string().min(1),
-          idempotency_key: z.string().min(1),
-          status: z.enum(["succeeded", "failed", "started", "indeterminate", "missing"]),
-        })
-        .strict(),
+      z.union([
+        approvalExecutionItemBaseSchema,
+        approvalExecutionItemBaseSchema
+          .extend({ effect_id: z.string().min(1) })
+          .strict(),
+      ]),
     ),
   })
   .strict();

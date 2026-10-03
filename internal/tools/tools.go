@@ -3,10 +3,12 @@ package tools
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"regexp"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/idempotency"
 	"github.com/Duang777/waybill-guardian/internal/platform"
 )
 
@@ -52,26 +54,23 @@ type GetRoadWeatherOutput struct {
 }
 
 type ReassignInput struct {
-	WaybillID      string `json:"waybill_id" jsonschema_description:"Waybill identifier"`
-	CarrierID      string `json:"carrier_id" jsonschema_description:"Target carrier identifier"`
-	IdempotencyKey string `json:"idempotency_key" jsonschema_description:"Stable key for this business effect"`
+	WaybillID string `json:"waybill_id" jsonschema_description:"Waybill identifier"`
+	CarrierID string `json:"carrier_id" jsonschema_description:"Target carrier identifier"`
 }
 
 type ReassignOutput = platform.ReassignOrder
 
 type CreateClaimInput struct {
-	WaybillID      string `json:"waybill_id" jsonschema_description:"Waybill identifier"`
-	ClaimType      string `json:"claim_type" jsonschema_description:"Claim category"`
-	IdempotencyKey string `json:"idempotency_key" jsonschema_description:"Stable key for this business effect"`
+	WaybillID string `json:"waybill_id" jsonschema_description:"Waybill identifier"`
+	ClaimType string `json:"claim_type" jsonschema_description:"Claim category"`
 }
 
 type CreateClaimOutput = platform.ClaimOrder
 
 type SendSMSInput struct {
-	Phone          string            `json:"phone" jsonschema_description:"Destination mobile number"`
-	TemplateID     string            `json:"template_id" jsonschema_description:"Notification template identifier"`
-	Params         map[string]string `json:"params" jsonschema_description:"Template variables"`
-	IdempotencyKey string            `json:"idempotency_key" jsonschema_description:"Stable key for this business effect"`
+	Phone      string            `json:"phone" jsonschema_description:"Destination mobile number"`
+	TemplateID string            `json:"template_id" jsonschema_description:"Notification template identifier"`
+	Params     map[string]string `json:"params" jsonschema_description:"Template variables"`
 }
 
 type SendSMSOutput = platform.SMSReceipt
@@ -130,55 +129,93 @@ func (h *Handlers) GetRoadWeather(ctx context.Context, in GetRoadWeatherInput) (
 }
 
 func (h *Handlers) Reassign(ctx context.Context, in ReassignInput) (ReassignOutput, error) {
-	if err := validateWaybillID(in.WaybillID); err != nil {
+	if err := validateReassign(in); err != nil {
 		return ReassignOutput{}, err
 	}
-	if in.CarrierID == "" {
-		return ReassignOutput{}, fmt.Errorf("carrier_id is required")
-	}
-	if in.IdempotencyKey == "" {
-		return ReassignOutput{}, fmt.Errorf("idempotency_key is required")
+	key, err := executionKey(ctx, domain.ActionReassign)
+	if err != nil {
+		return ReassignOutput{}, err
 	}
 	return h.clients.TMS.Reassign(ctx, platform.ReassignRequest{
 		WaybillID:      domain.WaybillID(in.WaybillID),
 		CarrierID:      domain.CarrierID(in.CarrierID),
-		IdempotencyKey: domain.IdempotencyKey(in.IdempotencyKey),
+		IdempotencyKey: key,
 	})
 }
 
 func (h *Handlers) CreateClaim(ctx context.Context, in CreateClaimInput) (CreateClaimOutput, error) {
-	if err := validateWaybillID(in.WaybillID); err != nil {
+	if err := validateCreateClaim(in); err != nil {
 		return CreateClaimOutput{}, err
 	}
-	if in.ClaimType == "" {
-		return CreateClaimOutput{}, fmt.Errorf("claim_type is required")
-	}
-	if in.IdempotencyKey == "" {
-		return CreateClaimOutput{}, fmt.Errorf("idempotency_key is required")
+	key, err := executionKey(ctx, domain.ActionCreateClaim)
+	if err != nil {
+		return CreateClaimOutput{}, err
 	}
 	return h.clients.TMS.CreateClaim(ctx, platform.CreateClaimRequest{
 		WaybillID:      domain.WaybillID(in.WaybillID),
 		ClaimType:      in.ClaimType,
-		IdempotencyKey: domain.IdempotencyKey(in.IdempotencyKey),
+		IdempotencyKey: key,
 	})
 }
 
 func (h *Handlers) SendSMS(ctx context.Context, in SendSMSInput) (SendSMSOutput, error) {
-	if in.Phone == "" || in.TemplateID == "" {
-		return SendSMSOutput{}, fmt.Errorf("phone and template_id are required")
+	if err := validateSendSMS(in); err != nil {
+		return SendSMSOutput{}, err
 	}
-	if in.Params == nil {
-		return SendSMSOutput{}, fmt.Errorf("params is required")
-	}
-	if in.IdempotencyKey == "" {
-		return SendSMSOutput{}, fmt.Errorf("idempotency_key is required")
+	key, err := executionKey(ctx, domain.ActionSendSMS)
+	if err != nil {
+		return SendSMSOutput{}, err
 	}
 	return h.clients.Notification.SendSMS(ctx, platform.SendSMSRequest{
 		Phone:          in.Phone,
 		TemplateID:     in.TemplateID,
 		Params:         in.Params,
-		IdempotencyKey: domain.IdempotencyKey(in.IdempotencyKey),
+		IdempotencyKey: key,
 	})
+}
+
+func validateReassign(in ReassignInput) error {
+	if err := validateWaybillID(in.WaybillID); err != nil {
+		return err
+	}
+	if in.CarrierID == "" {
+		return fmt.Errorf("carrier_id is required")
+	}
+	return nil
+}
+
+func validateCreateClaim(in CreateClaimInput) error {
+	if err := validateWaybillID(in.WaybillID); err != nil {
+		return err
+	}
+	if in.ClaimType == "" {
+		return fmt.Errorf("claim_type is required")
+	}
+	return nil
+}
+
+func validateSendSMS(in SendSMSInput) error {
+	if in.Phone == "" || in.TemplateID == "" {
+		return fmt.Errorf("phone and template_id are required")
+	}
+	if in.Params == nil {
+		return fmt.Errorf("params is required")
+	}
+	return nil
+}
+
+func executionKey(ctx context.Context, action domain.Action) (domain.IdempotencyKey, error) {
+	identity, err := idempotency.ExecutionFromContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	if identity.Action != action {
+		return "", errors.Join(
+			idempotency.ErrInvalidIdentity,
+			fmt.Errorf("execution action %q does not match tool action %q", identity.Action, action),
+		)
+	}
+	return identity.Key, nil
 }
 
 func validateWaybillID(id string) error {

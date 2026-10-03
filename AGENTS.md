@@ -25,7 +25,7 @@ cmd/server ── internal/guardian
                  ├─ agent:       hastekit Agent loop、pause/resume、模型 retry
                  ├─ tools:       7 个契约工具
                  ├─ approval:    pending → confirmed / rejected / expired
-                 ├─ idempotency: 服务端重算 key、并发合并、结果回放
+                 ├─ idempotency: 稳定 effect 身份、并发合并、结果回放
                  ├─ audit:       append-only JSONL、哈希链、SSE replay/live
                  └─ platform:    mock clients 和未实现的 real adapter
 ```
@@ -42,7 +42,7 @@ cmd/server ── internal/guardian
 |---|---|---|
 | Agent runtime | hastekit/agent-sdk-go v0.0.24 | 使用 typed tools、file history、HITL pause/resume 和流式事件。在线模式只启用三次模型 retry，不配置 provider fallback |
 | 人工审批 | SDK pause/resume 加持久化审批投影 | 写操作先暂停，人工决定落盘后才恢复同一个 thread。超时默认拒绝 |
-| 幂等 | middleware 重算并校验 `idempotency_key` | 模型传值不可信。并发调用共享第一次执行结果，避免重复改派和通知 |
+| 幂等 | 服务端从业务参数生成 `effect_id` 和 key | 模型不接触执行身份。同类写操作按目标和参数独立去重 |
 | 审计 | 每个 run 一份 append-only JSONL | `seq`、`prev_hash` 和 `hash` 支持完整性校验、回放和 SSE 续传 |
 | 数据层 | fixture 驱动的 mock clients | 默认演示可离线重复运行。`PLATFORM=real` 在 adapter 未实现时拒绝启动 |
 | 前端地图 | 高德 JS API 加本地降级视图 | 未配置 key 或 SDK 加载失败时，其他演示功能仍可使用 |

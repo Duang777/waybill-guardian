@@ -23,7 +23,8 @@ pending → confirmed → executed
 一次 hastekit pause 中的所有写调用组成一个不可变审批批次。主要字段包括：
 
 - `id`、`run_id`、`sdk_run_id`、`waybill_id` 和 `plan_version`。
-- `items[]`：`call_id`、action、wire name、完整参数、参数哈希和幂等键。
+- `items[]`：`call_id`、action、wire name、业务参数、`identity_version`、`effect_id`、参数哈希
+  和幂等键。
 - `reason` 和 `evidence`。
 - `status`、`requested_at`、`expires_at`、`decided_by`、`decided_at` 和 `reject_reason`。
 
@@ -43,8 +44,9 @@ hastekit v0.0.24 会在 `RequiresApproval` 工具执行前持久化 pending call
 人工决定先写入业务日志，`guardian` 再用同一个 namespace、thread 和 SDK run ID 提交
 approve 或 reject resolution。
 
-确认后，`ApprovalGuard` 还会比较 `call_id` 和参数哈希。只有完整匹配审批批次的写调用才能
-进入幂等 middleware。所有 effect 成功后，状态才变为 `executed`；否则
+确认后，`WriteEffectMiddleware` 比较 `call_id`、wire name、参数哈希和服务端重算的
+`effect_id`。只有完整匹配审批批次的写调用才能执行。所有 effect 成功后，状态才变为
+`executed`；否则
 `approval_execution_failed` 事件记录每个 effect 的结果，run 进入 `failed`。
 
 ## 验证

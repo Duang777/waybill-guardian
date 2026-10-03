@@ -9,6 +9,7 @@ import (
 
 	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/idempotency"
 )
 
 func TestApprovalStateMachineAndRecovery(t *testing.T) {
@@ -252,6 +253,119 @@ func TestRebuildsPartiallyFailedApproval(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsDuplicateCurrentIdentity(t *testing.T) {
+	journal, err := audit.Open(t.TempDir(), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	store, err := NewStore(journal, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	value := testCurrentApproval(t, "run-duplicate", "call-1")
+	duplicateCall := value
+	duplicateCall.Items = append(duplicateCall.Items, duplicateCall.Items[0])
+	if _, err := store.Create(context.Background(), duplicateCall); !errors.Is(err, ErrDuplicateCallID) {
+		t.Fatalf("duplicate call error = %v", err)
+	}
+
+	duplicateEffect := value
+	second := duplicateEffect.Items[0]
+	second.CallID = "call-2"
+	duplicateEffect.Items = append(duplicateEffect.Items, second)
+	if _, err := store.Create(context.Background(), duplicateEffect); !errors.Is(err, ErrDuplicateEffect) {
+		t.Fatalf("duplicate effect error = %v", err)
+	}
+
+	partialIdentity := value
+	partialIdentity.Items[0].EffectID = ""
+	if _, err := store.Create(context.Background(), partialIdentity); !errors.Is(err, ErrInvalidEffectIdentity) {
+		t.Fatalf("partial identity error = %v", err)
+	}
+}
+
+func TestAuthorizeUsesBusinessHashForCurrentAndFullHashForLegacy(t *testing.T) {
+	journal, err := audit.Open(t.TempDir(), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	store, err := NewStore(journal, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	current := testCurrentApproval(t, "run-current", "call-current")
+	current, err = store.Create(context.Background(), current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Decide(context.Background(), current.ID, Decision{
+		Kind: DecisionConfirm,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	item := current.Items[0]
+	authorization, err := store.Authorize(AuthorizationRequest{
+		RunID:                 current.RunID,
+		CallID:                item.CallID,
+		Action:                item.Action,
+		WireName:              item.WireName,
+		BusinessArgumentsHash: item.ArgumentsHash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authorization.Item.EffectID != item.EffectID {
+		t.Fatalf("authorized effect = %q, want %q", authorization.Item.EffectID, item.EffectID)
+	}
+	if _, err := store.Authorize(AuthorizationRequest{
+		RunID:                 current.RunID,
+		CallID:                item.CallID,
+		Action:                item.Action,
+		WireName:              item.WireName,
+		BusinessArgumentsHash: "changed",
+	}); !errors.Is(err, ErrApprovalNotGranted) {
+		t.Fatalf("changed current arguments error = %v", err)
+	}
+
+	legacy := testApproval("run-legacy", "call-legacy")
+	legacy.Items = append(legacy.Items, Item{
+		CallID:         "call-legacy-2",
+		Action:         domain.ActionSendSMS,
+		WireName:       "notify_send_sms",
+		Params:         json.RawMessage(`{"idempotency_key":"key"}`),
+		ArgumentsHash:  "other-full-hash",
+		IdempotencyKey: "key",
+	})
+	legacy.ID = IDFor(legacy.RunID, []string{"call-legacy", "call-legacy-2"})
+	legacy, err = store.Create(context.Background(), legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Decide(context.Background(), legacy.ID, Decision{
+		Kind: DecisionConfirm,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	legacyAuthorization, err := store.Authorize(AuthorizationRequest{
+		RunID:               legacy.RunID,
+		CallID:              "call-legacy",
+		Action:              domain.ActionReassign,
+		WireName:            "tms_reassign",
+		LegacyArgumentsHash: "hash",
+		LegacyKey:           "key",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !legacyAuthorization.LegacyAmbiguous {
+		t.Fatal("shared legacy key was not marked ambiguous")
+	}
+}
+
 func testApproval(runID, callID string) Approval {
 	params, _ := json.Marshal(map[string]string{
 		"waybill_id":      "YD2026101001",
@@ -274,5 +388,40 @@ func testApproval(runID, callID string) Approval {
 		Evidence: []Evidence{
 			{Label: "continuous_drive_hours", Value: "9"},
 		},
+	}
+}
+
+func testCurrentApproval(t *testing.T, runID, callID string) Approval {
+	t.Helper()
+	params := json.RawMessage(`{"waybill_id":"YD2026101001","carrier_id":"CARRIER-SW-42"}`)
+	identity, err := idempotency.Derive(idempotency.DerivationInput{
+		RunContext: domain.RunContext{
+			RunID:       domain.RunID(runID),
+			IncidentID:  "incident-current",
+			WaybillID:   "YD2026101001",
+			PlanVersion: 1,
+		},
+		Action:    domain.ActionReassign,
+		Target:    "waybill/YD2026101001/carrier/CARRIER-SW-42",
+		Arguments: params,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Approval{
+		ID:          IDFor(domain.RunID(runID), []string{callID}),
+		RunID:       domain.RunID(runID),
+		WaybillID:   "YD2026101001",
+		PlanVersion: 1,
+		Items: []Item{{
+			CallID:          callID,
+			Action:          domain.ActionReassign,
+			WireName:        "tms_reassign",
+			Params:          params,
+			ArgumentsHash:   identity.ArgumentsHash,
+			IdentityVersion: identity.Version,
+			EffectID:        identity.EffectID,
+			IdempotencyKey:  identity.Key,
+		}},
 	}
 }

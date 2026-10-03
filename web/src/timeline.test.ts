@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditEventSchema, type AuditEventType } from "./api";
+import { approvalSchema, auditEventSchema, type AuditEventType } from "./api";
 import {
   initialTimelineState,
   latestApproval,
@@ -88,6 +88,44 @@ describe("timelineReducer", () => {
 });
 
 describe("latestApproval", () => {
+  it("accepts current effect identity and rejects partial identity", () => {
+    const item = {
+      call_id: "call-1",
+      action: "notify.send_sms",
+      wire_name: "notify_send_sms",
+      params: {
+        phone: "138****1234",
+        template_id: "delay",
+        params: {},
+      },
+      arguments_hash: "arguments-hash",
+      identity_version: "effect-v1",
+      effect_id: "1fd92e48-c2d3-5654-b9f9-a507a2348354",
+      idempotency_key: "key-1",
+    };
+    const approval = {
+      id: "APR-1",
+      run_id: "run-1",
+      sdk_run_id: "sdk-1",
+      waybill_id: "YD2026101001",
+      plan_version: 1,
+      items: [item],
+      reason: "降低延误风险",
+      evidence: [],
+      status: "pending",
+      requested_at: "2026-10-10T01:15:00Z",
+      expires_at: "2026-10-10T01:25:00Z",
+    };
+
+    expect(approvalSchema.safeParse(approval).success).toBe(true);
+    expect(
+      approvalSchema.safeParse({
+        ...approval,
+        items: [{ ...item, effect_id: undefined }],
+      }).success,
+    ).toBe(false);
+  });
+
   it("projects requested, decided, and executed events", () => {
     const requested = event(1, "approval_requested", {
       id: "APR-1",

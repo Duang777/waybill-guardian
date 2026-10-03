@@ -2,6 +2,7 @@ import { z } from "zod";
 
 const runIdSchema = z.string().min(1).brand<"RunID">();
 const approvalIdSchema = z.string().min(1).brand<"ApprovalID">();
+const effectIdSchema = z.string().min(1).brand<"EffectID">();
 const waybillIdSchema = z.string().regex(/^YD\d{10}$/).brand<"WaybillID">();
 
 export type RunID = z.infer<typeof runIdSchema>;
@@ -120,7 +121,7 @@ export const approvalStatusSchema = z.enum([
   "expired",
 ]);
 
-const approvalItemSchema = z
+const approvalItemBaseSchema = z
   .object({
     call_id: z.string().min(1),
     action: z.string().min(1),
@@ -130,6 +131,16 @@ const approvalItemSchema = z
     idempotency_key: z.string().min(1),
   })
   .strict();
+
+const approvalItemSchema = z.union([
+  approvalItemBaseSchema,
+  approvalItemBaseSchema
+    .extend({
+      identity_version: z.literal("effect-v1"),
+      effect_id: effectIdSchema,
+    })
+    .strict(),
+]);
 
 const evidenceSchema = z
   .object({

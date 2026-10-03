@@ -13,13 +13,18 @@ import (
 
 	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/idempotency"
 )
 
 var (
-	ErrNotFound           = errors.New("approval not found")
-	ErrDecisionConflict   = errors.New("approval decision conflicts with current status")
-	ErrRejectReason       = errors.New("reject reason is required")
-	ErrApprovalNotGranted = errors.New("write call is not covered by a confirmed approval")
+	ErrNotFound                = errors.New("approval not found")
+	ErrDecisionConflict        = errors.New("approval decision conflicts with current status")
+	ErrRejectReason            = errors.New("reject reason is required")
+	ErrApprovalNotGranted      = errors.New("write call is not covered by a confirmed approval")
+	ErrDuplicateCallID         = errors.New("approval contains duplicate call_id")
+	ErrDuplicateEffect         = errors.New("approval contains duplicate effect_id")
+	ErrInvalidEffectIdentity   = errors.New("approval contains an invalid effect identity")
+	ErrAmbiguousLegacyApproval = errors.New("legacy approval contains unresolved items with the same key")
 )
 
 type Status string
@@ -48,12 +53,14 @@ type Evidence struct {
 }
 
 type Item struct {
-	CallID         string                `json:"call_id"`
-	Action         domain.Action         `json:"action"`
-	WireName       string                `json:"wire_name"`
-	Params         json.RawMessage       `json:"params"`
-	ArgumentsHash  string                `json:"arguments_hash"`
-	IdempotencyKey domain.IdempotencyKey `json:"idempotency_key"`
+	CallID          string                      `json:"call_id"`
+	Action          domain.Action               `json:"action"`
+	WireName        string                      `json:"wire_name"`
+	Params          json.RawMessage             `json:"params"`
+	ArgumentsHash   string                      `json:"arguments_hash"`
+	IdentityVersion idempotency.IdentityVersion `json:"identity_version,omitempty"`
+	EffectID        domain.EffectID             `json:"effect_id,omitempty"`
+	IdempotencyKey  domain.IdempotencyKey       `json:"idempotency_key"`
 }
 
 type Approval struct {
@@ -92,8 +99,41 @@ const (
 type ItemExecution struct {
 	CallID         string                `json:"call_id"`
 	Action         domain.Action         `json:"action"`
+	EffectID       domain.EffectID       `json:"effect_id,omitempty"`
 	IdempotencyKey domain.IdempotencyKey `json:"idempotency_key"`
 	Status         ExecutionStatus       `json:"status"`
+}
+
+type AuthorizationRequest struct {
+	RunID                 domain.RunID
+	CallID                string
+	Action                domain.Action
+	WireName              string
+	BusinessArgumentsHash string
+	LegacyArgumentsHash   string
+	LegacyKey             domain.IdempotencyKey
+}
+
+type Authorization struct {
+	Item            Item
+	LegacyAmbiguous bool
+}
+
+func (item Item) Identity() (idempotency.Identity, error) {
+	if item.IdentityVersion == "" && item.EffectID == "" {
+		return idempotency.LegacyIdentity(item.Action, item.IdempotencyKey, item.ArgumentsHash)
+	}
+	identity := idempotency.Identity{
+		Version:       item.IdentityVersion,
+		EffectID:      item.EffectID,
+		Key:           item.IdempotencyKey,
+		Action:        item.Action,
+		ArgumentsHash: item.ArgumentsHash,
+	}
+	if err := identity.Validate(); err != nil {
+		return idempotency.Identity{}, errors.Join(ErrInvalidEffectIdentity, err)
+	}
+	return identity, nil
 }
 
 type Store struct {
@@ -159,6 +199,9 @@ func IDFor(runID domain.RunID, callIDs []string) domain.ApprovalID {
 func (s *Store) Create(ctx context.Context, value Approval) (Approval, error) {
 	if value.ID == "" || value.RunID == "" || value.WaybillID == "" || len(value.Items) == 0 {
 		return Approval{}, fmt.Errorf("approval id, run id, waybill id, and items are required")
+	}
+	if err := validateItems(value.Items); err != nil {
+		return Approval{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -339,20 +382,37 @@ func (s *Store) List() []Approval {
 	return result
 }
 
-func (s *Store) Allows(runID domain.RunID, callID, argumentsHash string) bool {
+func (s *Store) Authorize(request AuthorizationRequest) (Authorization, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, value := range s.approvals {
-		if value.RunID != runID || (value.Status != StatusConfirmed && value.Status != StatusExecuted) {
+		if value.RunID != request.RunID ||
+			(value.Status != StatusConfirmed && value.Status != StatusExecuted) {
 			continue
 		}
 		for _, item := range value.Items {
-			if item.CallID == callID && item.ArgumentsHash == argumentsHash {
-				return true
+			if item.CallID != request.CallID ||
+				item.Action != request.Action ||
+				item.WireName != request.WireName {
+				continue
 			}
+			if item.IdentityVersion == "" {
+				if request.LegacyKey != item.IdempotencyKey ||
+					request.LegacyArgumentsHash != item.ArgumentsHash {
+					return Authorization{}, ErrApprovalNotGranted
+				}
+				return Authorization{
+					Item:            cloneItem(item),
+					LegacyAmbiguous: legacyKeyCount(value.Items, item.IdempotencyKey) > 1,
+				}, nil
+			}
+			if request.LegacyKey != "" || request.BusinessArgumentsHash != item.ArgumentsHash {
+				return Authorization{}, ErrApprovalNotGranted
+			}
+			return Authorization{Item: cloneItem(item)}, nil
 		}
 	}
-	return false
+	return Authorization{}, ErrApprovalNotGranted
 }
 
 func (s *Store) ExpireDue(ctx context.Context) ([]Approval, error) {
@@ -388,6 +448,9 @@ func (s *Store) applyLocked(event audit.Event) error {
 	case audit.EventApprovalRequested:
 		var value Approval
 		if err := json.Unmarshal(event.Payload, &value); err != nil {
+			return err
+		}
+		if err := validateItems(value.Items); err != nil {
 			return err
 		}
 		s.approvals[value.ID] = value
@@ -453,7 +516,10 @@ func validateExecutionFailure(expected []Item, actual []ItemExecution) (Status, 
 	succeeded := 0
 	for _, result := range actual {
 		item, ok := remaining[result.CallID]
-		if !ok || item.Action != result.Action || item.IdempotencyKey != result.IdempotencyKey {
+		if !ok ||
+			item.Action != result.Action ||
+			item.EffectID != result.EffectID ||
+			item.IdempotencyKey != result.IdempotencyKey {
 			return "", fmt.Errorf("execution result does not match approved call %q", result.CallID)
 		}
 		delete(remaining, result.CallID)
@@ -499,8 +565,61 @@ func matchesDecision(status Status, decision DecisionKind) bool {
 func clone(value Approval) Approval {
 	value.Items = append([]Item(nil), value.Items...)
 	for index := range value.Items {
-		value.Items[index].Params = append(json.RawMessage(nil), value.Items[index].Params...)
+		value.Items[index] = cloneItem(value.Items[index])
 	}
 	value.Evidence = append([]Evidence(nil), value.Evidence...)
 	return value
+}
+
+func cloneItem(value Item) Item {
+	value.Params = append(json.RawMessage(nil), value.Params...)
+	return value
+}
+
+func validateItems(items []Item) error {
+	callIDs := make(map[string]struct{}, len(items))
+	effectIDs := make(map[domain.EffectID]struct{}, len(items))
+	for _, item := range items {
+		if item.CallID == "" ||
+			!item.Action.IsWrite() ||
+			item.WireName == "" ||
+			len(item.Params) == 0 ||
+			item.ArgumentsHash == "" ||
+			item.IdempotencyKey == "" {
+			return ErrInvalidEffectIdentity
+		}
+		if _, exists := callIDs[item.CallID]; exists {
+			return ErrDuplicateCallID
+		}
+		callIDs[item.CallID] = struct{}{}
+
+		if item.IdentityVersion == "" && item.EffectID == "" {
+			continue
+		}
+		identity := idempotency.Identity{
+			Version:       item.IdentityVersion,
+			EffectID:      item.EffectID,
+			Key:           item.IdempotencyKey,
+			Action:        item.Action,
+			ArgumentsHash: item.ArgumentsHash,
+		}
+		if item.IdentityVersion != idempotency.IdentityEffectV1 || identity.Validate() != nil {
+			return ErrInvalidEffectIdentity
+		}
+		if _, exists := effectIDs[item.EffectID]; exists {
+			return ErrDuplicateEffect
+		}
+		effectIDs[item.EffectID] = struct{}{}
+	}
+	return nil
+}
+
+func legacyKeyCount(items []Item, key domain.IdempotencyKey) int {
+	count := 0
+	for _, item := range items {
+		if item.IdentityVersion == "" && item.EffectID == "" && item.IdempotencyKey == key {
+			count++
+		}
+	}
+	return count
 }

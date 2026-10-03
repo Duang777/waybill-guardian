@@ -125,10 +125,9 @@ func LegacyIdentity(
 	if !action.IsWrite() || key == "" || argumentsHash == "" {
 		return Identity{}, ErrInvalidIdentity
 	}
-	sum := sha256.Sum256([]byte(key))
 	return Identity{
 		Version:       IdentityLegacyV1,
-		EffectID:      domain.EffectID("legacy-" + hex.EncodeToString(sum[:])),
+		EffectID:      legacyEffectID(key),
 		Key:           key,
 		Action:        action,
 		ArgumentsHash: argumentsHash,
@@ -153,10 +152,18 @@ func (identity Identity) Validate() error {
 			return ErrInvalidIdentity
 		}
 	case IdentityLegacyV1:
+		if identity.EffectID != legacyEffectID(identity.Key) {
+			return ErrInvalidIdentity
+		}
 	default:
 		return ErrInvalidIdentity
 	}
 	return nil
+}
+
+func legacyEffectID(key domain.IdempotencyKey) domain.EffectID {
+	sum := sha256.Sum256([]byte(key))
+	return domain.EffectID("legacy-" + hex.EncodeToString(sum[:]))
 }
 
 type executionContextKey struct{}
