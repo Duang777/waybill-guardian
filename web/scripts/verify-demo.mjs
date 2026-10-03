@@ -140,9 +140,40 @@ try {
   await page.getByRole("button", { name: "重新演示", exact: true }).click();
   await page.getByText("改派至川行快运", { exact: true }).waitFor();
   await page.getByRole("button", { name: "驳回方案", exact: true }).click();
-  await page.getByLabel("驳回原因").fill("首选承运商当前无可用车辆");
+  const rejectionReason = "首选承运商当前无可用车辆";
+  await page.getByLabel("驳回原因").fill(rejectionReason);
+  const rejectPattern = "**/api/approvals/*/reject";
+  await page.route(rejectPattern, (route) =>
+    route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: { code: "decision_conflict", message: "simulated conflict" },
+      }),
+    }),
+  );
   await page.getByRole("button", { name: "确认驳回", exact: true }).click();
+  await page.getByText("simulated conflict", { exact: true }).waitFor();
+  assert(
+    (await page.getByLabel("驳回原因").inputValue()) === rejectionReason,
+    "failed rejection discarded the operator reason",
+  );
+  await page.unroute(rejectPattern);
+
+  const pendingResponse = await page.request.get(`${backendURL}/api/approvals?status=pending`);
+  const pendingBody = await pendingResponse.json();
+  const pendingApprovalID = pendingBody.approvals?.[0]?.id;
+  assert(typeof pendingApprovalID === "string", "pending approval was not discoverable");
+  const externalReject = await page.request.post(
+    `${backendURL}/api/approvals/${encodeURIComponent(pendingApprovalID)}/reject`,
+    { data: { reason: rejectionReason } },
+  );
+  assert(externalReject.ok(), `external rejection failed with ${externalReject.status()}`);
   await page.getByText("改派至蜀道联运", { exact: true }).waitFor();
+  assert(
+    (await page.getByLabel("驳回原因").count()) === 0,
+    "new approval retained the previous rejection draft",
+  );
   const rejectionEventCount = await page.locator("ol li").count();
   assert(rejectionEventCount === 14, `reject path produced ${rejectionEventCount} events, want 14`);
   assert(await skipLinkIsHidden(page), "skip link is visible after the reject flow");

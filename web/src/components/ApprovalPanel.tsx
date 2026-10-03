@@ -31,6 +31,8 @@ export function ApprovalPanel({
   const approvalTitle = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
+    setRejecting(false);
+    setReason("");
     if (approval !== null) {
       approvalTitle.current?.focus();
     }
@@ -59,7 +61,11 @@ export function ApprovalPanel({
     if (trimmed.length === 0) {
       return;
     }
-    await onReject(trimmed);
+    try {
+      await onReject(trimmed);
+    } catch {
+      return;
+    }
     setRejecting(false);
     setReason("");
   };

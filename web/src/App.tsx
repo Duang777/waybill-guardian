@@ -195,6 +195,7 @@ export default function App() {
       await rejectApproval(currentApproval.id, reason);
     } catch (error) {
       setMessage(errorMessage(error));
+      throw error;
     } finally {
       setPendingAction(null);
     }
