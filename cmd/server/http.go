@@ -37,7 +37,10 @@ func newHandler(service *guardian.Service) http.Handler {
 	}
 	server.mux.HandleFunc("GET /healthz", server.health)
 	server.mux.HandleFunc("POST /api/demo/trigger", server.triggerDemo)
+	server.mux.HandleFunc("GET /api/runs", server.listRuns)
+	server.mux.HandleFunc("GET /api/runs/{id}", server.runSnapshot)
 	server.mux.HandleFunc("GET /api/runs/{id}/timeline", server.timeline)
+	server.mux.HandleFunc("GET /api/approvals", server.listApprovals)
 	server.mux.HandleFunc("POST /api/approvals/{id}/confirm", server.confirm)
 	server.mux.HandleFunc("POST /api/approvals/{id}/reject", server.reject)
 	server.mux.HandleFunc("GET /api/waybills/{id}", server.waybill)
@@ -69,6 +72,41 @@ func (a *api) triggerDemo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, run)
+}
+
+func (a *api) listRuns(w http.ResponseWriter, r *http.Request) {
+	if err := requireFilter(r, "active"); err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid_filter", err.Error())
+		return
+	}
+	runs, err := a.service.ListActiveRuns(r.Context())
+	if err != nil {
+		a.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+}
+
+func (a *api) runSnapshot(w http.ResponseWriter, r *http.Request) {
+	snapshot, err := a.service.Snapshot(r.Context(), domain.RunID(r.PathValue("id")))
+	if err != nil {
+		a.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (a *api) listApprovals(w http.ResponseWriter, r *http.Request) {
+	if err := requireFilter(r, "pending"); err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid_filter", err.Error())
+		return
+	}
+	approvals, err := a.service.ListPendingApprovals(r.Context())
+	if err != nil {
+		a.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"approvals": approvals})
 }
 
 func (a *api) waybill(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +161,7 @@ func (a *api) timeline(w http.ResponseWriter, r *http.Request) {
 	}
 	defer a.releaseSSESlot()
 
-	after, err := parseLastEventID(r.Header.Get("Last-Event-ID"))
+	after, err := parseTimelineCursor(r)
 	if err != nil {
 		writeProblem(w, http.StatusBadRequest, "invalid_cursor", err.Error())
 		return
@@ -242,6 +280,29 @@ func parseLastEventID(value string) (audit.Seq, error) {
 		return 0, fmt.Errorf("Last-Event-ID must be an unsigned integer")
 	}
 	return audit.Seq(parsed), nil
+}
+
+func parseTimelineCursor(r *http.Request) (audit.Seq, error) {
+	if header := r.Header.Get("Last-Event-ID"); header != "" {
+		return parseLastEventID(header)
+	}
+	values, ok := r.URL.Query()["after"]
+	if !ok {
+		return 0, nil
+	}
+	if len(values) != 1 || values[0] == "" {
+		return 0, fmt.Errorf("after must be one unsigned integer")
+	}
+	return parseLastEventID(values[0])
+}
+
+func requireFilter(r *http.Request, expected string) error {
+	query := r.URL.Query()
+	values, ok := query["status"]
+	if len(query) != 1 || !ok || len(values) != 1 || values[0] != expected {
+		return fmt.Errorf("status must be %q", expected)
+	}
+	return nil
 }
 
 func requireEmptyBody(body io.Reader) error {

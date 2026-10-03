@@ -1,0 +1,156 @@
+package guardian
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"time"
+
+	"github.com/Duang777/waybill-guardian/internal/approval"
+	"github.com/Duang777/waybill-guardian/internal/audit"
+	"github.com/Duang777/waybill-guardian/internal/domain"
+)
+
+type RunSummary struct {
+	RunID      domain.RunID      `json:"run_id"`
+	IncidentID domain.IncidentID `json:"incident_id"`
+	WaybillID  domain.WaybillID  `json:"waybill_id"`
+	Status     domain.RunStatus  `json:"status"`
+	LastSeq    audit.Seq         `json:"last_seq"`
+	UpdatedAt  time.Time         `json:"updated_at"`
+}
+
+type PendingApprovalSummary struct {
+	ID          domain.ApprovalID `json:"id"`
+	RunID       domain.RunID      `json:"run_id"`
+	WaybillID   domain.WaybillID  `json:"waybill_id"`
+	PlanVersion int               `json:"plan_version"`
+	RequestedAt time.Time         `json:"requested_at"`
+	ExpiresAt   time.Time         `json:"expires_at"`
+}
+
+type RunSnapshot struct {
+	Run    RunSummary    `json:"run"`
+	Events []audit.Event `json:"events"`
+}
+
+func (s *Service) ListActiveRuns(ctx context.Context) ([]RunSummary, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	runs, err := projectRuns(s.journal.AllEvents())
+	if err != nil {
+		return nil, err
+	}
+	result := make([]RunSummary, 0, len(runs))
+	for _, run := range runs {
+		if !isTerminal(run.Status) {
+			result = append(result, run)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].UpdatedAt.Equal(result[j].UpdatedAt) {
+			return result[i].RunID < result[j].RunID
+		}
+		return result[i].UpdatedAt.After(result[j].UpdatedAt)
+	})
+	return result, nil
+}
+
+func (s *Service) ListPendingApprovals(ctx context.Context) ([]PendingApprovalSummary, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	result := make([]PendingApprovalSummary, 0)
+	for _, value := range s.approvals.List() {
+		if value.Status != approval.StatusPending {
+			continue
+		}
+		result = append(result, PendingApprovalSummary{
+			ID:          value.ID,
+			RunID:       value.RunID,
+			WaybillID:   value.WaybillID,
+			PlanVersion: value.PlanVersion,
+			RequestedAt: value.RequestedAt,
+			ExpiresAt:   value.ExpiresAt,
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].ExpiresAt.Equal(result[j].ExpiresAt) {
+			if result[i].RequestedAt.Equal(result[j].RequestedAt) {
+				return result[i].ID < result[j].ID
+			}
+			return result[i].RequestedAt.Before(result[j].RequestedAt)
+		}
+		return result[i].ExpiresAt.Before(result[j].ExpiresAt)
+	})
+	return result, nil
+}
+
+func (s *Service) Snapshot(ctx context.Context, runID domain.RunID) (RunSnapshot, error) {
+	events, err := s.journal.Replay(ctx, runID, 0)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	run, err := projectRun(events)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	return RunSnapshot{Run: run, Events: events}, nil
+}
+
+func projectRuns(events []audit.Event) (map[domain.RunID]RunSummary, error) {
+	grouped := make(map[domain.RunID][]audit.Event)
+	for _, event := range events {
+		grouped[event.RunID] = append(grouped[event.RunID], event)
+	}
+	result := make(map[domain.RunID]RunSummary, len(grouped))
+	for runID, runEvents := range grouped {
+		run, err := projectRun(runEvents)
+		if err != nil {
+			return nil, fmt.Errorf("project run %q: %w", runID, err)
+		}
+		result[runID] = run
+	}
+	return result, nil
+}
+
+func projectRun(events []audit.Event) (RunSummary, error) {
+	if len(events) == 0 {
+		return RunSummary{}, audit.ErrRunNotFound
+	}
+	var run RunSummary
+	for index, event := range events {
+		if index > 0 && event.Seq != events[index-1].Seq+1 {
+			return RunSummary{}, fmt.Errorf("non-contiguous event sequence at %d", event.Seq)
+		}
+		run.RunID = event.RunID
+		run.LastSeq = event.Seq
+		run.UpdatedAt = event.TS
+		switch event.Type {
+		case audit.EventRunStarted:
+			var payload runStartedPayload
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				return RunSummary{}, err
+			}
+			run.IncidentID = payload.IncidentID
+			run.WaybillID = payload.WaybillID
+			run.Status = payload.Status
+		case audit.EventApprovalRequested:
+			run.Status = domain.RunAwaitingApproval
+		case audit.EventApprovalDecided, audit.EventApprovalReconciliationRequired:
+			run.Status = domain.RunExecuting
+		case audit.EventApprovalExecutionFailed, audit.EventRunFailed:
+			run.Status = domain.RunFailed
+		case audit.EventRunCompleted:
+			run.Status = domain.RunCompleted
+		case audit.EventRunRejected:
+			run.Status = domain.RunRejected
+		}
+	}
+	if run.RunID == "" || run.IncidentID == "" || run.WaybillID == "" || run.LastSeq == 0 {
+		return RunSummary{}, fmt.Errorf("run event prefix is incomplete")
+	}
+	return run, nil
+}
