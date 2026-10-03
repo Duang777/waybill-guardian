@@ -76,7 +76,10 @@ type Engine struct {
 
 type toolCallTracker struct {
 	agents.NoopMiddleware
-	wg sync.WaitGroup
+
+	mu      sync.Mutex
+	wg      sync.WaitGroup
+	closing bool
 }
 
 func (t *toolCallTracker) WrapToolCall(next agents.ToolCallFunc) agents.ToolCallFunc {
@@ -85,10 +88,29 @@ func (t *toolCallTracker) WrapToolCall(next agents.ToolCallFunc) agents.ToolCall
 		tool *agents.BaseTool,
 		call *agents.ToolCall,
 	) (*agents.ToolCallResponse, error) {
-		t.wg.Add(1)
+		if err := t.begin(); err != nil {
+			return nil, err
+		}
 		defer t.wg.Done()
 		return next(ctx, tool, call)
 	}
+}
+
+func (t *toolCallTracker) begin() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closing {
+		return ErrEngineClosed
+	}
+	t.wg.Add(1)
+	return nil
+}
+
+func (t *toolCallTracker) closeAndWait() {
+	t.mu.Lock()
+	t.closing = true
+	t.mu.Unlock()
+	t.wg.Wait()
 }
 
 func NewEngine(
@@ -272,7 +294,7 @@ func (e *Engine) Close() error {
 	for _, handle := range handles {
 		_, _ = handle.Wait()
 	}
-	e.tools.wg.Wait()
+	e.tools.closeAndWait()
 	closeErrors = append(closeErrors, e.history.Close())
 	closeErr := errors.Join(closeErrors...)
 

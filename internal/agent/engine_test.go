@@ -435,7 +435,7 @@ func TestEngineCloseStopsDetachedRunBeforeClosingHistory(t *testing.T) {
 	}
 }
 
-func TestToolCallTrackerWaitsForUnderlyingCall(t *testing.T) {
+func TestToolCallTrackerClosesAfterUnderlyingCalls(t *testing.T) {
 	tracker := &toolCallTracker{}
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -457,7 +457,7 @@ func TestToolCallTrackerWaitsForUnderlyingCall(t *testing.T) {
 
 	waitDone := make(chan struct{})
 	go func() {
-		tracker.wg.Wait()
+		tracker.closeAndWait()
 		close(waitDone)
 	}()
 	select {
@@ -475,5 +475,21 @@ func TestToolCallTrackerWaitsForUnderlyingCall(t *testing.T) {
 	case <-waitDone:
 	case <-time.After(time.Second):
 		t.Fatal("tracker did not observe tool completion")
+	}
+
+	var lateCalled atomic.Bool
+	late := tracker.WrapToolCall(func(
+		context.Context,
+		*agents.BaseTool,
+		*agents.ToolCall,
+	) (*agents.ToolCallResponse, error) {
+		lateCalled.Store(true)
+		return nil, nil
+	})
+	if _, err := late(context.Background(), nil, nil); !errors.Is(err, ErrEngineClosed) {
+		t.Fatalf("late tool call error = %v, want ErrEngineClosed", err)
+	}
+	if lateCalled.Load() {
+		t.Fatal("late tool call reached the underlying handler")
 	}
 }
