@@ -120,11 +120,13 @@ func run() error {
 			return repositoryErr
 		}
 		history, historyErr := postgresstore.NewConversationPersistence(
+			context.Background(),
 			database,
 			postgresstore.HistoryConfig{
-				TenantID: tenantID,
-				KeyID:    envOr("CHECKPOINT_KEY_ID", "local-v1"),
-				Key:      key,
+				TenantID:  tenantID,
+				KeyID:     envOr("CHECKPOINT_KEY_ID", "local-v1"),
+				Key:       key,
+				Retention: historyRetention,
 			},
 		)
 		if historyErr != nil {
