@@ -156,7 +156,7 @@ func TestPartialWriteFailureDoesNotCompleteApprovalOrRun(t *testing.T) {
 	if itemStatuses[domain.ActionReassign] != approval.ExecutionSucceeded {
 		t.Fatalf("reassign status = %q", itemStatuses[domain.ActionReassign])
 	}
-	if itemStatuses[domain.ActionSendSMS] != approval.ExecutionFailed {
+	if itemStatuses[domain.ActionSendSMS] != approval.ExecutionPermanent {
 		t.Fatalf("sms status = %q", itemStatuses[domain.ActionSendSMS])
 	}
 }
@@ -535,6 +535,172 @@ func TestRecoverCompletesApprovalWithoutRepeatingSuccessfulEffects(t *testing.T)
 	}
 }
 
+func TestRecoverReconcilesStartedEffectWithoutStoppingService(t *testing.T) {
+	dataDir := t.TempDir()
+	clients, mock, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := Open(Config{DataDir: dataDir, Clients: clients, StepDelay: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := first.StartDemo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := waitForApproval(t, first, run.RunID)
+	confirmed, err := first.approvals.Decide(context.Background(), pending.ID, approval.Decision{
+		Kind:      approval.DecisionConfirm,
+		DecidedBy: "recovery-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reassign approval.Item
+	for _, item := range confirmed.Items {
+		if item.Action == domain.ActionReassign {
+			reassign = item
+			break
+		}
+	}
+	if reassign.CallID == "" {
+		t.Fatal("approval has no reassign effect")
+	}
+	var arguments struct {
+		WaybillID string `json:"waybill_id"`
+		CarrierID string `json:"carrier_id"`
+	}
+	if err := json.Unmarshal(reassign.Params, &arguments); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := clients.TMS.Reassign(context.Background(), platform.ReassignRequest{
+		WaybillID:      domain.WaybillID(arguments.WaybillID),
+		CarrierID:      domain.CarrierID(arguments.CarrierID),
+		IdempotencyKey: reassign.IdempotencyKey,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.journal.Append(context.Background(), run.RunID, audit.Draft{
+		EventID: "write:" + string(reassign.IdempotencyKey) + ":started",
+		Actor:   audit.ActorSystem,
+		Type:    audit.EventWriteStarted,
+		Payload: map[string]any{
+			"idempotency_key":  reassign.IdempotencyKey,
+			"effect_id":        reassign.EffectID,
+			"identity_version": reassign.IdentityVersion,
+			"call_id":          reassign.CallID,
+			"action":           reassign.Action,
+			"arguments_hash":   reassign.ArgumentsHash,
+			"attempt":          1,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(Config{DataDir: dataDir, Clients: clients, StepDelay: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := reopened.Recover(context.Background()); err != nil {
+		t.Fatalf("Recover stopped service for one unresolved effect: %v", err)
+	}
+	recovered, err := reopened.GetApproval(pending.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != approval.StatusExecuted {
+		t.Fatalf("approval status = %q, want executed", recovered.Status)
+	}
+	if mock.WriteCount(domain.ActionReassign) != 1 {
+		t.Fatalf("reassign calls = %d, want 1", mock.WriteCount(domain.ActionReassign))
+	}
+}
+
+func TestRecoverLeavesUnknownStartedEffectPendingWithoutStoppingService(t *testing.T) {
+	dataDir := t.TempDir()
+	clients, mock, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clients.TMS = unknownLookupTMS{TMSClient: clients.TMS}
+	first, err := Open(Config{DataDir: dataDir, Clients: clients, StepDelay: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := first.StartDemo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := waitForApproval(t, first, run.RunID)
+	confirmed, err := first.approvals.Decide(context.Background(), pending.ID, approval.Decision{
+		Kind:      approval.DecisionConfirm,
+		DecidedBy: "recovery-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var item approval.Item
+	for _, candidate := range confirmed.Items {
+		if candidate.Action == domain.ActionReassign {
+			item = candidate
+			break
+		}
+	}
+	if item.CallID == "" {
+		t.Fatal("approval has no reassign effect")
+	}
+	if _, err := first.journal.Append(context.Background(), run.RunID, audit.Draft{
+		EventID: "write:" + string(item.IdempotencyKey) + ":started",
+		Actor:   audit.ActorSystem,
+		Type:    audit.EventWriteStarted,
+		Payload: map[string]any{
+			"idempotency_key":  item.IdempotencyKey,
+			"effect_id":        item.EffectID,
+			"identity_version": item.IdentityVersion,
+			"call_id":          item.CallID,
+			"action":           item.Action,
+			"arguments_hash":   item.ArgumentsHash,
+			"attempt":          1,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(Config{DataDir: dataDir, Clients: clients, StepDelay: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := reopened.Recover(context.Background()); err != nil {
+		t.Fatalf("Recover stopped service for a pending reconciliation: %v", err)
+	}
+	recovered, err := reopened.GetApproval(pending.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != approval.StatusReconciliationRequired {
+		t.Fatalf("approval status = %q, want reconciliation_required", recovered.Status)
+	}
+	recoveredRun, err := reopened.GetRun(run.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recoveredRun.Status == domain.RunFailed {
+		t.Fatal("pending reconciliation marked the run failed")
+	}
+	if mock.WriteCount(item.Action) != 0 {
+		t.Fatalf("unknown effect was dispatched %d more times", mock.WriteCount(item.Action))
+	}
+}
+
 func TestOpenReleasesAuditLockAfterInitializationFailure(t *testing.T) {
 	dataDir := t.TempDir()
 	clients, _, err := tools.NewDemoClients()
@@ -696,5 +862,23 @@ func (failingNotificationClient) SendSMS(
 	context.Context,
 	platform.SendSMSRequest,
 ) (platform.SMSReceipt, error) {
-	return platform.SMSReceipt{}, errors.New("notification write failed")
+	return platform.SMSReceipt{}, platform.PermanentEffectError(errors.New("notification write failed"))
+}
+
+func (failingNotificationClient) LookupEffect(
+	context.Context,
+	platform.LookupEffectRequest,
+) (platform.EffectResult, error) {
+	return platform.EffectResult{Disposition: platform.EffectPermanentFailed}, nil
+}
+
+type unknownLookupTMS struct {
+	platform.TMSClient
+}
+
+func (unknownLookupTMS) LookupEffect(
+	context.Context,
+	platform.LookupEffectRequest,
+) (platform.EffectResult, error) {
+	return platform.EffectResult{Disposition: platform.EffectUnknown}, nil
 }

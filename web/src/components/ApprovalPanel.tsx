@@ -76,6 +76,8 @@ export function ApprovalPanel({
                 ? `改派至${primaryCarrier}`
                 : approval.status === "executed"
                   ? "方案已执行"
+                  : approval.status === "reconciliation_required"
+                    ? "方案等待平台对账"
                   : approval.status === "partially_failed"
                     ? "方案部分执行失败"
                     : approval.status === "failed"
@@ -279,6 +281,8 @@ function approvalStatusLabel(status: Approval["status"]): string {
       return "待确认";
     case "confirmed":
       return "已确认";
+    case "reconciliation_required":
+      return "待对账";
     case "executed":
       return "已执行";
     case "partially_failed":

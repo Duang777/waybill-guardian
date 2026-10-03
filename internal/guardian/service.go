@@ -114,7 +114,7 @@ func Open(config Config) (*Service, error) {
 	if err != nil {
 		return closeJournal(err)
 	}
-	idempotencyStore, err := idempotency.NewStore(journal)
+	idempotencyStore, err := idempotency.NewStore(journal, platformEffectLookup(config.Clients))
 	if err != nil {
 		return closeJournal(err)
 	}
@@ -162,6 +162,23 @@ func Open(config Config) (*Service, error) {
 		return nil, errors.Join(err, engine.Close(), journal.Close())
 	}
 	return service, nil
+}
+
+func platformEffectLookup(clients platform.Clients) idempotency.LookupFunc {
+	return func(ctx context.Context, command idempotency.Command) (platform.EffectResult, error) {
+		request := platform.LookupEffectRequest{
+			Action:         command.Identity.Action,
+			IdempotencyKey: command.Identity.Key,
+		}
+		switch command.Identity.Action {
+		case domain.ActionReassign, domain.ActionCreateClaim:
+			return clients.TMS.LookupEffect(ctx, request)
+		case domain.ActionSendSMS:
+			return clients.Notification.LookupEffect(ctx, request)
+		default:
+			return platform.EffectResult{Disposition: platform.EffectPermanentFailed}, nil
+		}
+	}
 }
 
 func (s *Service) StartDemo(ctx context.Context) (RunView, error) {
@@ -266,7 +283,9 @@ func (s *Service) Decide(
 		return decided, nil
 	}
 	if current.Status != approval.StatusPending &&
-		!(current.Status == approval.StatusConfirmed && request.Kind == approval.DecisionConfirm) {
+		!((current.Status == approval.StatusConfirmed ||
+			current.Status == approval.StatusReconciliationRequired) &&
+			request.Kind == approval.DecisionConfirm) {
 		return decided, nil
 	}
 
@@ -320,7 +339,10 @@ func (s *Service) CurrentApproval(runID domain.RunID) (approval.Approval, error)
 		return values[i].RequestedAt.After(values[j].RequestedAt)
 	})
 	for _, value := range values {
-		if value.RunID == runID && value.Status == approval.StatusPending {
+		if value.RunID == runID &&
+			(value.Status == approval.StatusPending ||
+				value.Status == approval.StatusConfirmed ||
+				value.Status == approval.StatusReconciliationRequired) {
 			return value, nil
 		}
 	}
@@ -382,29 +404,57 @@ func (s *Service) Recover(ctx context.Context) error {
 				continue
 			}
 			if err := s.expireApproval(ctx, value.ID); err != nil {
-				return err
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				s.recordFailure(value.RunID, err)
 			}
-		case approval.StatusConfirmed:
+		case approval.StatusConfirmed, approval.StatusReconciliationRequired:
+			reconciliationPending, err := s.reconcileApprovalEffects(ctx, value)
+			if err != nil {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				s.recordFailure(value.RunID, err)
+				continue
+			}
+			if reconciliationPending {
+				continue
+			}
+			value, err = s.approvals.Get(value.ID)
+			if err != nil {
+				s.recordFailure(value.RunID, err)
+				continue
+			}
 			run := s.run(value.RunID)
 			if isTerminal(run.Status) {
 				if run.Status == domain.RunCompleted && s.approvalEffectsSucceeded(value) {
 					if _, err := s.approvals.MarkExecuted(ctx, value.ID); err != nil {
-						return err
+						s.recordFailure(value.RunID, err)
 					}
 				} else if run.Status == domain.RunCompleted {
-					return fmt.Errorf("completed run %q has incomplete approval effects", run.RunID)
+					s.recordFailure(
+						value.RunID,
+						fmt.Errorf("completed run %q has incomplete approval effects", run.RunID),
+					)
 				}
 				continue
 			}
 			if err := s.recoverDecision(value, true); err != nil {
-				return err
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				s.recordFailure(value.RunID, err)
 			}
 		case approval.StatusRejected, approval.StatusExpired:
 			if value.PlanVersion < latestPlan[value.RunID] || isTerminal(s.run(value.RunID).Status) {
 				continue
 			}
 			if err := s.recoverDecision(value, false); err != nil {
-				return err
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				s.recordFailure(value.RunID, err)
 			}
 		}
 	}
@@ -434,7 +484,8 @@ func (s *Service) recoverDecision(value approval.Approval, approved bool) error 
 		if current.Status != approval.StatusRejected && current.Status != approval.StatusExpired {
 			return nil
 		}
-	} else if current.Status != approval.StatusConfirmed {
+	} else if current.Status != approval.StatusConfirmed &&
+		current.Status != approval.StatusReconciliationRequired {
 		return nil
 	}
 	if isTerminal(s.run(value.RunID).Status) {
@@ -470,11 +521,30 @@ func (s *Service) resumeApproval(
 		PlanVersion: planVersion,
 	}, value.SDKRunID, interruptsFromApproval(value), approved)
 	if err != nil {
+		if approved {
+			results, _ := s.approvalEffectResults(value)
+			if executionRequiresReconciliation(results) {
+				pending, markErr := s.approvals.MarkReconciliationRequired(ctx, value.ID, results)
+				if markErr != nil {
+					return approval.Approval{}, errors.Join(err, markErr)
+				}
+				s.updateRunStatus(value.RunID, domain.RunExecuting)
+				return pending, nil
+			}
+		}
 		return approval.Approval{}, err
 	}
 	if approved {
 		results, allSucceeded := s.approvalEffectResults(value)
 		if !allSucceeded {
+			if executionRequiresReconciliation(results) {
+				pending, markErr := s.approvals.MarkReconciliationRequired(ctx, value.ID, results)
+				if markErr != nil {
+					return approval.Approval{}, markErr
+				}
+				s.updateRunStatus(value.RunID, domain.RunExecuting)
+				return pending, nil
+			}
 			failed, markErr := s.approvals.MarkExecutionFailed(ctx, value.ID, results)
 			if markErr != nil {
 				return approval.Approval{}, markErr
@@ -517,6 +587,42 @@ func (s *Service) expireApproval(ctx context.Context, id domain.ApprovalID) erro
 		return err
 	}
 	return nil
+}
+
+func (s *Service) reconcileApprovalEffects(
+	ctx context.Context,
+	value approval.Approval,
+) (bool, error) {
+	for _, item := range value.Items {
+		identity, err := item.Identity()
+		if err != nil {
+			return false, err
+		}
+		command := idempotency.Command{
+			RunID:    value.RunID,
+			CallID:   item.CallID,
+			Identity: identity,
+		}
+		state, ok := s.effects.Lookup(command)
+		if !ok || state != idempotency.StateUnknown {
+			continue
+		}
+		if _, err := s.effects.Reconcile(ctx, command); err != nil &&
+			!errors.Is(err, idempotency.ErrRetryableFailure) &&
+			!errors.Is(err, idempotency.ErrReconciliationPending) &&
+			!errors.Is(err, idempotency.ErrManualReview) {
+			return false, err
+		}
+	}
+	results, _ := s.approvalEffectResults(value)
+	if !executionRequiresReconciliation(results) {
+		return false, nil
+	}
+	if _, err := s.approvals.MarkReconciliationRequired(ctx, value.ID, results); err != nil {
+		return false, err
+	}
+	s.updateRunStatus(value.RunID, domain.RunExecuting)
+	return true, nil
 }
 
 func (s *Service) scheduleExpiration(value approval.Approval) {
@@ -606,12 +712,18 @@ func (s *Service) approvalEffectResults(value approval.Approval) ([]approval.Ite
 			switch state {
 			case idempotency.StateSucceeded:
 				status = approval.ExecutionSucceeded
-			case idempotency.StateFailed:
-				status = approval.ExecutionFailed
+			case idempotency.StateRetryableFailed:
+				status = approval.ExecutionRetryable
+			case idempotency.StatePermanentFailed:
+				status = approval.ExecutionPermanent
 			case idempotency.StateStarted:
 				status = approval.ExecutionStarted
-			case idempotency.StateIndeterminate:
-				status = approval.ExecutionIndeterminate
+			case idempotency.StateUnknown:
+				status = approval.ExecutionUnknown
+			case idempotency.StateReconciling:
+				status = approval.ExecutionReconciling
+			case idempotency.StateManualReview:
+				status = approval.ExecutionManualReview
 			}
 		}
 		if status != approval.ExecutionSucceeded {
@@ -626,6 +738,20 @@ func (s *Service) approvalEffectResults(value approval.Approval) ([]approval.Ite
 		})
 	}
 	return results, allSucceeded
+}
+
+func executionRequiresReconciliation(results []approval.ItemExecution) bool {
+	for _, result := range results {
+		switch result.Status {
+		case approval.ExecutionStarted,
+			approval.ExecutionIndeterminate,
+			approval.ExecutionUnknown,
+			approval.ExecutionReconciling,
+			approval.ExecutionManualReview:
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) runSnapshot() []RunView {
@@ -823,6 +949,8 @@ func (s *Service) rebuildRuns() error {
 		case audit.EventApprovalRequested:
 			run.Status = domain.RunAwaitingApproval
 		case audit.EventApprovalDecided:
+			run.Status = domain.RunExecuting
+		case audit.EventApprovalReconciliationRequired:
 			run.Status = domain.RunExecuting
 		case audit.EventApprovalExecutionFailed:
 			run.Status = domain.RunFailed

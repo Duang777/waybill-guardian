@@ -11,21 +11,29 @@ import (
 
 	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/platform"
 )
 
 var (
-	ErrMissingKey    = errors.New("idempotency_key is required")
-	ErrKeyConflict   = errors.New("idempotency key was already used for a different effect")
-	ErrIndeterminate = errors.New("previous execution has no durable result")
+	ErrMissingKey             = errors.New("idempotency_key is required")
+	ErrKeyConflict            = errors.New("idempotency key was already used for a different effect")
+	ErrRetryableFailure       = errors.New("effect failed before the platform committed")
+	ErrPermanentFailure       = errors.New("effect permanently failed")
+	ErrReconciliationPending  = errors.New("effect result requires reconciliation")
+	ErrManualReview           = errors.New("effect reconciliation requires manual review")
+	ErrReconciliationDisabled = errors.New("effect lookup is not configured")
 )
 
 type State string
 
 const (
-	StateStarted       State = "started"
-	StateSucceeded     State = "succeeded"
-	StateFailed        State = "failed"
-	StateIndeterminate State = "indeterminate"
+	StateStarted         State = "started"
+	StateSucceeded       State = "succeeded"
+	StateRetryableFailed State = "retryable_failed"
+	StatePermanentFailed State = "permanent_failed"
+	StateUnknown         State = "unknown"
+	StateReconciling     State = "reconciling"
+	StateManualReview    State = "manual_review"
 )
 
 type Command struct {
@@ -39,12 +47,15 @@ type Result struct {
 	Duplicate bool
 }
 
+type LookupFunc func(context.Context, Command) (platform.EffectResult, error)
+
 type entry struct {
 	Command
-	state   State
-	result  json.RawMessage
-	attempt int
-	done    chan struct{}
+	state           State
+	result          json.RawMessage
+	attempt         int
+	reconciliations int
+	done            chan struct{}
 }
 
 type writeStartedPayload struct {
@@ -58,29 +69,49 @@ type writeStartedPayload struct {
 }
 
 type writeResultPayload struct {
-	Key             domain.IdempotencyKey `json:"idempotency_key"`
-	CallID          string                `json:"call_id"`
-	Action          domain.Action         `json:"action"`
-	ArgumentsHash   string                `json:"arguments_hash"`
-	IdentityVersion IdentityVersion       `json:"identity_version,omitempty"`
-	EffectID        domain.EffectID       `json:"effect_id,omitempty"`
-	Attempt         int                   `json:"attempt,omitempty"`
-	Result          json.RawMessage       `json:"result,omitempty"`
-	Error           string                `json:"error,omitempty"`
+	Key             domain.IdempotencyKey      `json:"idempotency_key"`
+	CallID          string                     `json:"call_id"`
+	Action          domain.Action              `json:"action"`
+	ArgumentsHash   string                     `json:"arguments_hash"`
+	IdentityVersion IdentityVersion            `json:"identity_version,omitempty"`
+	EffectID        domain.EffectID            `json:"effect_id,omitempty"`
+	Attempt         int                        `json:"attempt,omitempty"`
+	Disposition     platform.EffectDisposition `json:"disposition,omitempty"`
+	Result          json.RawMessage            `json:"result,omitempty"`
+	Error           string                     `json:"error,omitempty"`
+}
+
+type reconciliationPayload struct {
+	Key             domain.IdempotencyKey      `json:"idempotency_key"`
+	CallID          string                     `json:"call_id"`
+	Action          domain.Action              `json:"action"`
+	ArgumentsHash   string                     `json:"arguments_hash"`
+	IdentityVersion IdentityVersion            `json:"identity_version,omitempty"`
+	EffectID        domain.EffectID            `json:"effect_id,omitempty"`
+	Attempt         int                        `json:"attempt,omitempty"`
+	Disposition     platform.EffectDisposition `json:"disposition,omitempty"`
+	Result          json.RawMessage            `json:"result,omitempty"`
+	Error           string                     `json:"error,omitempty"`
+	Reconciliation  int                        `json:"reconciliation"`
 }
 
 type Store struct {
 	journal *audit.Store
+	lookup  LookupFunc
 
 	mu      sync.Mutex
 	entries map[domain.IdempotencyKey]*entry
 }
 
-func NewStore(journal *audit.Store) (*Store, error) {
+func NewStore(journal *audit.Store, lookup LookupFunc) (*Store, error) {
 	if journal == nil {
 		return nil, fmt.Errorf("audit journal is required")
 	}
-	store := &Store{journal: journal, entries: make(map[domain.IdempotencyKey]*entry)}
+	store := &Store{
+		journal: journal,
+		lookup:  lookup,
+		entries: make(map[domain.IdempotencyKey]*entry),
+	}
 	for _, event := range journal.AllEvents() {
 		switch event.Type {
 		case audit.EventWriteStarted:
@@ -103,11 +134,11 @@ func NewStore(journal *audit.Store) (*Store, error) {
 			}
 			store.entries[payload.Key] = &entry{
 				Command: command,
-				state:   StateIndeterminate,
+				state:   StateUnknown,
 				attempt: attempt,
 				done:    closedChannel(),
 			}
-		case audit.EventWriteExecuted, audit.EventWriteFailed:
+		case audit.EventWriteExecuted, audit.EventWriteFailed, audit.EventWriteUnknown:
 			var payload writeResultPayload
 			if err := json.Unmarshal(event.Payload, &payload); err != nil {
 				return nil, fmt.Errorf("rebuild idempotency result: %w", err)
@@ -126,8 +157,11 @@ func NewStore(journal *audit.Store) (*Store, error) {
 				return nil, fmt.Errorf("rebuild idempotency result: %w", err)
 			}
 			state := StateSucceeded
-			if event.Type == audit.EventWriteFailed {
-				state = StateFailed
+			switch event.Type {
+			case audit.EventWriteFailed:
+				state = stateForMutationDisposition(payload.Disposition)
+			case audit.EventWriteUnknown:
+				state = StateUnknown
 			}
 			store.entries[payload.Key] = &entry{
 				Command: command,
@@ -135,6 +169,38 @@ func NewStore(journal *audit.Store) (*Store, error) {
 				result:  append(json.RawMessage(nil), payload.Result...),
 				attempt: attempt,
 				done:    closedChannel(),
+			}
+		case audit.EventWriteReconciliationStarted, audit.EventWriteReconciled:
+			var payload reconciliationPayload
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				return nil, fmt.Errorf("rebuild idempotency reconciliation: %w", err)
+			}
+			command, attempt, err := commandFromPayload(
+				event.RunID,
+				payload.CallID,
+				payload.Action,
+				payload.Key,
+				payload.ArgumentsHash,
+				payload.IdentityVersion,
+				payload.EffectID,
+				payload.Attempt,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("rebuild idempotency reconciliation: %w", err)
+			}
+			state := StateUnknown
+			result := json.RawMessage(nil)
+			if event.Type == audit.EventWriteReconciled {
+				state = stateForReconciliationDisposition(payload.Disposition)
+				result = append(json.RawMessage(nil), payload.Result...)
+			}
+			store.entries[payload.Key] = &entry{
+				Command:         command,
+				state:           state,
+				result:          result,
+				attempt:         attempt,
+				reconciliations: payload.Reconciliation,
+				done:            closedChannel(),
 			}
 		}
 	}
@@ -165,19 +231,13 @@ func (s *Store) Execute(
 	command Command,
 	fn func(context.Context) (json.RawMessage, error),
 ) (Result, error) {
-	if command.Identity.Key == "" {
-		return Result{}, ErrMissingKey
-	}
-	if command.RunID == "" || command.CallID == "" {
-		return Result{}, fmt.Errorf("run id and call id are required")
-	}
-	if err := command.Identity.Validate(); err != nil {
+	if err := validateCommand(command); err != nil {
 		return Result{}, err
 	}
 	for {
 		s.mu.Lock()
-		attempt := 1
 		existing := s.entries[command.Identity.Key]
+		attempt := 1
 		if existing != nil {
 			if !sameEffect(existing.Command, command) {
 				s.mu.Unlock()
@@ -200,7 +260,7 @@ func (s *Store) Execute(
 					},
 				})
 				return Result{Value: value, Duplicate: true}, err
-			case StateStarted:
+			case StateStarted, StateReconciling:
 				done := existing.done
 				s.mu.Unlock()
 				select {
@@ -209,19 +269,25 @@ func (s *Store) Execute(
 				case <-done:
 					continue
 				}
-			case StateIndeterminate:
+			case StateUnknown:
 				s.mu.Unlock()
-				return Result{}, ErrIndeterminate
-			case StateFailed:
+				return s.Reconcile(ctx, command)
+			case StateRetryableFailed:
 				attempt = existing.attempt + 1
-				delete(s.entries, command.Identity.Key)
+			case StatePermanentFailed:
+				s.mu.Unlock()
+				return Result{}, ErrPermanentFailure
+			case StateManualReview:
+				s.mu.Unlock()
+				return Result{}, ErrManualReview
 			}
 		}
 		current := &entry{
-			Command: command,
-			state:   StateStarted,
-			attempt: attempt,
-			done:    make(chan struct{}),
+			Command:         command,
+			state:           StateStarted,
+			attempt:         attempt,
+			reconciliations: reconciliationCount(existing),
+			done:            make(chan struct{}),
 		}
 		s.entries[command.Identity.Key] = current
 		s.mu.Unlock()
@@ -241,7 +307,7 @@ func (s *Store) Execute(
 			},
 		})
 		if err != nil {
-			s.finish(command.Identity.Key, StateFailed, nil)
+			s.finish(command.Identity.Key, StateUnknown, nil)
 			return Result{}, err
 		}
 
@@ -255,14 +321,20 @@ func (s *Store) Execute(
 			IdentityVersion: command.Identity.Version,
 			EffectID:        command.Identity.EffectID,
 			Attempt:         attempt,
+			Disposition:     platform.EffectSucceeded,
 			Result:          value,
 		}
 		state := StateSucceeded
 		if callErr != nil {
-			eventType = audit.EventWriteFailed
+			payload.Disposition = platform.EffectDispositionOf(callErr)
 			payload.Result = nil
 			payload.Error = callErr.Error()
-			state = StateFailed
+			state = stateForMutationDisposition(payload.Disposition)
+			if state == StateUnknown {
+				eventType = audit.EventWriteUnknown
+			} else {
+				eventType = audit.EventWriteFailed
+			}
 		}
 		_, journalErr := s.journal.Append(ctx, command.RunID, audit.Draft{
 			EventID: writeEventID(command.Identity.EffectID, attempt, state),
@@ -271,14 +343,132 @@ func (s *Store) Execute(
 			Payload: payload,
 		})
 		if journalErr != nil {
-			s.finish(command.Identity.Key, StateIndeterminate, nil)
+			s.finish(command.Identity.Key, StateUnknown, nil)
 			return Result{}, journalErr
 		}
 		s.finish(command.Identity.Key, state, value)
-		if callErr != nil {
+		if state == StateUnknown {
+			result, reconcileErr := s.Reconcile(ctx, command)
+			if reconcileErr != nil {
+				return Result{}, errors.Join(callErr, reconcileErr)
+			}
+			return result, nil
+		}
+		if state == StateRetryableFailed {
 			return Result{}, callErr
 		}
+		if state == StatePermanentFailed {
+			return Result{}, errors.Join(callErr, ErrPermanentFailure)
+		}
 		return Result{Value: append(json.RawMessage(nil), value...)}, nil
+	}
+}
+
+func (s *Store) Reconcile(ctx context.Context, command Command) (Result, error) {
+	if err := validateCommand(command); err != nil {
+		return Result{}, err
+	}
+	for {
+		s.mu.Lock()
+		current := s.entries[command.Identity.Key]
+		if current == nil {
+			s.mu.Unlock()
+			return Result{}, ErrReconciliationPending
+		}
+		if !sameEffect(current.Command, command) {
+			s.mu.Unlock()
+			return Result{}, ErrKeyConflict
+		}
+		switch current.state {
+		case StateSucceeded:
+			value := append(json.RawMessage(nil), current.result...)
+			s.mu.Unlock()
+			return Result{Value: value, Duplicate: true}, nil
+		case StateRetryableFailed:
+			s.mu.Unlock()
+			return Result{}, ErrRetryableFailure
+		case StatePermanentFailed:
+			s.mu.Unlock()
+			return Result{}, ErrPermanentFailure
+		case StateManualReview:
+			s.mu.Unlock()
+			return Result{}, ErrManualReview
+		case StateStarted, StateReconciling:
+			done := current.done
+			s.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return Result{}, ctx.Err()
+			case <-done:
+				continue
+			}
+		case StateUnknown:
+		}
+		if s.lookup == nil {
+			s.mu.Unlock()
+			return Result{}, errors.Join(ErrReconciliationPending, ErrReconciliationDisabled)
+		}
+		reconciliation := current.reconciliations + 1
+		current.state = StateReconciling
+		current.reconciliations = reconciliation
+		current.done = make(chan struct{})
+		s.mu.Unlock()
+
+		started := reconciliationPayload{
+			Key:             command.Identity.Key,
+			CallID:          command.CallID,
+			Action:          command.Identity.Action,
+			ArgumentsHash:   command.Identity.ArgumentsHash,
+			IdentityVersion: command.Identity.Version,
+			EffectID:        command.Identity.EffectID,
+			Attempt:         current.attempt,
+			Reconciliation:  reconciliation,
+		}
+		if _, err := s.journal.Append(ctx, command.RunID, audit.Draft{
+			EventID: reconciliationEventID(command.Identity.EffectID, reconciliation, StateStarted),
+			Actor:   audit.ActorSystem,
+			Type:    audit.EventWriteReconciliationStarted,
+			Payload: started,
+		}); err != nil {
+			s.finish(command.Identity.Key, StateUnknown, nil)
+			return Result{}, err
+		}
+
+		effect, lookupErr := s.lookup(ctx, command)
+		if effect.Disposition == "" {
+			effect.Disposition = platform.EffectDispositionOf(lookupErr)
+		}
+		if effect.Disposition == platform.EffectSucceeded && len(effect.Response) == 0 {
+			lookupErr = errors.Join(lookupErr, errors.New("effect lookup returned success without a response"))
+			effect.Disposition = platform.EffectPermanentFailed
+		}
+		state := stateForReconciliationDisposition(effect.Disposition)
+		payload := started
+		payload.Disposition = effect.Disposition
+		payload.Result = effect.Response
+		if lookupErr != nil {
+			payload.Error = lookupErr.Error()
+		}
+		if _, err := s.journal.Append(ctx, command.RunID, audit.Draft{
+			EventID: reconciliationEventID(command.Identity.EffectID, reconciliation, state),
+			Actor:   audit.ActorSystem,
+			Type:    audit.EventWriteReconciled,
+			Payload: payload,
+		}); err != nil {
+			s.finish(command.Identity.Key, StateUnknown, nil)
+			return Result{}, err
+		}
+		s.finish(command.Identity.Key, state, effect.Response)
+		switch state {
+		case StateSucceeded:
+			return Result{Value: append(json.RawMessage(nil), effect.Response...), Duplicate: true}, nil
+		case StateRetryableFailed:
+			return Result{}, errors.Join(lookupErr, ErrRetryableFailure)
+		case StateManualReview:
+			return Result{}, errors.Join(lookupErr, ErrManualReview)
+		default:
+			return Result{}, errors.Join(lookupErr, ErrReconciliationPending)
+		}
 	}
 }
 
@@ -288,7 +478,7 @@ func (s *Store) Succeeded(command Command) bool {
 }
 
 func (s *Store) Lookup(command Command) (State, bool) {
-	if command.Identity.Validate() != nil {
+	if validateCommand(command) != nil {
 		return "", false
 	}
 	s.mu.Lock()
@@ -298,6 +488,16 @@ func (s *Store) Lookup(command Command) (State, bool) {
 		return "", false
 	}
 	return current.state, true
+}
+
+func validateCommand(command Command) error {
+	if command.Identity.Key == "" {
+		return ErrMissingKey
+	}
+	if command.RunID == "" || command.CallID == "" {
+		return fmt.Errorf("run id and call id are required")
+	}
+	return command.Identity.Validate()
 }
 
 func (s *Store) finish(key domain.IdempotencyKey, state State, result json.RawMessage) {
@@ -371,8 +571,49 @@ func commandFromPayload(
 	return Command{RunID: runID, CallID: callID, Identity: identity}, attempt, nil
 }
 
+func stateForMutationDisposition(disposition platform.EffectDisposition) State {
+	switch disposition {
+	case platform.EffectSucceeded:
+		return StateSucceeded
+	case platform.EffectRetryableFailed:
+		return StateRetryableFailed
+	case platform.EffectPermanentFailed:
+		return StatePermanentFailed
+	case platform.EffectUnknown, "":
+		return StateUnknown
+	default:
+		return StateUnknown
+	}
+}
+
+func stateForReconciliationDisposition(disposition platform.EffectDisposition) State {
+	switch disposition {
+	case platform.EffectSucceeded:
+		return StateSucceeded
+	case platform.EffectRetryableFailed:
+		return StateRetryableFailed
+	case platform.EffectPermanentFailed:
+		return StateManualReview
+	case platform.EffectUnknown, "":
+		return StateUnknown
+	default:
+		return StateUnknown
+	}
+}
+
+func reconciliationCount(current *entry) int {
+	if current == nil {
+		return 0
+	}
+	return current.reconciliations
+}
+
 func writeEventID(effectID domain.EffectID, attempt int, state State) string {
 	return fmt.Sprintf("write:%s:attempt:%d:%s", effectID, attempt, state)
+}
+
+func reconciliationEventID(effectID domain.EffectID, reconciliation int, state State) string {
+	return fmt.Sprintf("write:%s:reconciliation:%d:%s", effectID, reconciliation, state)
 }
 
 func closedChannel() chan struct{} {

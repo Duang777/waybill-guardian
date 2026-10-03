@@ -146,6 +146,46 @@ func (m *Mock) SendSMS(_ context.Context, req SendSMSRequest) (SMSReceipt, error
 	return result, nil
 }
 
+func (m *Mock) LookupEffect(_ context.Context, req LookupEffectRequest) (EffectResult, error) {
+	if req.IdempotencyKey == "" {
+		return EffectResult{Disposition: EffectPermanentFailed}, nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var value any
+	switch req.Action {
+	case domain.ActionReassign:
+		result, ok := m.reassignments[req.IdempotencyKey]
+		if !ok {
+			return EffectResult{Disposition: EffectRetryableFailed}, nil
+		}
+		value = result
+	case domain.ActionCreateClaim:
+		result, ok := m.claims[req.IdempotencyKey]
+		if !ok {
+			return EffectResult{Disposition: EffectRetryableFailed}, nil
+		}
+		value = result
+	case domain.ActionSendSMS:
+		result, ok := m.messages[req.IdempotencyKey]
+		if !ok {
+			return EffectResult{Disposition: EffectRetryableFailed}, nil
+		}
+		value = result
+	default:
+		return EffectResult{Disposition: EffectPermanentFailed}, nil
+	}
+	response, err := json.Marshal(value)
+	if err != nil {
+		return EffectResult{Disposition: EffectUnknown}, err
+	}
+	return EffectResult{
+		Disposition: EffectSucceeded,
+		Response:    response,
+	}, nil
+}
+
 func (m *Mock) WriteCount(action domain.Action) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()

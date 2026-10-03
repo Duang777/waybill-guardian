@@ -2,12 +2,73 @@ package platform
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
 )
 
 var ErrNotImplemented = errors.New("real platform adapter is not implemented")
+
+type EffectDisposition string
+
+const (
+	EffectSucceeded       EffectDisposition = "succeeded"
+	EffectRetryableFailed EffectDisposition = "retryable_failed"
+	EffectPermanentFailed EffectDisposition = "permanent_failed"
+	EffectUnknown         EffectDisposition = "unknown"
+)
+
+type EffectResult struct {
+	Disposition EffectDisposition `json:"disposition"`
+	ExternalRef string            `json:"external_ref,omitempty"`
+	Response    json.RawMessage   `json:"response,omitempty"`
+	RetryAfter  time.Duration     `json:"retry_after,omitempty"`
+}
+
+type EffectError struct {
+	Disposition EffectDisposition
+	Err         error
+}
+
+func (e *EffectError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return fmt.Sprintf("platform effect failed with disposition %q", e.Disposition)
+}
+
+func (e *EffectError) Unwrap() error {
+	return e.Err
+}
+
+func RetryableEffectError(err error) error {
+	return &EffectError{Disposition: EffectRetryableFailed, Err: err}
+}
+
+func PermanentEffectError(err error) error {
+	return &EffectError{Disposition: EffectPermanentFailed, Err: err}
+}
+
+func UnknownEffectError(err error) error {
+	return &EffectError{Disposition: EffectUnknown, Err: err}
+}
+
+func EffectDispositionOf(err error) EffectDisposition {
+	if err == nil {
+		return EffectSucceeded
+	}
+	var effectErr *EffectError
+	if errors.As(err, &effectErr) {
+		switch effectErr.Disposition {
+		case EffectRetryableFailed, EffectPermanentFailed, EffectUnknown:
+			return effectErr.Disposition
+		}
+	}
+	return EffectUnknown
+}
 
 type Waybill struct {
 	ID                domain.WaybillID `json:"waybill_id"`
@@ -108,12 +169,18 @@ type SendSMSRequest struct {
 	IdempotencyKey domain.IdempotencyKey
 }
 
+type LookupEffectRequest struct {
+	Action         domain.Action
+	IdempotencyKey domain.IdempotencyKey
+}
+
 type TMSClient interface {
 	GetWaybill(context.Context, GetWaybillRequest) (Waybill, error)
 	GetTracking(context.Context, GetTrackingRequest) ([]TrackPoint, error)
 	GetDriver(context.Context, GetDriverRequest) (Driver, error)
 	Reassign(context.Context, ReassignRequest) (ReassignOrder, error)
 	CreateClaim(context.Context, CreateClaimRequest) (ClaimOrder, error)
+	LookupEffect(context.Context, LookupEffectRequest) (EffectResult, error)
 }
 
 type WeatherClient interface {
@@ -122,6 +189,7 @@ type WeatherClient interface {
 
 type NotificationClient interface {
 	SendSMS(context.Context, SendSMSRequest) (SMSReceipt, error)
+	LookupEffect(context.Context, LookupEffectRequest) (EffectResult, error)
 }
 
 type Clients struct {
@@ -158,4 +226,8 @@ func (RealAdapter) GetRoadWeather(context.Context, GetRoadWeatherRequest) ([]Roa
 
 func (RealAdapter) SendSMS(context.Context, SendSMSRequest) (SMSReceipt, error) {
 	return SMSReceipt{}, ErrNotImplemented
+}
+
+func (RealAdapter) LookupEffect(context.Context, LookupEffectRequest) (EffectResult, error) {
+	return EffectResult{Disposition: EffectUnknown}, ErrNotImplemented
 }

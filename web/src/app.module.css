@@ -965,6 +965,11 @@
   background: oklch(0.91 0.028 255);
 }
 
+.approvalStatusreconciliation_required {
+  color: oklch(0.42 0.1 55);
+  background: oklch(0.94 0.045 75);
+}
+
 .approvalStatusexecuted {
   color: oklch(0.38 0.1 155);
   background: oklch(0.92 0.035 155);

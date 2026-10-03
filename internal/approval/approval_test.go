@@ -490,6 +490,79 @@ func TestAuthorizeUsesBusinessHashForCurrentAndFullHashForLegacy(t *testing.T) {
 	}
 }
 
+func TestRebuildsApprovalRequiringReconciliation(t *testing.T) {
+	now := time.Date(2026, 10, 3, 8, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	journal, err := audit.Open(dir, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(journal, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(
+		context.Background(),
+		testCurrentApproval(t, "run-reconcile", "call-reassign"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Decide(context.Background(), created.ID, Decision{
+		Kind:      DecisionConfirm,
+		DecidedBy: "reviewer",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	item := created.Items[0]
+	reconciling, err := store.MarkReconciliationRequired(
+		context.Background(),
+		created.ID,
+		[]ItemExecution{{
+			CallID:         item.CallID,
+			Action:         item.Action,
+			EffectID:       item.EffectID,
+			IdempotencyKey: item.IdempotencyKey,
+			Status:         ExecutionUnknown,
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciling.Status != StatusReconciliationRequired {
+		t.Fatalf("status = %q, want reconciliation_required", reconciling.Status)
+	}
+	if _, err := store.Authorize(AuthorizationRequest{
+		RunID:                 created.RunID,
+		CallID:                item.CallID,
+		Action:                item.Action,
+		WireName:              item.WireName,
+		BusinessArgumentsHash: item.ArgumentsHash,
+	}); err != nil {
+		t.Fatalf("reconciliation status revoked the confirmed write: %v", err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopenedJournal, err := audit.Open(dir, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopenedJournal.Close()
+	reopened, err := NewStore(reopenedJournal, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := reopened.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != StatusReconciliationRequired {
+		t.Fatalf("recovered status = %q, want reconciliation_required", recovered.Status)
+	}
+}
+
 func testApproval(runID, callID string) Approval {
 	params, _ := json.Marshal(map[string]string{
 		"waybill_id":      "YD2026101001",

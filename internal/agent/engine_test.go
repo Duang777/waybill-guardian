@@ -32,7 +32,7 @@ func TestScenarioAgentPausesThenExecutesApprovedWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	idempotencyStore, err := idempotency.NewStore(journal)
+	idempotencyStore, err := idempotency.NewStore(journal, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
