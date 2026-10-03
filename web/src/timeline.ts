@@ -125,6 +125,24 @@ const approvalExecutedSchema = z
   })
   .strict();
 
+const approvalExecutionFailedSchema = z
+  .object({
+    approval_id: z.string().min(1),
+    status: z.enum(["partially_failed", "failed"]),
+    failed_at: z.string(),
+    items: z.array(
+      z
+        .object({
+          call_id: z.string().min(1),
+          action: z.string().min(1),
+          idempotency_key: z.string().min(1),
+          status: z.enum(["succeeded", "failed", "started", "indeterminate", "missing"]),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
 export function latestApproval(events: readonly AuditEvent[]): Approval | null {
   let current: Approval | null = null;
   for (const event of events) {
@@ -152,6 +170,13 @@ export function latestApproval(events: readonly AuditEvent[]): Approval | null {
       const parsed = approvalExecutedSchema.safeParse(event.payload);
       if (parsed.success && parsed.data.approval_id === current.id) {
         current = { ...current, status: "executed" };
+      }
+      continue;
+    }
+    if (event.type === "approval_execution_failed" && current !== null) {
+      const parsed = approvalExecutionFailedSchema.safeParse(event.payload);
+      if (parsed.success && parsed.data.approval_id === current.id) {
+        current = { ...current, status: parsed.data.status };
       }
     }
   }
@@ -181,6 +206,7 @@ export function runStatus(events: readonly AuditEvent[]): RunStatus | null {
         break;
       case "run_failed":
       case "write_failed":
+      case "approval_execution_failed":
         status = "failed";
         break;
       case "tool_call":
@@ -213,6 +239,7 @@ const eventLabels = {
   approval_requested: "等待人工审批",
   approval_decided: "审批决定已记录",
   approval_executed: "审批动作已执行",
+  approval_execution_failed: "审批动作部分失败",
   write_started: "开始写回平台",
   write_executed: "平台写入成功",
   write_failed: "平台写入失败",
@@ -264,6 +291,7 @@ function eventTone(type: AuditEventType): EventPresentation["tone"] {
     case "duplicate_suppressed":
       return "success";
     case "write_failed":
+    case "approval_execution_failed":
     case "run_failed":
     case "run_rejected":
       return "danger";

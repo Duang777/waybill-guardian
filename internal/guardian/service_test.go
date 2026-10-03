@@ -11,7 +11,9 @@ import (
 
 	agentkit "github.com/Duang777/waybill-guardian/internal/agent"
 	"github.com/Duang777/waybill-guardian/internal/approval"
+	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/platform"
 	"github.com/Duang777/waybill-guardian/internal/tools"
 )
 
@@ -64,6 +66,84 @@ func TestDemoConfirmCompletesExactlyOnce(t *testing.T) {
 	}
 	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 1 {
 		t.Fatal("repeated confirmation executed writes again")
+	}
+}
+
+func TestPartialWriteFailureDoesNotCompleteApprovalOrRun(t *testing.T) {
+	clients, mock, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clients.Notification = failingNotificationClient{}
+	service, err := Open(Config{DataDir: t.TempDir(), Clients: clients, StepDelay: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+
+	run, err := service.StartDemo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := waitForApproval(t, service, run.RunID)
+	decided, err := service.Decide(context.Background(), pending.ID, DecisionRequest{
+		Kind:      approval.DecisionConfirm,
+		DecidedBy: "demo-reviewer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decided.Status != approval.Status("partially_failed") {
+		t.Fatalf("approval status = %q, want partially_failed", decided.Status)
+	}
+	failed, err := service.GetRun(run.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != domain.RunFailed {
+		t.Fatalf("run status = %q, want failed", failed.Status)
+	}
+	if mock.WriteCount(domain.ActionReassign) != 1 {
+		t.Fatalf("reassign writes = %d, want 1", mock.WriteCount(domain.ActionReassign))
+	}
+	if mock.WriteCount(domain.ActionSendSMS) != 0 {
+		t.Fatalf("sms writes = %d, want 0", mock.WriteCount(domain.ActionSendSMS))
+	}
+	events, err := service.Replay(context.Background(), run.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var executionFailed bool
+	itemStatuses := make(map[domain.Action]approval.ExecutionStatus)
+	for _, event := range events {
+		if event.Type == audit.EventRunCompleted {
+			t.Fatal("partial write failure emitted run_completed")
+		}
+		if event.Type == audit.EventApprovalExecutionFailed {
+			executionFailed = true
+			var payload struct {
+				Status approval.Status          `json:"status"`
+				Items  []approval.ItemExecution `json:"items"`
+			}
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Status != approval.StatusPartiallyFailed {
+				t.Fatalf("execution failure status = %q", payload.Status)
+			}
+			for _, item := range payload.Items {
+				itemStatuses[item.Action] = item.Status
+			}
+		}
+	}
+	if !executionFailed {
+		t.Fatal("partial write failure did not emit approval_execution_failed")
+	}
+	if itemStatuses[domain.ActionReassign] != approval.ExecutionSucceeded {
+		t.Fatalf("reassign status = %q", itemStatuses[domain.ActionReassign])
+	}
+	if itemStatuses[domain.ActionSendSMS] != approval.ExecutionFailed {
+		t.Fatalf("sms status = %q", itemStatuses[domain.ActionSendSMS])
 	}
 }
 
@@ -594,4 +674,13 @@ func waitForRunStatus(t *testing.T, service *Service, runID domain.RunID, want d
 	run, _ := service.GetRun(runID)
 	t.Fatalf("timed out waiting for run status %q; run=%+v", want, run)
 	return RunView{}
+}
+
+type failingNotificationClient struct{}
+
+func (failingNotificationClient) SendSMS(
+	context.Context,
+	platform.SendSMSRequest,
+) (platform.SMSReceipt, error) {
+	return platform.SMSReceipt{}, errors.New("notification write failed")
 }

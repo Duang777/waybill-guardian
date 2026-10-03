@@ -4,6 +4,7 @@ import {
   initialTimelineState,
   latestApproval,
   playbackCursor,
+  runStatus,
   timelineReducer,
   visibleEvents,
 } from "./timeline";
@@ -26,6 +27,35 @@ function event(seq: number, type: AuditEventType, payload: unknown) {
 }
 
 describe("timelineReducer", () => {
+  it("accepts approval execution failure events", () => {
+    const parsed = auditEventSchema.safeParse({
+      schema_version: 1,
+      event_id: "event-partial-failure",
+      seq: 1,
+      ts: "2026-10-10T01:15:00Z",
+      run_id: "run-1",
+      actor: "system",
+      type: "approval_execution_failed",
+      payload: {
+        approval_id: "APR-1",
+        status: "partially_failed",
+        failed_at: "2026-10-10T01:16:01Z",
+        items: [
+          {
+            call_id: "call-1",
+            action: "tms.reassign",
+            idempotency_key: "key-1",
+            status: "failed",
+          },
+        ],
+      },
+      prev_hash: hash,
+      hash,
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
   it("deduplicates replayed events by sequence", () => {
     const first = event(1, "run_started", { status: "started" });
     const once = timelineReducer(initialTimelineState, {
@@ -95,9 +125,32 @@ describe("latestApproval", () => {
       approval_id: "APR-1",
       executed_at: "2026-10-10T01:16:01Z",
     });
+    const executionFailed = event(3, "approval_execution_failed", {
+      approval_id: "APR-1",
+      status: "partially_failed",
+      failed_at: "2026-10-10T01:16:01Z",
+      items: [
+        {
+          call_id: "call-1",
+          action: "tms.reassign",
+          idempotency_key: "key-1",
+          status: "succeeded",
+        },
+        {
+          call_id: "call-2",
+          action: "notify.send_sms",
+          idempotency_key: "key-2",
+          status: "failed",
+        },
+      ],
+    });
 
     expect(latestApproval([requested])?.status).toBe("pending");
     expect(latestApproval([requested, decided])?.status).toBe("confirmed");
     expect(latestApproval([requested, decided, executed])?.status).toBe("executed");
+    expect(latestApproval([requested, decided, executionFailed])?.status).toBe(
+      "partially_failed",
+    );
+    expect(runStatus([requested, decided, executionFailed])).toBe("failed");
   });
 });

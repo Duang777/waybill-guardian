@@ -114,6 +114,8 @@ export const approvalStatusSchema = z.enum([
   "pending",
   "confirmed",
   "executed",
+  "partially_failed",
+  "failed",
   "rejected",
   "expired",
 ]);
@@ -166,6 +168,7 @@ export const auditEventTypeSchema = z.enum([
   "approval_requested",
   "approval_decided",
   "approval_executed",
+  "approval_execution_failed",
   "write_started",
   "write_executed",
   "write_failed",

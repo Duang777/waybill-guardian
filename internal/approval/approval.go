@@ -25,11 +25,13 @@ var (
 type Status string
 
 const (
-	StatusPending   Status = "pending"
-	StatusConfirmed Status = "confirmed"
-	StatusExecuted  Status = "executed"
-	StatusRejected  Status = "rejected"
-	StatusExpired   Status = "expired"
+	StatusPending         Status = "pending"
+	StatusConfirmed       Status = "confirmed"
+	StatusExecuted        Status = "executed"
+	StatusPartiallyFailed Status = "partially_failed"
+	StatusFailed          Status = "failed"
+	StatusRejected        Status = "rejected"
+	StatusExpired         Status = "expired"
 )
 
 type DecisionKind string
@@ -77,6 +79,23 @@ type Decision struct {
 	RejectReason string
 }
 
+type ExecutionStatus string
+
+const (
+	ExecutionSucceeded     ExecutionStatus = "succeeded"
+	ExecutionFailed        ExecutionStatus = "failed"
+	ExecutionStarted       ExecutionStatus = "started"
+	ExecutionIndeterminate ExecutionStatus = "indeterminate"
+	ExecutionMissing       ExecutionStatus = "missing"
+)
+
+type ItemExecution struct {
+	CallID         string                `json:"call_id"`
+	Action         domain.Action         `json:"action"`
+	IdempotencyKey domain.IdempotencyKey `json:"idempotency_key"`
+	Status         ExecutionStatus       `json:"status"`
+}
+
 type Store struct {
 	journal *audit.Store
 	clock   func() time.Time
@@ -96,6 +115,13 @@ type decisionPayload struct {
 type executedPayload struct {
 	ApprovalID domain.ApprovalID `json:"approval_id"`
 	ExecutedAt time.Time         `json:"executed_at"`
+}
+
+type executionFailedPayload struct {
+	ApprovalID domain.ApprovalID `json:"approval_id"`
+	Status     Status            `json:"status"`
+	FailedAt   time.Time         `json:"failed_at"`
+	Items      []ItemExecution   `json:"items"`
 }
 
 func NewStore(journal *audit.Store, clock func() time.Time) (*Store, error) {
@@ -249,6 +275,47 @@ func (s *Store) MarkExecuted(ctx context.Context, id domain.ApprovalID) (Approva
 	return clone(s.approvals[id]), nil
 }
 
+func (s *Store) MarkExecutionFailed(
+	ctx context.Context,
+	id domain.ApprovalID,
+	items []ItemExecution,
+) (Approval, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.approvals[id]
+	if !ok {
+		return Approval{}, ErrNotFound
+	}
+	if current.Status == StatusPartiallyFailed || current.Status == StatusFailed {
+		return clone(current), nil
+	}
+	if current.Status != StatusConfirmed {
+		return Approval{}, ErrDecisionConflict
+	}
+	status, err := validateExecutionFailure(current.Items, items)
+	if err != nil {
+		return Approval{}, err
+	}
+	event, err := s.journal.Append(ctx, current.RunID, audit.Draft{
+		EventID: "approval:" + string(id) + ":execution_failed",
+		Actor:   audit.ActorSystem,
+		Type:    audit.EventApprovalExecutionFailed,
+		Payload: executionFailedPayload{
+			ApprovalID: id,
+			Status:     status,
+			FailedAt:   s.clock().UTC(),
+			Items:      append([]ItemExecution(nil), items...),
+		},
+	})
+	if err != nil {
+		return Approval{}, err
+	}
+	if err := s.applyLocked(event); err != nil {
+		return Approval{}, err
+	}
+	return clone(s.approvals[id]), nil
+}
+
 func (s *Store) Get(id domain.ApprovalID) (Approval, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -349,8 +416,62 @@ func (s *Store) applyLocked(event audit.Event) error {
 		}
 		current.Status = StatusExecuted
 		s.approvals[current.ID] = current
+	case audit.EventApprovalExecutionFailed:
+		var payload executionFailedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return err
+		}
+		current, ok := s.approvals[payload.ApprovalID]
+		if !ok {
+			return fmt.Errorf("execution failure references unknown approval %q", payload.ApprovalID)
+		}
+		status, err := validateExecutionFailure(current.Items, payload.Items)
+		if err != nil {
+			return fmt.Errorf("invalid execution failure for approval %q: %w", payload.ApprovalID, err)
+		}
+		if payload.Status != status {
+			return fmt.Errorf(
+				"execution failure status %q does not match item status %q",
+				payload.Status,
+				status,
+			)
+		}
+		current.Status = status
+		s.approvals[current.ID] = current
 	}
 	return nil
+}
+
+func validateExecutionFailure(expected []Item, actual []ItemExecution) (Status, error) {
+	if len(actual) != len(expected) {
+		return "", fmt.Errorf("execution results = %d, want %d", len(actual), len(expected))
+	}
+	remaining := make(map[string]Item, len(expected))
+	for _, item := range expected {
+		remaining[item.CallID] = item
+	}
+	succeeded := 0
+	for _, result := range actual {
+		item, ok := remaining[result.CallID]
+		if !ok || item.Action != result.Action || item.IdempotencyKey != result.IdempotencyKey {
+			return "", fmt.Errorf("execution result does not match approved call %q", result.CallID)
+		}
+		delete(remaining, result.CallID)
+		switch result.Status {
+		case ExecutionSucceeded:
+			succeeded++
+		case ExecutionFailed, ExecutionStarted, ExecutionIndeterminate, ExecutionMissing:
+		default:
+			return "", fmt.Errorf("unknown execution status %q", result.Status)
+		}
+	}
+	if succeeded == len(actual) {
+		return "", fmt.Errorf("execution failure contains no failed items")
+	}
+	if succeeded > 0 {
+		return StatusPartiallyFailed, nil
+	}
+	return StatusFailed, nil
 }
 
 func nextStatus(current Status, decision DecisionKind) (Status, error) {

@@ -8,11 +8,14 @@
 
 ```
 pending → confirmed → executed
+   │          ├────→ partially_failed
+   │          └────→ failed
    ├────→ rejected
    └────→ expired
 ```
 
 `rejected` 需要非空原因。`expired` 由系统产生，并按 reject resolution 恢复 Agent。
+批次中部分 effect 成功时进入 `partially_failed`，全部失败时进入 `failed`，两者都需要人工补偿。
 审批有效期通过 `APPROVAL_TTL` 配置，默认 10 分钟。
 
 ## 审批单
@@ -41,7 +44,8 @@ hastekit v0.0.24 会在 `RequiresApproval` 工具执行前持久化 pending call
 approve 或 reject resolution。
 
 确认后，`ApprovalGuard` 还会比较 `call_id` 和参数哈希。只有完整匹配审批批次的写调用才能
-进入幂等 middleware。所有 effect 成功后，状态才变为 `executed`。
+进入幂等 middleware。所有 effect 成功后，状态才变为 `executed`；否则
+`approval_execution_failed` 事件记录每个 effect 的结果，run 进入 `failed`。
 
 ## 验证
 

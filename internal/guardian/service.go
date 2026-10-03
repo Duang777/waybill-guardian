@@ -471,6 +471,17 @@ func (s *Service) resumeApproval(
 	if err != nil {
 		return approval.Approval{}, err
 	}
+	if approved {
+		results, allSucceeded := s.approvalEffectResults(value)
+		if !allSucceeded {
+			failed, markErr := s.approvals.MarkExecutionFailed(ctx, value.ID, results)
+			if markErr != nil {
+				return approval.Approval{}, markErr
+			}
+			s.recordFailure(value.RunID, fmt.Errorf("approval %q has incomplete effects", value.ID))
+			return failed, nil
+		}
+	}
 	if err := s.handleOutcome(ctx, s.run(value.RunID), planVersion, outcome, !approved); err != nil {
 		return approval.Approval{}, err
 	}
@@ -561,21 +572,48 @@ func (s *Service) removeExpiration(id domain.ApprovalID, cancel chan struct{}) {
 }
 
 func (s *Service) approvalEffectsSucceeded(value approval.Approval) bool {
+	_, allSucceeded := s.approvalEffectResults(value)
+	return allSucceeded
+}
+
+func (s *Service) approvalEffectResults(value approval.Approval) ([]approval.ItemExecution, bool) {
 	if len(value.Items) == 0 {
-		return false
+		return nil, false
 	}
+	results := make([]approval.ItemExecution, 0, len(value.Items))
+	allSucceeded := true
 	for _, item := range value.Items {
-		if !s.effects.Succeeded(idempotency.Command{
+		state, ok := s.effects.Lookup(idempotency.Command{
 			RunID:         value.RunID,
 			CallID:        item.CallID,
 			Action:        item.Action,
 			Key:           item.IdempotencyKey,
 			ArgumentsHash: item.ArgumentsHash,
-		}) {
-			return false
+		})
+		status := approval.ExecutionMissing
+		if ok {
+			switch state {
+			case idempotency.StateSucceeded:
+				status = approval.ExecutionSucceeded
+			case idempotency.StateFailed:
+				status = approval.ExecutionFailed
+			case idempotency.StateStarted:
+				status = approval.ExecutionStarted
+			case idempotency.StateIndeterminate:
+				status = approval.ExecutionIndeterminate
+			}
 		}
+		if status != approval.ExecutionSucceeded {
+			allSucceeded = false
+		}
+		results = append(results, approval.ItemExecution{
+			CallID:         item.CallID,
+			Action:         item.Action,
+			IdempotencyKey: item.IdempotencyKey,
+			Status:         status,
+		})
 	}
-	return true
+	return results, allSucceeded
 }
 
 func (s *Service) runSnapshot() []RunView {
@@ -748,6 +786,8 @@ func (s *Service) rebuildRuns() error {
 			run.Status = domain.RunAwaitingApproval
 		case audit.EventApprovalDecided:
 			run.Status = domain.RunExecuting
+		case audit.EventApprovalExecutionFailed:
+			run.Status = domain.RunFailed
 		case audit.EventRunCompleted:
 			run.Status = domain.RunCompleted
 		case audit.EventRunRejected:
