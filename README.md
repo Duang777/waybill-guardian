@@ -138,6 +138,7 @@ npm run record:demo
 系统不会自动重试未知结果。真实 adapter 必须按幂等键查询或重试，否则不能启用真实写模式。
 
 - 架构、恢复矩阵和取舍：[`docs/RFC-001.md`](./docs/RFC-001.md)
+- 真实平台接入与生产处置链路：[`docs/RFC-002.md`](./docs/RFC-002.md)
 - hastekit 源码研究：[`docs/research/hastekit-v0.0.24.md`](./docs/research/hastekit-v0.0.24.md)
 - 三分钟演示讲稿：[`docs/demo-script.md`](./docs/demo-script.md)
 - 模块职责索引：[`AGENTS.md`](./AGENTS.md)
