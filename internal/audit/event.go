@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 
@@ -58,4 +59,29 @@ type Draft struct {
 	Actor   Actor
 	Type    EventType
 	Payload any
+}
+
+type RunProjection struct {
+	RunID      domain.RunID
+	IncidentID domain.IncidentID
+	WaybillID  domain.WaybillID
+	Status     domain.RunStatus
+	LastSeq    Seq
+	UpdatedAt  time.Time
+}
+
+type Journal interface {
+	Append(context.Context, domain.RunID, Draft) (Event, error)
+	Replay(context.Context, domain.RunID, Seq) ([]Event, error)
+	Subscribe(context.Context, domain.RunID, Seq) (*Subscription, error)
+	AllEvents(context.Context) ([]Event, error)
+	Verify(domain.RunID) error
+	Close() error
+}
+
+type RecoveryJournal interface {
+	Journal
+	PrepareRecovery(context.Context) error
+	RunProjection(context.Context, domain.RunID) (RunProjection, error)
+	RunProjections(context.Context) ([]RunProjection, error)
 }

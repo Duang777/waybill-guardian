@@ -51,6 +51,10 @@ type Subscription struct {
 	once   sync.Once
 }
 
+func NewSubscription(events <-chan Event, close func()) *Subscription {
+	return &Subscription{events: events, close: close}
+}
+
 func (s *Subscription) Events() <-chan Event {
 	return s.events
 }
@@ -118,10 +122,6 @@ func (s *Store) Append(ctx context.Context, runID domain.RunID, draft Draft) (Ev
 	if runID == "" || draft.EventID == "" || draft.Type == "" {
 		return Event{}, fmt.Errorf("run_id, event_id, and type are required")
 	}
-	payload, err := Redact(draft.Payload)
-	if err != nil {
-		return Event{}, err
-	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -139,18 +139,7 @@ func (s *Store) Append(ctx context.Context, runID domain.RunID, draft Draft) (Ev
 	if len(run.events) > 0 {
 		prevHash = run.events[len(run.events)-1].Hash
 	}
-	event := Event{
-		SchemaVersion: 1,
-		EventID:       draft.EventID,
-		Seq:           Seq(len(run.events) + 1),
-		TS:            s.clock().UTC(),
-		RunID:         runID,
-		Actor:         draft.Actor,
-		Type:          draft.Type,
-		Payload:       payload,
-		PrevHash:      prevHash,
-	}
-	event.Hash, err = hashEvent(event)
+	event, err := BuildEvent(runID, Seq(len(run.events)+1), prevHash, s.clock(), draft)
 	if err != nil {
 		return Event{}, err
 	}
@@ -244,9 +233,15 @@ func (s *Store) Subscribe(ctx context.Context, runID domain.RunID, after Seq) (*
 	return subscription, nil
 }
 
-func (s *Store) AllEvents() []Event {
+func (s *Store) AllEvents(ctx context.Context) ([]Event, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return nil, ErrStoreClosed
+	}
 	var result []Event
 	for _, run := range s.runs {
 		result = append(result, run.events...)
@@ -257,7 +252,7 @@ func (s *Store) AllEvents() []Event {
 		}
 		return result[i].RunID < result[j].RunID
 	})
-	return result
+	return result, nil
 }
 
 func (s *Store) Verify(runID domain.RunID) error {
@@ -432,6 +427,45 @@ func verifyEvents(runID domain.RunID, events []Event) error {
 		prevHash = event.Hash
 	}
 	return nil
+}
+
+func VerifyEvents(runID domain.RunID, events []Event) error {
+	return verifyEvents(runID, events)
+}
+
+func BuildEvent(
+	runID domain.RunID,
+	seq Seq,
+	prevHash string,
+	now time.Time,
+	draft Draft,
+) (Event, error) {
+	if runID == "" || draft.EventID == "" || draft.Type == "" {
+		return Event{}, fmt.Errorf("run_id, event_id, and type are required")
+	}
+	if seq == 0 {
+		return Event{}, fmt.Errorf("audit seq must be positive")
+	}
+	payload, err := Redact(draft.Payload)
+	if err != nil {
+		return Event{}, err
+	}
+	event := Event{
+		SchemaVersion: 1,
+		EventID:       draft.EventID,
+		Seq:           seq,
+		TS:            now.UTC(),
+		RunID:         runID,
+		Actor:         draft.Actor,
+		Type:          draft.Type,
+		Payload:       payload,
+		PrevHash:      prevHash,
+	}
+	event.Hash, err = hashEvent(event)
+	if err != nil {
+		return Event{}, err
+	}
+	return event, nil
 }
 
 func hashEvent(event Event) (string, error) {

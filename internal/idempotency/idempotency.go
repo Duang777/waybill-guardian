@@ -49,6 +49,16 @@ type Result struct {
 
 type LookupFunc func(context.Context, Command) (platform.EffectResult, error)
 
+type Executor interface {
+	Execute(
+		context.Context,
+		Command,
+		func(context.Context) (json.RawMessage, error),
+	) (Result, error)
+	Reconcile(context.Context, Command) (Result, error)
+	Lookup(Command) (State, bool)
+}
+
 type entry struct {
 	Command
 	state           State
@@ -96,14 +106,14 @@ type reconciliationPayload struct {
 }
 
 type Store struct {
-	journal *audit.Store
+	journal audit.Journal
 	lookup  LookupFunc
 
 	mu      sync.Mutex
 	entries map[domain.IdempotencyKey]*entry
 }
 
-func NewStore(journal *audit.Store, lookup LookupFunc) (*Store, error) {
+func NewStore(journal audit.Journal, lookup LookupFunc) (*Store, error) {
 	if journal == nil {
 		return nil, fmt.Errorf("audit journal is required")
 	}
@@ -112,7 +122,11 @@ func NewStore(journal *audit.Store, lookup LookupFunc) (*Store, error) {
 		lookup:  lookup,
 		entries: make(map[domain.IdempotencyKey]*entry),
 	}
-	for _, event := range journal.AllEvents() {
+	events, err := journal.AllEvents(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("read idempotency events: %w", err)
+	}
+	for _, event := range events {
 		switch event.Type {
 		case audit.EventWriteStarted:
 			var payload writeStartedPayload

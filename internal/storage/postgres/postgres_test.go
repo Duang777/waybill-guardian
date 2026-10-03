@@ -12,10 +12,18 @@ func TestLoadMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 1 || migrations[0].Version != 1 {
+	if len(migrations) != 3 ||
+		migrations[0].Version != 1 ||
+		migrations[1].Version != 2 ||
+		migrations[2].Version != 3 {
 		t.Fatalf("migrations = %+v", migrations)
 	}
-	if migrations[0].Name != "000001_initial.sql" || len(migrations[0].Checksum) != 64 {
+	if migrations[0].Name != "000001_initial.sql" ||
+		migrations[1].Name != "000002_repository_runtime.sql" ||
+		migrations[2].Name != "000003_outbox_reclaim.sql" ||
+		len(migrations[0].Checksum) != 64 ||
+		len(migrations[1].Checksum) != 64 ||
+		len(migrations[2].Checksum) != 64 {
 		t.Fatalf("migration metadata = %+v", migrations[0])
 	}
 }

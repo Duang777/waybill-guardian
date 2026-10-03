@@ -120,34 +120,71 @@ func NewEngine(
 	stepDelay time.Duration,
 	modelConfig ModelConfig,
 ) (*Engine, error) {
+	mode, onlineModel, err := prepareModel(modelConfig)
+	if err != nil {
+		return nil, err
+	}
 	if registry == nil {
 		return nil, fmt.Errorf("tool registry is required")
-	}
-	mode := strings.ToLower(strings.TrimSpace(modelConfig.Mode))
-	if mode == "" {
-		mode = ModeDemo
-	}
-	var onlineModel llm.Provider
-	if mode == ModeOnline {
-		var err error
-		onlineModel, err = newOnlineModel(modelConfig)
-		if err != nil {
-			return nil, err
-		}
-	} else if mode != ModeDemo {
-		return nil, fmt.Errorf("AGENT_MODE must be demo or online")
 	}
 	fileHistory, err := openSecureHistory(historyDir)
 	if err != nil {
 		return nil, fmt.Errorf("open hastekit history: %w", err)
 	}
+	return newEngine(fileHistory, registry, middlewares, stepDelay, mode, onlineModel), nil
+}
+
+func NewEngineWithPersistence(
+	persistence history.ConversationPersistenceAdapter,
+	registry *guardtools.Registry,
+	middlewares []agents.Middleware,
+	stepDelay time.Duration,
+	modelConfig ModelConfig,
+) (*Engine, error) {
+	if persistence == nil {
+		return nil, fmt.Errorf("conversation persistence is required")
+	}
+	if registry == nil {
+		return nil, fmt.Errorf("tool registry is required")
+	}
+	mode, onlineModel, err := prepareModel(modelConfig)
+	if err != nil {
+		return nil, err
+	}
+	manager := history.NewConversationManager(persistence)
+	return newEngine(manager, registry, middlewares, stepDelay, mode, onlineModel), nil
+}
+
+func prepareModel(modelConfig ModelConfig) (string, llm.Provider, error) {
+	mode := strings.ToLower(strings.TrimSpace(modelConfig.Mode))
+	if mode == "" {
+		mode = ModeDemo
+	}
+	if mode == ModeOnline {
+		onlineModel, err := newOnlineModel(modelConfig)
+		return mode, onlineModel, err
+	}
+	if mode != ModeDemo {
+		return "", nil, fmt.Errorf("AGENT_MODE must be demo or online")
+	}
+	return mode, nil, nil
+}
+
+func newEngine(
+	conversationHistory *history.CommonConversationManager,
+	registry *guardtools.Registry,
+	middlewares []agents.Middleware,
+	stepDelay time.Duration,
+	mode string,
+	onlineModel llm.Provider,
+) *Engine {
 	toolCalls := &toolCallTracker{}
 	middlewares = append([]agents.Middleware{toolCalls}, middlewares...)
 	maxLoops := 12
 	options := &agents.AgentOptions{
 		Name:        "waybill-guardian",
 		Instruction: hastekit.NewPrompt(SystemPrompt),
-		History:     fileHistory,
+		History:     conversationHistory,
 		Tools:       registry.Tools(),
 		MaxLoops:    &maxLoops,
 	}
@@ -166,11 +203,11 @@ func NewEngine(
 	return &Engine{
 		agent:     sdkAgent,
 		registry:  registry,
-		history:   fileHistory,
+		history:   conversationHistory,
 		tools:     toolCalls,
 		handles:   make(map[*agents.AgentHandle]struct{}),
 		closeDone: make(chan struct{}),
-	}, nil
+	}
 }
 
 func newOnlineModel(config ModelConfig) (llm.Provider, error) {

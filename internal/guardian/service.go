@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hastekit/agent-sdk-go/pkg/agents"
 	"github.com/hastekit/agent-sdk-go/pkg/agents/agentstate"
+	"github.com/hastekit/agent-sdk-go/pkg/agents/history"
 )
 
 type Config struct {
@@ -28,6 +29,21 @@ type Config struct {
 	ApprovalTTL time.Duration
 	StepDelay   time.Duration
 	Model       agentkit.ModelConfig
+}
+
+type RunCoordinator interface {
+	AcquireRun(
+		context.Context,
+		domain.RunID,
+	) (context.Context, func() error, error)
+}
+
+type DurableConfig struct {
+	Config
+	Journal     audit.Journal
+	Effects     idempotency.Executor
+	History     history.ConversationPersistenceAdapter
+	Coordinator RunCoordinator
 }
 
 type RunView struct {
@@ -72,12 +88,14 @@ type Service struct {
 	clock  func() time.Time
 	ttl    time.Duration
 
-	clients   platform.Clients
-	journal   *audit.Store
-	approvals *approval.Store
-	effects   *idempotency.Store
-	registry  *guardtools.Registry
-	engine    *agentkit.Engine
+	clients     platform.Clients
+	journal     audit.Journal
+	approvals   *approval.Store
+	effects     idempotency.Executor
+	registry    *guardtools.Registry
+	engine      *agentkit.Engine
+	coordinator RunCoordinator
+	recovery    audit.RecoveryJournal
 
 	mu        sync.Mutex
 	runs      map[domain.RunID]RunView
@@ -90,30 +108,58 @@ type Service struct {
 }
 
 func Open(config Config) (*Service, error) {
-	if config.DataDir == "" {
-		config.DataDir = "data"
-	}
-	if config.Clock == nil {
-		config.Clock = time.Now
-	}
-	if config.ApprovalTTL <= 0 {
-		config.ApprovalTTL = 10 * time.Minute
-	}
-	if config.Clients.TMS == nil || config.Clients.Weather == nil || config.Clients.Notification == nil {
-		return nil, fmt.Errorf("all platform clients are required")
+	config = normalizeConfig(config)
+	if err := validateConfig(config); err != nil {
+		return nil, err
 	}
 	journal, err := audit.Open(config.DataDir, config.Clock)
 	if err != nil {
 		return nil, err
 	}
+	idempotencyStore, err := idempotency.NewStore(journal, platformEffectLookup(config.Clients))
+	if err != nil {
+		return nil, errors.Join(err, journal.Close())
+	}
+	return openService(config, journal, idempotencyStore, nil, nil)
+}
+
+func OpenDurable(config DurableConfig) (*Service, error) {
+	config.Config = normalizeConfig(config.Config)
+	if err := validateConfig(config.Config); err != nil {
+		return nil, err
+	}
+	if config.Journal == nil ||
+		config.Effects == nil ||
+		config.History == nil ||
+		config.Coordinator == nil {
+		return nil, fmt.Errorf("durable journal, effects, history, and coordinator are required")
+	}
+	return openService(
+		config.Config,
+		config.Journal,
+		config.Effects,
+		config.History,
+		config.Coordinator,
+	)
+}
+
+func openService(
+	config Config,
+	journal audit.Journal,
+	effects idempotency.Executor,
+	persistence history.ConversationPersistenceAdapter,
+	coordinator RunCoordinator,
+) (*Service, error) {
 	closeJournal := func(err error) (*Service, error) {
 		return nil, errors.Join(err, journal.Close())
 	}
-	approvals, err := approval.NewStore(journal, config.Clock)
-	if err != nil {
-		return closeJournal(err)
+	recovery, _ := journal.(audit.RecoveryJournal)
+	if recovery != nil {
+		if err := recovery.PrepareRecovery(context.Background()); err != nil {
+			return closeJournal(err)
+		}
 	}
-	idempotencyStore, err := idempotency.NewStore(journal, platformEffectLookup(config.Clients))
+	approvals, err := approval.NewStore(journal, config.Clock)
 	if err != nil {
 		return closeJournal(err)
 	}
@@ -127,40 +173,75 @@ func Open(config Config) (*Service, error) {
 	}
 	middlewares := []agents.Middleware{
 		agentkit.NewAuditMiddleware(journal),
-		agentkit.NewWriteEffectMiddleware(approvals, idempotencyStore, registry),
+		agentkit.NewWriteEffectMiddleware(approvals, effects, registry),
 	}
-	engine, err := agentkit.NewEngine(
-		filepath.Join(config.DataDir, "hastekit"),
-		registry,
-		middlewares,
-		config.StepDelay,
-		config.Model,
-	)
+	var engine *agentkit.Engine
+	if persistence == nil {
+		engine, err = agentkit.NewEngine(
+			filepath.Join(config.DataDir, "hastekit"),
+			registry,
+			middlewares,
+			config.StepDelay,
+			config.Model,
+		)
+	} else {
+		engine, err = agentkit.NewEngineWithPersistence(
+			persistence,
+			registry,
+			middlewares,
+			config.StepDelay,
+			config.Model,
+		)
+	}
 	if err != nil {
 		return closeJournal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &Service{
-		ctx:       ctx,
-		cancel:    cancel,
-		clock:     config.Clock,
-		ttl:       config.ApprovalTTL,
-		clients:   config.Clients,
-		journal:   journal,
-		approvals: approvals,
-		effects:   idempotencyStore,
-		registry:  registry,
-		engine:    engine,
-		runs:      make(map[domain.RunID]RunView),
-		locks:     make(map[domain.RunID]*sync.Mutex),
-		timers:    make(map[domain.ApprovalID]chan struct{}),
-		closeDone: make(chan struct{}),
+		ctx:         ctx,
+		cancel:      cancel,
+		clock:       config.Clock,
+		ttl:         config.ApprovalTTL,
+		clients:     config.Clients,
+		journal:     journal,
+		approvals:   approvals,
+		effects:     effects,
+		registry:    registry,
+		engine:      engine,
+		coordinator: coordinator,
+		recovery:    recovery,
+		runs:        make(map[domain.RunID]RunView),
+		locks:       make(map[domain.RunID]*sync.Mutex),
+		timers:      make(map[domain.ApprovalID]chan struct{}),
+		closeDone:   make(chan struct{}),
 	}
 	if err := service.rebuildRuns(); err != nil {
 		cancel()
 		return nil, errors.Join(err, engine.Close(), journal.Close())
 	}
 	return service, nil
+}
+
+func normalizeConfig(config Config) Config {
+	if config.DataDir == "" {
+		config.DataDir = "data"
+	}
+	if config.Clock == nil {
+		config.Clock = time.Now
+	}
+	if config.ApprovalTTL <= 0 {
+		config.ApprovalTTL = 10 * time.Minute
+	}
+	return config
+}
+
+func validateConfig(config Config) error {
+	if config.Clients.TMS == nil ||
+		config.Clients.Weather == nil ||
+		config.Clients.Notification == nil {
+		return fmt.Errorf("all platform clients are required")
+	}
+	return nil
 }
 
 func platformEffectLookup(clients platform.Clients) idempotency.LookupFunc {
@@ -215,8 +296,15 @@ func (s *Service) StartDemo(ctx context.Context) (RunView, error) {
 		lock := s.lockFor(runID)
 		lock.Lock()
 		defer lock.Unlock()
+		runCtx, release, err := s.acquireRun(s.ctx, runID)
+		if err != nil {
+			return
+		}
+		defer func() {
+			_ = release()
+		}()
 		s.updateRunStatus(runID, domain.RunInvestigating)
-		outcome, err := s.engine.Start(s.ctx, domain.RunContext{
+		outcome, err := s.engine.Start(runCtx, domain.RunContext{
 			RunID:       run.RunID,
 			IncidentID:  run.IncidentID,
 			WaybillID:   run.WaybillID,
@@ -224,13 +312,13 @@ func (s *Service) StartDemo(ctx context.Context) (RunView, error) {
 		})
 		if err != nil {
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, agentkit.ErrEngineClosed) {
-				s.recordFailure(runID, err)
+				s.recordFailureWithContext(runCtx, runID, err)
 			}
 			return
 		}
-		if err := s.handleOutcome(s.ctx, run, 1, outcome, false); err != nil {
+		if err := s.handleOutcome(runCtx, run, 1, outcome, false); err != nil {
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, agentkit.ErrEngineClosed) {
-				s.recordFailure(runID, err)
+				s.recordFailureWithContext(runCtx, runID, err)
 			}
 		}
 	}()
@@ -254,12 +342,19 @@ func (s *Service) Decide(
 	lock := s.lockFor(current.RunID)
 	lock.Lock()
 	defer lock.Unlock()
+	runCtx, release, err := s.acquireRun(s.ctx, current.RunID)
+	if err != nil {
+		return approval.Approval{}, err
+	}
+	defer func() {
+		_ = release()
+	}()
 
 	current, err = s.approvals.Get(id)
 	if err != nil {
 		return approval.Approval{}, err
 	}
-	decided, err := s.approvals.Decide(ctx, id, approval.Decision{
+	decided, err := s.approvals.Decide(runCtx, id, approval.Decision{
 		Kind:         request.Kind,
 		DecidedBy:    request.DecidedBy,
 		RejectReason: request.RejectReason,
@@ -267,10 +362,10 @@ func (s *Service) Decide(
 	if err != nil {
 		if errors.Is(err, approval.ErrDecisionConflict) && decided.Status == approval.StatusExpired {
 			s.cancelExpiration(id)
-			if _, resumeErr := s.resumeApproval(s.ctx, decided, false); resumeErr != nil {
+			if _, resumeErr := s.resumeApproval(runCtx, decided, false); resumeErr != nil {
 				if !errors.Is(resumeErr, context.Canceled) &&
 					!errors.Is(resumeErr, agentkit.ErrEngineClosed) {
-					s.recordFailure(decided.RunID, resumeErr)
+					s.recordFailureWithContext(runCtx, decided.RunID, resumeErr)
 				}
 				return approval.Approval{}, errors.Join(err, resumeErr)
 			}
@@ -296,10 +391,10 @@ func (s *Service) Decide(
 		}
 		return approval.Approval{}, fmt.Errorf("cannot resume approval for terminal run %q", runStatus)
 	}
-	result, err := s.resumeApproval(s.ctx, decided, approved)
+	result, err := s.resumeApproval(runCtx, decided, approved)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) && !errors.Is(err, agentkit.ErrEngineClosed) {
-			s.recordFailure(decided.RunID, err)
+			s.recordFailureWithContext(runCtx, decided.RunID, err)
 		}
 		return approval.Approval{}, err
 	}
@@ -319,6 +414,21 @@ func (s *Service) Replay(ctx context.Context, runID domain.RunID, after audit.Se
 }
 
 func (s *Service) GetRun(runID domain.RunID) (RunView, error) {
+	if s.recovery != nil {
+		projection, err := s.recovery.RunProjection(context.Background(), runID)
+		if err != nil {
+			return RunView{}, err
+		}
+		run := RunView{
+			RunID:      projection.RunID,
+			IncidentID: projection.IncidentID,
+			WaybillID:  projection.WaybillID,
+			Status:     projection.Status,
+			LastSeq:    projection.LastSeq,
+		}
+		s.setRun(run)
+		return run, nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	value, ok := s.runs[runID]
@@ -477,6 +587,13 @@ func (s *Service) recoverDecision(value approval.Approval, approved bool) error 
 	lock := s.lockFor(value.RunID)
 	lock.Lock()
 	defer lock.Unlock()
+	runCtx, release, err := s.acquireRun(s.ctx, value.RunID)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = release()
+	}()
 
 	current, err := s.approvals.Get(value.ID)
 	if err != nil {
@@ -493,13 +610,13 @@ func (s *Service) recoverDecision(value approval.Approval, approved bool) error 
 	if isTerminal(s.run(value.RunID).Status) {
 		if approved && s.run(value.RunID).Status == domain.RunCompleted &&
 			s.approvalEffectsSucceeded(current) {
-			_, err = s.approvals.MarkExecuted(s.ctx, current.ID)
+			_, err = s.approvals.MarkExecuted(runCtx, current.ID)
 		}
 		return err
 	}
-	if _, err := s.resumeApproval(s.ctx, current, approved); err != nil {
+	if _, err := s.resumeApproval(runCtx, current, approved); err != nil {
 		if !errors.Is(err, context.Canceled) {
-			s.recordFailure(current.RunID, err)
+			s.recordFailureWithContext(runCtx, current.RunID, err)
 		}
 		return err
 	}
@@ -551,7 +668,11 @@ func (s *Service) resumeApproval(
 			if markErr != nil {
 				return approval.Approval{}, markErr
 			}
-			s.recordFailure(value.RunID, fmt.Errorf("approval %q has incomplete effects", value.ID))
+			s.recordFailureWithContext(
+				ctx,
+				value.RunID,
+				fmt.Errorf("approval %q has incomplete effects", value.ID),
+			)
 			return failed, nil
 		}
 	}
@@ -572,6 +693,13 @@ func (s *Service) expireApproval(ctx context.Context, id domain.ApprovalID) erro
 	lock := s.lockFor(current.RunID)
 	lock.Lock()
 	defer lock.Unlock()
+	runCtx, release, err := s.acquireRun(s.ctx, current.RunID)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = release()
+	}()
 
 	current, err = s.approvals.Get(id)
 	if err != nil {
@@ -580,12 +708,12 @@ func (s *Service) expireApproval(ctx context.Context, id domain.ApprovalID) erro
 	if current.Status != approval.StatusPending {
 		return nil
 	}
-	expired, err := s.approvals.Decide(ctx, id, approval.Decision{Kind: approval.DecisionExpire})
+	expired, err := s.approvals.Decide(runCtx, id, approval.Decision{Kind: approval.DecisionExpire})
 	if err != nil {
 		return err
 	}
 	s.cancelExpiration(id)
-	if _, err := s.resumeApproval(s.ctx, expired, false); err != nil {
+	if _, err := s.resumeApproval(runCtx, expired, false); err != nil {
 		return err
 	}
 	return nil
@@ -595,6 +723,13 @@ func (s *Service) reconcileApprovalEffects(
 	ctx context.Context,
 	value approval.Approval,
 ) (bool, error) {
+	runCtx, release, err := s.acquireRun(ctx, value.RunID)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		_ = release()
+	}()
 	for _, item := range value.Items {
 		identity, err := item.Identity()
 		if err != nil {
@@ -609,7 +744,7 @@ func (s *Service) reconcileApprovalEffects(
 		if !ok || state != idempotency.StateUnknown {
 			continue
 		}
-		if _, err := s.effects.Reconcile(ctx, command); err != nil &&
+		if _, err := s.effects.Reconcile(runCtx, command); err != nil &&
 			!errors.Is(err, idempotency.ErrRetryableFailure) &&
 			!errors.Is(err, idempotency.ErrReconciliationPending) &&
 			!errors.Is(err, idempotency.ErrManualReview) {
@@ -620,7 +755,7 @@ func (s *Service) reconcileApprovalEffects(
 	if !executionRequiresReconciliation(results) {
 		return false, nil
 	}
-	if _, err := s.approvals.MarkReconciliationRequired(ctx, value.ID, results); err != nil {
+	if _, err := s.approvals.MarkReconciliationRequired(runCtx, value.ID, results); err != nil {
 		return false, err
 	}
 	s.updateRunStatus(value.RunID, domain.RunExecuting)
@@ -767,7 +902,10 @@ func (s *Service) runSnapshot() []RunView {
 }
 
 func isTerminal(status domain.RunStatus) bool {
-	return status == domain.RunCompleted || status == domain.RunRejected || status == domain.RunFailed
+	return status == domain.RunCompleted ||
+		status == domain.RunRejected ||
+		status == domain.RunFailed ||
+		status == domain.RunManualReview
 }
 
 func (s *Service) beginOperation() error {
@@ -935,7 +1073,27 @@ func (s *Service) createApproval(
 }
 
 func (s *Service) rebuildRuns() error {
-	projected, err := projectRuns(s.journal.AllEvents())
+	if s.recovery != nil {
+		projections, err := s.recovery.RunProjections(context.Background())
+		if err != nil {
+			return err
+		}
+		for _, run := range projections {
+			s.runs[run.RunID] = RunView{
+				RunID:      run.RunID,
+				IncidentID: run.IncidentID,
+				WaybillID:  run.WaybillID,
+				Status:     run.Status,
+				LastSeq:    run.LastSeq,
+			}
+		}
+		return nil
+	}
+	events, err := s.journal.AllEvents(context.Background())
+	if err != nil {
+		return err
+	}
+	projected, err := projectRuns(events)
 	if err != nil {
 		return err
 	}
@@ -952,18 +1110,44 @@ func (s *Service) rebuildRuns() error {
 }
 
 func (s *Service) recordFailure(runID domain.RunID, cause error) {
-	event, err := s.journal.Append(context.Background(), runID, audit.Draft{
+	ctx, release, err := s.acquireRun(context.Background(), runID)
+	if err != nil {
+		return
+	}
+	defer func() {
+		_ = release()
+	}()
+	s.recordFailureWithContext(ctx, runID, cause)
+}
+
+func (s *Service) recordFailureWithContext(
+	ctx context.Context,
+	runID domain.RunID,
+	cause error,
+) {
+	event, err := s.journal.Append(ctx, runID, audit.Draft{
 		EventID: "run:" + string(runID) + ":failed",
 		Actor:   audit.ActorSystem,
 		Type:    audit.EventRunFailed,
 		Payload: map[string]any{"status": domain.RunFailed, "error": cause.Error()},
 	})
+	if err != nil {
+		return
+	}
 	run := s.run(runID)
 	run.Status = domain.RunFailed
-	if err == nil {
-		run.LastSeq = event.Seq
-	}
+	run.LastSeq = event.Seq
 	s.setRun(run)
+}
+
+func (s *Service) acquireRun(
+	ctx context.Context,
+	runID domain.RunID,
+) (context.Context, func() error, error) {
+	if s.coordinator == nil {
+		return ctx, func() error { return nil }, nil
+	}
+	return s.coordinator.AcquireRun(ctx, runID)
 }
 
 func (s *Service) updateRunStatus(runID domain.RunID, status domain.RunStatus) {

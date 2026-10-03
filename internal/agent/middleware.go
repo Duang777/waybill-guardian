@@ -15,10 +15,10 @@ import (
 
 type AuditMiddleware struct {
 	agents.NoopMiddleware
-	journal *audit.Store
+	journal audit.Journal
 }
 
-func NewAuditMiddleware(journal *audit.Store) *AuditMiddleware {
+func NewAuditMiddleware(journal audit.Journal) *AuditMiddleware {
 	return &AuditMiddleware{journal: journal}
 }
 
@@ -78,13 +78,13 @@ func (m *AuditMiddleware) WrapToolCall(next agents.ToolCallFunc) agents.ToolCall
 type WriteEffectMiddleware struct {
 	agents.NoopMiddleware
 	approvals *approval.Store
-	effects   *idempotency.Store
+	effects   idempotency.Executor
 	registry  *guardtools.Registry
 }
 
 func NewWriteEffectMiddleware(
 	approvals *approval.Store,
-	effects *idempotency.Store,
+	effects idempotency.Executor,
 	registry *guardtools.Registry,
 ) *WriteEffectMiddleware {
 	return &WriteEffectMiddleware{

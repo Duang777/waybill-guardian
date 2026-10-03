@@ -104,7 +104,7 @@ export default function App() {
   }, [selectRun]);
 
   useEffect(() => {
-    if (run === null || timelineAfter === null) {
+    if (run === null || timelineAfter === null || run.status === "manual_review") {
       return;
     }
     const generation = selectionGeneration.current;

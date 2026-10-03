@@ -9,9 +9,9 @@
 ## 当前能力
 
 - 七个工具与 [`contract.yaml`](./contract.yaml) 对齐。四个只读工具自动执行，三个写工具强制审批。
-- hastekit v0.0.24 负责 Agent loop、typed tools、文件历史和 HITL pause/resume。
+- hastekit v0.0.24 负责 Agent loop、typed tools 和 HITL pause/resume；history 可使用本地文件或 PostgreSQL。
 - 服务端根据业务参数生成稳定 `effect_id` 和幂等键。同一 effect 并发执行十次时，platform 只收到一次调用。
-- 每个 run 使用一份 append-only JSONL。事件包含连续序号、前序哈希和当前哈希。
+- 默认每个 run 使用一份 append-only JSONL。PostgreSQL 模式在同一事务提交业务投影、审计和 outbox。
 - SSE 支持 `Last-Event-ID` 续传。前端按 `(run_id, seq)` 去重。
 - 审批支持确认、驳回和超时。首选运力被驳回后，Agent 会提交第二个候选方案。
 - 当前无认证版本只监听 loopback，并用进程锁阻止两个实例共享同一个数据目录。
@@ -55,11 +55,16 @@ cd waybill-guardian
 | `APPROVAL_TTL` | `10m` | 审批有效期，使用 Go duration 格式 |
 | `DEMO_STEP_DELAY` | `220ms` | 确定性模型每一步的演示延迟 |
 | `PLATFORM` | `mock` | `mock` 可用；`real` 会在 adapter 未实现时拒绝启动 |
-| `STORAGE` | `jsonl` | `jsonl` 用于离线演示；`postgres` 当前只完成 schema 基础 |
+| `STORAGE` | `jsonl` | `jsonl` 用于离线演示；`postgres` 使用事务仓储 |
 | `DATABASE_URL` | 空 | `STORAGE=postgres` 时必填，不应写入日志或仓库 |
 | `PG_MAX_CONNS` | `8` | PostgreSQL 连接池最大连接数 |
 | `PG_MIN_CONNS` | `0` | PostgreSQL 连接池最小连接数 |
 | `PG_STARTUP_TIMEOUT` | `30s` | PostgreSQL 连接、检查和迁移的总超时 |
+| `TENANT_ID` | `local-demo` | PostgreSQL 业务数据的租户边界 |
+| `INSTANCE_ID` | 随机 UUID | PostgreSQL run 和 effect 租约的 worker 身份 |
+| `RUN_LEASE_TTL` | `30s` | PostgreSQL run、effect 和 outbox 租约时长 |
+| `CHECKPOINT_KEY_ID` | `local-v1` | checkpoint 加密密钥版本 |
+| `CHECKPOINT_ENCRYPTION_KEY` | 空 | PostgreSQL 模式必填，Base64 编码的 32 字节 AES-256 key |
 | `AGENT_MODE` | `demo` | `demo` 使用确定性模型；`online` 调用外部模型 |
 
 例如，使用其他端口和临时数据目录：
@@ -110,7 +115,7 @@ go vet ./...
 go build ./...
 ```
 
-使用 Docker 启动临时 PostgreSQL 17，并验证迁移和数据库约束：
+使用 Docker 启动临时 PostgreSQL 17，验证迁移、事务、租约、加密 history 和浏览器完整流程：
 
 ```bash
 ./scripts/test-postgres.sh
@@ -149,7 +154,9 @@ npm run record:demo
 ## 架构与边界
 
 `cmd/server` 只处理 HTTP 和 SSE。`internal/guardian` 协调 Agent、审批、幂等和恢复。
-`internal/audit` 是业务事实源，hastekit file history 保存模型消息和 pending tool calls。
+默认模式由 `internal/audit` 的 JSONL 保存业务事实，hastekit file history 保存模型消息和
+pending tool calls。PostgreSQL 模式不打开这些业务文件，数据库是 run、审批、effect、审计、
+outbox 和 Agent history 的唯一事实源。
 
 本地运行时将 `DATA_DIR` 和 hastekit history 目录权限设为 `0700`，数据文件设为 `0600`。
 它对 `DATA_DIR` 的目录文件描述符持有独占锁，第二个使用同一目录的进程会拒绝启动。对于

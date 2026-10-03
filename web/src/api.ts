@@ -19,6 +19,7 @@ const runStatusSchema = z.enum([
   "completed",
   "rejected",
   "failed",
+  "manual_review",
 ]);
 
 export const runSchema = z
@@ -236,9 +237,11 @@ const pendingApprovalSummarySchema = z
 
 export type PendingApprovalSummary = z.infer<typeof pendingApprovalSummarySchema>;
 
-export const runSnapshotSchema = z
+const replayableRunSnapshotSchema = z
   .object({
-    run: runSummarySchema,
+    run: runSummarySchema.extend({
+      status: runStatusSchema.exclude(["manual_review"]),
+    }),
     events: z.array(auditEventSchema).min(1),
   })
   .strict()
@@ -267,6 +270,20 @@ export const runSnapshotSchema = z
       });
     }
   });
+
+const quarantinedRunSnapshotSchema = z
+  .object({
+    run: runSummarySchema.extend({
+      status: z.literal("manual_review"),
+    }),
+    events: z.array(auditEventSchema).length(0),
+  })
+  .strict();
+
+export const runSnapshotSchema = z.union([
+  replayableRunSnapshotSchema,
+  quarantinedRunSnapshotSchema,
+]);
 
 export type RunSnapshot = z.infer<typeof runSnapshotSchema>;
 

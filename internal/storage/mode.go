@@ -1,12 +1,9 @@
 package storage
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 )
-
-var ErrPostgresRepositoriesPending = errors.New("PostgreSQL repositories are not implemented")
 
 type Mode string
 
