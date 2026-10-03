@@ -41,7 +41,7 @@ func openSecureHistory(dir string) (*history.CommonConversationManager, error) {
 		FileConversationPersistence: persistence,
 		dir:                         dir,
 	}
-	return history.NewConversationManager(secure), nil
+	return history.NewConversationManager(guardHistoryPersistence(secure)), nil
 }
 
 func (p *secureHistoryPersistence) SaveMessages(

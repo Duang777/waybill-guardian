@@ -151,7 +151,7 @@ func NewEngineWithPersistence(
 	if err != nil {
 		return nil, err
 	}
-	manager := history.NewConversationManager(persistence)
+	manager := history.NewConversationManager(guardHistoryPersistence(persistence))
 	return newEngine(manager, registry, middlewares, stepDelay, mode, onlineModel), nil
 }
 
@@ -179,7 +179,7 @@ func newEngine(
 	onlineModel llm.Provider,
 ) *Engine {
 	toolCalls := &toolCallTracker{}
-	middlewares = append([]agents.Middleware{toolCalls}, middlewares...)
+	middlewares = append([]agents.Middleware{historyGuard{}, toolCalls}, middlewares...)
 	maxLoops := 12
 	options := &agents.AgentOptions{
 		Name:        "waybill-guardian",
