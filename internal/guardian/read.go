@@ -39,7 +39,11 @@ func (s *Service) ListActiveRuns(ctx context.Context) ([]RunSummary, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	runs, err := projectRuns(s.journal.AllEvents())
+	events, err := s.journal.AllEvents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	runs, err := projectRuns(events)
 	if err != nil {
 		return nil, err
 	}

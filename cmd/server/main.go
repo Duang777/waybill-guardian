@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,10 +18,12 @@ import (
 
 	agentkit "github.com/Duang777/waybill-guardian/internal/agent"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
+	"github.com/Duang777/waybill-guardian/internal/idempotency"
 	"github.com/Duang777/waybill-guardian/internal/platform"
 	"github.com/Duang777/waybill-guardian/internal/storage"
 	postgresstore "github.com/Duang777/waybill-guardian/internal/storage/postgres"
 	"github.com/Duang777/waybill-guardian/internal/tools"
+	"github.com/google/uuid"
 )
 
 const defaultHTTPAddr = "127.0.0.1:8080"
@@ -61,10 +64,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if storageMode == storage.ModePostgres {
-		return storage.ErrPostgresRepositoriesPending
-	}
-	service, err := guardian.Open(guardian.Config{
+	commonConfig := guardian.Config{
 		DataDir:     envOr("DATA_DIR", "data"),
 		Clients:     clients,
 		ApprovalTTL: durationEnv("APPROVAL_TTL", 10*time.Minute),
@@ -76,7 +76,65 @@ func run() error {
 			APIKey:   strings.TrimSpace(os.Getenv("LLM_API_KEY")),
 			Model:    strings.TrimSpace(os.Getenv("LLM_MODEL")),
 		},
-	})
+	}
+	var service *guardian.Service
+	if storageMode == storage.ModePostgres {
+		key, keyErr := checkpointKeyFromEnv()
+		if keyErr != nil {
+			return keyErr
+		}
+		tenantID := envOr("TENANT_ID", "local-demo")
+		repository, repositoryErr := postgresstore.NewRepository(
+			database,
+			postgresstore.RepositoryConfig{
+				TenantID: tenantID,
+				WorkerID: envOr("INSTANCE_ID", uuid.NewString()),
+				LeaseTTL: durationEnv("RUN_LEASE_TTL", 30*time.Second),
+				EffectLookup: func(
+					ctx context.Context,
+					command idempotency.Command,
+				) (platform.EffectResult, error) {
+					request := platform.LookupEffectRequest{
+						Action:         command.Identity.Action,
+						IdempotencyKey: command.Identity.Key,
+					}
+					switch command.Identity.Action {
+					case "tms.reassign", "tms.create_claim":
+						return clients.TMS.LookupEffect(ctx, request)
+					case "notify.send_sms":
+						return clients.Notification.LookupEffect(ctx, request)
+					default:
+						return platform.EffectResult{
+							Disposition: platform.EffectPermanentFailed,
+						}, nil
+					}
+				},
+			},
+		)
+		if repositoryErr != nil {
+			return repositoryErr
+		}
+		history, historyErr := postgresstore.NewConversationPersistence(
+			database,
+			postgresstore.HistoryConfig{
+				TenantID: tenantID,
+				KeyID:    envOr("CHECKPOINT_KEY_ID", "local-v1"),
+				Key:      key,
+			},
+		)
+		if historyErr != nil {
+			return historyErr
+		}
+		service, err = guardian.OpenDurable(guardian.DurableConfig{
+			Config:      commonConfig,
+			Journal:     repository,
+			Effects:     repository,
+			History:     history,
+			Coordinator: repository,
+		})
+	} else {
+		service, err = guardian.Open(commonConfig)
+	}
 	if err != nil {
 		return err
 	}
@@ -101,6 +159,18 @@ func run() error {
 	}
 	slog.Info("waybill guardian listening", "addr", listener.Addr())
 	return serve(ctx, server, listener)
+}
+
+func checkpointKeyFromEnv() ([]byte, error) {
+	value := strings.TrimSpace(os.Getenv("CHECKPOINT_ENCRYPTION_KEY"))
+	if value == "" {
+		return nil, fmt.Errorf("CHECKPOINT_ENCRYPTION_KEY is required for PostgreSQL storage")
+	}
+	key, err := base64.StdEncoding.DecodeString(value)
+	if err != nil || len(key) != 32 {
+		return nil, fmt.Errorf("CHECKPOINT_ENCRYPTION_KEY must be base64 for exactly 32 bytes")
+	}
+	return key, nil
 }
 
 func validateRuntimeModes(platformMode string, storageMode storage.Mode) error {

@@ -51,6 +51,10 @@ type Subscription struct {
 	once   sync.Once
 }
 
+func NewSubscription(events <-chan Event, close func()) *Subscription {
+	return &Subscription{events: events, close: close}
+}
+
 func (s *Subscription) Events() <-chan Event {
 	return s.events
 }
@@ -229,9 +233,15 @@ func (s *Store) Subscribe(ctx context.Context, runID domain.RunID, after Seq) (*
 	return subscription, nil
 }
 
-func (s *Store) AllEvents() []Event {
+func (s *Store) AllEvents(ctx context.Context) ([]Event, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return nil, ErrStoreClosed
+	}
 	var result []Event
 	for _, run := range s.runs {
 		result = append(result, run.events...)
@@ -242,7 +252,7 @@ func (s *Store) AllEvents() []Event {
 		}
 		return result[i].RunID < result[j].RunID
 	})
-	return result
+	return result, nil
 }
 
 func (s *Store) Verify(runID domain.RunID) error {

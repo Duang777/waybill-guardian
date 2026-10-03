@@ -470,6 +470,31 @@ func TestPostgresConfigFromEnvRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestCheckpointKeyFromEnv(t *testing.T) {
+	t.Setenv(
+		"CHECKPOINT_ENCRYPTION_KEY",
+		"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+	)
+	key, err := checkpointKeyFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(key) != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("checkpoint key = %q", key)
+	}
+}
+
+func TestCheckpointKeyFromEnvRejectsInvalidValues(t *testing.T) {
+	for _, value := range []string{"", "not-base64", "c2hvcnQ="} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("CHECKPOINT_ENCRYPTION_KEY", value)
+			if _, err := checkpointKeyFromEnv(); err == nil {
+				t.Fatalf("CHECKPOINT_ENCRYPTION_KEY=%q was accepted", value)
+			}
+		})
+	}
+}
+
 func TestValidateHTTPAddrAllowsOnlyExplicitLoopback(t *testing.T) {
 	allowed := []string{
 		defaultHTTPAddr,

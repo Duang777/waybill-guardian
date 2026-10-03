@@ -192,7 +192,11 @@ func NewStore(journal audit.Journal, clock func() time.Time) (*Store, error) {
 		clock:     clock,
 		approvals: make(map[domain.ApprovalID]Approval),
 	}
-	for _, event := range journal.AllEvents() {
+	events, err := journal.AllEvents(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("read approval events: %w", err)
+	}
+	for _, event := range events {
 		if err := store.apply(event); err != nil {
 			return nil, fmt.Errorf("rebuild approvals: %w", err)
 		}
