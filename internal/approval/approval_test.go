@@ -179,6 +179,79 @@ func TestConfirmHonorsExpiryBoundary(t *testing.T) {
 	}
 }
 
+func TestRebuildsPartiallyFailedApproval(t *testing.T) {
+	now := time.Date(2026, 10, 3, 8, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	journal, err := audit.Open(dir, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(journal, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := testApproval("run-partial", "call-reassign")
+	value.ID = IDFor(value.RunID, []string{"call-reassign", "call-sms"})
+	value.Items = append(value.Items, Item{
+		CallID:         "call-sms",
+		Action:         domain.ActionSendSMS,
+		WireName:       "notify_send_sms",
+		Params:         json.RawMessage(`{"idempotency_key":"key-sms"}`),
+		ArgumentsHash:  "hash-sms",
+		IdempotencyKey: "key-sms",
+	})
+	created, err := store.Create(context.Background(), value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Decide(context.Background(), created.ID, Decision{
+		Kind:      DecisionConfirm,
+		DecidedBy: "reviewer",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := store.MarkExecutionFailed(context.Background(), created.ID, []ItemExecution{
+		{
+			CallID:         "call-reassign",
+			Action:         domain.ActionReassign,
+			IdempotencyKey: "key",
+			Status:         ExecutionSucceeded,
+		},
+		{
+			CallID:         "call-sms",
+			Action:         domain.ActionSendSMS,
+			IdempotencyKey: "key-sms",
+			Status:         ExecutionFailed,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != StatusPartiallyFailed {
+		t.Fatalf("failed status = %q, want partially_failed", failed.Status)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopenedJournal, err := audit.Open(dir, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopenedJournal.Close()
+	reopened, err := NewStore(reopenedJournal, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := reopened.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != StatusPartiallyFailed {
+		t.Fatalf("recovered status = %q, want partially_failed", recovered.Status)
+	}
+}
+
 func testApproval(runID, callID string) Approval {
 	params, _ := json.Marshal(map[string]string{
 		"waybill_id":      "YD2026101001",

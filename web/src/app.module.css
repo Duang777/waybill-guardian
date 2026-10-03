@@ -970,6 +970,8 @@
   background: oklch(0.92 0.035 155);
 }
 
+.approvalStatuspartially_failed,
+.approvalStatusfailed,
 .approvalStatusrejected,
 .approvalStatusexpired {
   color: oklch(0.45 0.13 28);

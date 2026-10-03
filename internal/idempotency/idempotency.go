@@ -243,14 +243,21 @@ func (s *Store) Execute(
 }
 
 func (s *Store) Succeeded(command Command) bool {
+	state, ok := s.Lookup(command)
+	return ok && state == StateSucceeded
+}
+
+func (s *Store) Lookup(command Command) (State, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	current := s.entries[command.Key]
-	return current != nil &&
-		current.state == StateSucceeded &&
-		current.RunID == command.RunID &&
-		current.Action == command.Action &&
-		current.ArgumentsHash == command.ArgumentsHash
+	if current == nil ||
+		current.RunID != command.RunID ||
+		current.Action != command.Action ||
+		current.ArgumentsHash != command.ArgumentsHash {
+		return "", false
+	}
+	return current.state, true
 }
 
 func (s *Store) finish(key domain.IdempotencyKey, state State, result json.RawMessage) {
