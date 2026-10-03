@@ -25,6 +25,8 @@ HTTP 和 SSE 服务入口。handler 只做请求校验、协议转换和错误�
 - handler 不持有审批或审计状态。服务重启时，`guardian.Recover` 从 JSONL 和 hastekit
   file history 恢复可证明安全的状态。
 - 请求返回后，已经接受的 run 使用服务生命周期 context 继续执行。浏览器断开不会取消 run。
+- `http.Server.BaseContext` 使用服务生命周期 context。关停信号先取消 SSE 等长连接，再等待
+  活动 handler 退出，最后关闭 `guardian.Service`。
 
 ## 请求约束
 

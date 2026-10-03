@@ -4,7 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 func OpenDirectory(path string, perm os.FileMode) (*os.File, error) {
@@ -102,6 +105,91 @@ func OpenOrCreateRegular(path string, flag int, perm os.FileMode) (*os.File, boo
 		}
 		return file, true, nil
 	}
+}
+
+func OpenExistingRegularAt(dir *os.File, name string, flag int, perm os.FileMode) (*os.File, error) {
+	if err := validateBaseName(name); err != nil {
+		return nil, err
+	}
+	fd, err := unix.Openat(
+		int(dir.Fd()),
+		name,
+		flag|unix.O_CLOEXEC|unix.O_NOFOLLOW,
+		uint32(perm.Perm()),
+	)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), name)
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if err := validateRegular(info); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if err := file.Chmod(perm); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
+func OpenOrCreateRegularAt(
+	dir *os.File,
+	name string,
+	flag int,
+	perm os.FileMode,
+) (*os.File, bool, error) {
+	for {
+		file, err := OpenExistingRegularAt(dir, name, flag, perm)
+		if err == nil {
+			return file, false, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, false, err
+		}
+
+		if err := validateBaseName(name); err != nil {
+			return nil, false, err
+		}
+		fd, err := unix.Openat(
+			int(dir.Fd()),
+			name,
+			flag|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW,
+			uint32(perm.Perm()),
+		)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		file = os.NewFile(uintptr(fd), name)
+		info, statErr := file.Stat()
+		if statErr != nil {
+			_ = file.Close()
+			return nil, false, statErr
+		}
+		if err := validateRegular(info); err != nil {
+			_ = file.Close()
+			return nil, false, err
+		}
+		if err := file.Chmod(perm); err != nil {
+			_ = file.Close()
+			return nil, false, err
+		}
+		return file, true, nil
+	}
+}
+
+func validateBaseName(name string) error {
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+		return fmt.Errorf("file name must not contain a path")
+	}
+	return nil
 }
 
 func validateRegular(info os.FileInfo) error {

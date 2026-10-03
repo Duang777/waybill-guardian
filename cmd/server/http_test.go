@@ -230,6 +230,17 @@ func TestHandlerRejectsNonLoopbackHost(t *testing.T) {
 	}
 }
 
+func TestHandlerAcceptsLoopbackHostWithoutPort(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/healthz", nil)
+	response := httptest.NewRecorder()
+
+	newHandler(nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
+	}
+}
+
 func TestServeWaitsForActiveHandlerDuringShutdown(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -275,6 +286,54 @@ func TestServeWaitsForActiveHandlerDuringShutdown(t *testing.T) {
 	case <-finished:
 	case <-time.After(time.Second):
 		t.Fatal("handler did not finish")
+	}
+	if err := <-serveDone; err != nil {
+		t.Fatal(err)
+	}
+	<-requestDone
+}
+
+func TestServeCancelsLongLivedHandlerDuringShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			close(started)
+			<-r.Context().Done()
+			close(stopped)
+		}),
+		BaseContext: func(net.Listener) context.Context {
+			return ctx
+		},
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- serve(ctx, server, listener)
+	}()
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		response, requestErr := http.Get("http://" + listener.Addr().String())
+		if requestErr == nil {
+			_ = response.Body.Close()
+		}
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not start")
+	}
+
+	cancel()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("request context was not canceled")
 	}
 	if err := <-serveDone; err != nil {
 		t.Fatal(err)

@@ -212,7 +212,9 @@ func (s *Service) StartDemo(ctx context.Context) (RunView, error) {
 			return
 		}
 		if err := s.handleOutcome(s.ctx, run, 1, outcome, false); err != nil {
-			s.recordFailure(runID, err)
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, agentkit.ErrEngineClosed) {
+				s.recordFailure(runID, err)
+			}
 		}
 	}()
 	return run, nil

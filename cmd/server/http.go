@@ -36,7 +36,7 @@ func newHandler(service *guardian.Service) http.Handler {
 
 func loopbackHostOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := validateHTTPAddr(r.Host); err != nil {
+		if err := validateRequestHost(r.Host); err != nil {
 			writeProblem(w, http.StatusForbidden, "invalid_host", "request host must be a loopback IP address")
 			return
 		}

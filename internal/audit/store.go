@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -36,7 +35,6 @@ type runLog struct {
 }
 
 type Store struct {
-	dir     string
 	clock   func() time.Time
 	dirFile *os.File
 
@@ -77,7 +75,6 @@ func Open(dir string, clock func() time.Time) (*Store, error) {
 		return nil, err
 	}
 	store := &Store{
-		dir:     dir,
 		clock:   clock,
 		dirFile: dirFile,
 		runs:    make(map[domain.RunID]*runLog),
@@ -85,13 +82,19 @@ func Open(dir string, clock func() time.Time) (*Store, error) {
 	closeOnError := func(err error) (*Store, error) {
 		return nil, errors.Join(err, store.Close())
 	}
-	paths, err := filepath.Glob(filepath.Join(dir, "audit-*.jsonl"))
+	entries, err := dirFile.ReadDir(-1)
 	if err != nil {
 		return closeOnError(fmt.Errorf("list audit journals: %w", err))
 	}
-	sort.Strings(paths)
-	for _, path := range paths {
-		if err := store.load(path); err != nil {
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "audit-") && strings.HasSuffix(entry.Name(), ".jsonl") {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := store.load(name); err != nil {
 			return closeOnError(err)
 		}
 	}
@@ -316,11 +319,16 @@ func (s *Store) ensureRun(runID domain.RunID) *runLog {
 }
 
 func (s *Store) appendLocked(event Event) error {
-	path, err := s.path(event.RunID)
+	name, err := journalFileName(event.RunID)
 	if err != nil {
 		return err
 	}
-	file, isNew, err := securefs.OpenOrCreateRegular(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	file, isNew, err := securefs.OpenOrCreateRegularAt(
+		s.dirFile,
+		name,
+		os.O_APPEND|os.O_WRONLY,
+		0o600,
+	)
 	if err != nil {
 		return fmt.Errorf("open audit journal: %w", err)
 	}
@@ -347,20 +355,19 @@ func (s *Store) appendLocked(event Event) error {
 	return nil
 }
 
-func (s *Store) load(path string) error {
-	base := filepath.Base(path)
-	runID := domain.RunID(strings.TrimSuffix(strings.TrimPrefix(base, "audit-"), ".jsonl"))
+func (s *Store) load(name string) error {
+	runID := domain.RunID(strings.TrimSuffix(strings.TrimPrefix(name, "audit-"), ".jsonl"))
 	if runID == "" {
-		return fmt.Errorf("invalid audit journal name %q", base)
+		return fmt.Errorf("invalid audit journal name %q", name)
 	}
-	file, err := securefs.OpenExistingRegular(path, os.O_RDWR, 0o600)
+	file, err := securefs.OpenExistingRegularAt(s.dirFile, name, os.O_RDWR, 0o600)
 	if err != nil {
-		return fmt.Errorf("open audit journal %q: %w", path, err)
+		return fmt.Errorf("open audit journal %q: %w", name, err)
 	}
 	defer file.Close()
 	raw, err := io.ReadAll(file)
 	if err != nil {
-		return fmt.Errorf("read audit journal %q: %w", path, err)
+		return fmt.Errorf("read audit journal %q: %w", name, err)
 	}
 	if len(raw) > 0 && raw[len(raw)-1] != '\n' {
 		lastNewline := bytes.LastIndexByte(raw, '\n')
@@ -369,10 +376,10 @@ func (s *Store) load(path string) error {
 			keep = lastNewline + 1
 		}
 		if err := file.Truncate(int64(keep)); err != nil {
-			return fmt.Errorf("truncate incomplete audit tail %q: %w", path, err)
+			return fmt.Errorf("truncate incomplete audit tail %q: %w", name, err)
 		}
 		if err := file.Sync(); err != nil {
-			return fmt.Errorf("sync repaired audit journal %q: %w", path, err)
+			return fmt.Errorf("sync repaired audit journal %q: %w", name, err)
 		}
 		raw = raw[:keep]
 	}
@@ -384,12 +391,12 @@ func (s *Store) load(path string) error {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return fmt.Errorf("decode audit journal %q: %w", path, err)
+			return fmt.Errorf("decode audit journal %q: %w", name, err)
 		}
 		events = append(events, event)
 	}
 	if err := verifyEvents(runID, events); err != nil {
-		return fmt.Errorf("verify audit journal %q: %w", path, err)
+		return fmt.Errorf("verify audit journal %q: %w", name, err)
 	}
 	run := s.ensureRun(runID)
 	for _, event := range events {
@@ -457,7 +464,7 @@ func hashEvent(event Event) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func (s *Store) path(runID domain.RunID) (string, error) {
+func journalFileName(runID domain.RunID) (string, error) {
 	for _, char := range runID {
 		switch {
 		case char >= 'a' && char <= 'z':
@@ -471,5 +478,5 @@ func (s *Store) path(runID domain.RunID) (string, error) {
 	if runID == "" {
 		return "", fmt.Errorf("audit run ID is empty")
 	}
-	return filepath.Join(s.dir, "audit-"+string(runID)+".jsonl"), nil
+	return "audit-" + string(runID) + ".jsonl", nil
 }
