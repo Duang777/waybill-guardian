@@ -171,6 +171,19 @@ describe("latestApproval", () => {
       approval_id: "APR-1",
       executed_at: "2026-10-10T01:16:01Z",
     });
+    const reconciliationRequired = event(3, "approval_reconciliation_required", {
+      approval_id: "APR-1",
+      checked_at: "2026-10-10T01:16:01Z",
+      items: [
+        {
+          call_id: "call-1",
+          action: "tms.reassign",
+          effect_id: "1fd92e48-c2d3-5654-b9f9-a507a2348354",
+          idempotency_key: "key-1",
+          status: "unknown",
+        },
+      ],
+    });
     const executionFailed = event(3, "approval_execution_failed", {
       approval_id: "APR-1",
       status: "partially_failed",
@@ -194,6 +207,10 @@ describe("latestApproval", () => {
     expect(latestApproval([requested])?.status).toBe("pending");
     expect(latestApproval([requested, decided])?.status).toBe("confirmed");
     expect(latestApproval([requested, decided, executed])?.status).toBe("executed");
+    expect(latestApproval([requested, decided, reconciliationRequired])?.status).toBe(
+      "reconciliation_required",
+    );
+    expect(runStatus([requested, decided, reconciliationRequired])).toBe("executing");
     expect(latestApproval([requested, decided, executionFailed])?.status).toBe(
       "partially_failed",
     );

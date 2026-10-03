@@ -11,6 +11,7 @@ import (
 
 	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/platform"
 )
 
 func TestGenerate(t *testing.T) {
@@ -30,7 +31,7 @@ func TestConcurrentExecuteRunsEffectOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewStore(journal)
+	store, err := NewStore(journal, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +84,7 @@ func TestMissingAndConflictingKeysAreRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewStore(journal)
+	store, err := NewStore(journal, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +123,7 @@ func TestSucceededMatchesDurableCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewStore(journal)
+	store, err := NewStore(journal, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,12 +149,12 @@ func TestSucceededMatchesDurableCommand(t *testing.T) {
 	}
 }
 
-func TestFailedExecutionRetriesWithDistinctAttemptEvents(t *testing.T) {
+func TestRetryableExecutionUsesDistinctAttemptEvents(t *testing.T) {
 	journal, err := audit.Open(t.TempDir(), time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewStore(journal)
+	store, err := NewStore(journal, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +175,7 @@ func TestFailedExecutionRetriesWithDistinctAttemptEvents(t *testing.T) {
 	command := Command{RunID: "run-retry", CallID: "call-retry", Identity: identity}
 	for attempt := 1; attempt <= 2; attempt++ {
 		_, err := store.Execute(context.Background(), command, func(context.Context) (json.RawMessage, error) {
-			return nil, errors.New("temporary failure")
+			return nil, platform.RetryableEffectError(errors.New("temporary failure"))
 		})
 		if err == nil {
 			t.Fatalf("attempt %d succeeded", attempt)
@@ -191,9 +192,9 @@ func TestFailedExecutionRetriesWithDistinctAttemptEvents(t *testing.T) {
 	}
 	expected := []string{
 		"write:" + string(identity.EffectID) + ":attempt:1:started",
-		"write:" + string(identity.EffectID) + ":attempt:1:failed",
+		"write:" + string(identity.EffectID) + ":attempt:1:retryable_failed",
 		"write:" + string(identity.EffectID) + ":attempt:2:started",
-		"write:" + string(identity.EffectID) + ":attempt:2:failed",
+		"write:" + string(identity.EffectID) + ":attempt:2:retryable_failed",
 	}
 	if len(eventIDs) != len(expected) {
 		t.Fatalf("event ids = %v", eventIDs)
@@ -225,7 +226,7 @@ func TestNewStoreReplaysLegacySuccessWithoutExecuting(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewStore(journal)
+	store, err := NewStore(journal, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +277,7 @@ func TestNewStoreReplaysEffectV0SuccessWithoutExecuting(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewStore(journal)
+	store, err := NewStore(journal, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,8 +317,128 @@ func TestNewStoreRejectsPartiallyPopulatedIdentity(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewStore(journal); !errors.Is(err, ErrInvalidIdentity) {
+	if _, err := NewStore(journal, nil); !errors.Is(err, ErrInvalidIdentity) {
 		t.Fatalf("partial identity error = %v", err)
+	}
+}
+
+func TestUnknownResultIsNotRetriedAsNewMutation(t *testing.T) {
+	journal, err := audit.Open(t.TempDir(), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(journal, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := Command{
+		RunID:    "run-unknown",
+		CallID:   "call-unknown",
+		Identity: mustLegacyIdentity(t, domain.ActionReassign, "key-unknown", "args-unknown"),
+	}
+	calls := 0
+	execute := func(context.Context) (json.RawMessage, error) {
+		calls++
+		return nil, errors.New("client timed out after the platform committed")
+	}
+	if _, err := store.Execute(context.Background(), command, execute); err == nil {
+		t.Fatal("unknown result returned no error")
+	}
+	command.CallID = "call-unknown-retry"
+	if _, err := store.Execute(context.Background(), command, execute); err == nil {
+		t.Fatal("unreconciled result returned no error")
+	}
+	if calls != 1 {
+		t.Fatalf("mutation calls = %d, want 1", calls)
+	}
+}
+
+func TestStartedWithoutResultRebuildsAsUnknown(t *testing.T) {
+	journal, err := audit.Open(t.TempDir(), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := mustLegacyIdentity(t, domain.ActionSendSMS, "key-crashed", "args-crashed")
+	command := Command{RunID: "run-crashed", CallID: "call-crashed", Identity: identity}
+	if _, err := journal.Append(context.Background(), command.RunID, audit.Draft{
+		EventID: "write:" + string(identity.EffectID) + ":attempt:1:started",
+		Actor:   audit.ActorSystem,
+		Type:    audit.EventWriteStarted,
+		Payload: writeStartedPayload{
+			Key:             identity.Key,
+			EffectID:        identity.EffectID,
+			CallID:          command.CallID,
+			Action:          identity.Action,
+			ArgumentsHash:   identity.ArgumentsHash,
+			IdentityVersion: identity.Version,
+			Attempt:         1,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewStore(journal, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, ok := store.Lookup(command)
+	if !ok {
+		t.Fatal("crashed command was not rebuilt")
+	}
+	if state != StateUnknown {
+		t.Fatalf("crashed command state = %q, want unknown", state)
+	}
+}
+
+func TestUnknownMutationUsesLookupInsteadOfRepeatingWrite(t *testing.T) {
+	journal, err := audit.Open(t.TempDir(), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := mustLegacyIdentity(t, domain.ActionReassign, "key-committed", "args-committed")
+	lookupCalls := 0
+	store, err := NewStore(journal, func(
+		_ context.Context,
+		command Command,
+	) (platform.EffectResult, error) {
+		lookupCalls++
+		if command.Identity.Key != identity.Key {
+			t.Fatalf("lookup key = %q", command.Identity.Key)
+		}
+		return platform.EffectResult{
+			Disposition: platform.EffectSucceeded,
+			Response:    json.RawMessage(`{"order_id":"RA-committed"}`),
+		}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := Command{RunID: "run-committed", CallID: "call-committed", Identity: identity}
+	mutationCalls := 0
+	result, err := store.Execute(context.Background(), command, func(context.Context) (json.RawMessage, error) {
+		mutationCalls++
+		return nil, errors.New("response connection reset after commit")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(result.Value) != `{"order_id":"RA-committed"}` {
+		t.Fatalf("reconciled result = %s", result.Value)
+	}
+
+	command.CallID = "call-committed-retry"
+	replayed, err := store.Execute(context.Background(), command, func(context.Context) (json.RawMessage, error) {
+		mutationCalls++
+		return nil, errors.New("mutation must not run again")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !replayed.Duplicate {
+		t.Fatal("reconciled result was not replayed as a duplicate")
+	}
+	if mutationCalls != 1 || lookupCalls != 1 {
+		t.Fatalf("calls = mutation:%d lookup:%d, want 1 each", mutationCalls, lookupCalls)
 	}
 }
 

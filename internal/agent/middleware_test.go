@@ -22,7 +22,7 @@ func TestWriteEffectMiddlewareSeparatesSameActionEffects(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer journal.Close()
-	effects, err := idempotency.NewStore(journal)
+	effects, err := idempotency.NewStore(journal, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

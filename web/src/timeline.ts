@@ -130,23 +130,40 @@ const approvalExecutionItemBaseSchema = z
     call_id: z.string().min(1),
     action: z.string().min(1),
     idempotency_key: z.string().min(1),
-    status: z.enum(["succeeded", "failed", "started", "indeterminate", "missing"]),
+    status: z.enum([
+      "succeeded",
+      "failed",
+      "started",
+      "indeterminate",
+      "retryable_failed",
+      "permanent_failed",
+      "unknown",
+      "reconciling",
+      "manual_review",
+      "missing",
+    ]),
   })
   .strict();
+
+const approvalExecutionItemSchema = z.union([
+  approvalExecutionItemBaseSchema,
+  approvalExecutionItemBaseSchema.extend({ effect_id: z.string().min(1) }).strict(),
+]);
 
 const approvalExecutionFailedSchema = z
   .object({
     approval_id: z.string().min(1),
     status: z.enum(["partially_failed", "failed"]),
     failed_at: z.string(),
-    items: z.array(
-      z.union([
-        approvalExecutionItemBaseSchema,
-        approvalExecutionItemBaseSchema
-          .extend({ effect_id: z.string().min(1) })
-          .strict(),
-      ]),
-    ),
+    items: z.array(approvalExecutionItemSchema),
+  })
+  .strict();
+
+const approvalReconciliationSchema = z
+  .object({
+    approval_id: z.string().min(1),
+    checked_at: z.string(),
+    items: z.array(approvalExecutionItemSchema),
   })
   .strict();
 
@@ -185,6 +202,13 @@ export function latestApproval(events: readonly AuditEvent[]): Approval | null {
       if (parsed.success && parsed.data.approval_id === current.id) {
         current = { ...current, status: parsed.data.status };
       }
+      continue;
+    }
+    if (event.type === "approval_reconciliation_required" && current !== null) {
+      const parsed = approvalReconciliationSchema.safeParse(event.payload);
+      if (parsed.success && parsed.data.approval_id === current.id) {
+        current = { ...current, status: "reconciliation_required" };
+      }
     }
   }
   return current;
@@ -201,8 +225,12 @@ export function runStatus(events: readonly AuditEvent[]): RunStatus | null {
         status = "awaiting_approval";
         break;
       case "approval_decided":
+      case "approval_reconciliation_required":
       case "write_started":
       case "write_executed":
+      case "write_unknown":
+      case "write_reconciliation_started":
+      case "write_reconciled":
         status = "executing";
         break;
       case "run_completed":
@@ -247,9 +275,13 @@ const eventLabels = {
   approval_decided: "审批决定已记录",
   approval_executed: "审批动作已执行",
   approval_execution_failed: "审批动作部分失败",
+  approval_reconciliation_required: "审批动作等待对账",
   write_started: "开始写回平台",
   write_executed: "平台写入成功",
   write_failed: "平台写入失败",
+  write_unknown: "平台写入结果未知",
+  write_reconciliation_started: "开始查询平台结果",
+  write_reconciled: "平台结果已对账",
   duplicate_suppressed: "重复写入已拦截",
   run_completed: "处置完成",
   run_rejected: "处置转人工跟进",
@@ -291,9 +323,13 @@ function eventTone(type: AuditEventType): EventPresentation["tone"] {
   switch (type) {
     case "approval_requested":
     case "attribution":
+    case "approval_reconciliation_required":
+    case "write_unknown":
+    case "write_reconciliation_started":
       return "warning";
     case "approval_executed":
     case "write_executed":
+    case "write_reconciled":
     case "run_completed":
     case "duplicate_suppressed":
       return "success";

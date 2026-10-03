@@ -30,13 +30,14 @@ var (
 type Status string
 
 const (
-	StatusPending         Status = "pending"
-	StatusConfirmed       Status = "confirmed"
-	StatusExecuted        Status = "executed"
-	StatusPartiallyFailed Status = "partially_failed"
-	StatusFailed          Status = "failed"
-	StatusRejected        Status = "rejected"
-	StatusExpired         Status = "expired"
+	StatusPending                Status = "pending"
+	StatusConfirmed              Status = "confirmed"
+	StatusReconciliationRequired Status = "reconciliation_required"
+	StatusExecuted               Status = "executed"
+	StatusPartiallyFailed        Status = "partially_failed"
+	StatusFailed                 Status = "failed"
+	StatusRejected               Status = "rejected"
+	StatusExpired                Status = "expired"
 )
 
 type DecisionKind string
@@ -93,6 +94,11 @@ const (
 	ExecutionFailed        ExecutionStatus = "failed"
 	ExecutionStarted       ExecutionStatus = "started"
 	ExecutionIndeterminate ExecutionStatus = "indeterminate"
+	ExecutionRetryable     ExecutionStatus = "retryable_failed"
+	ExecutionPermanent     ExecutionStatus = "permanent_failed"
+	ExecutionUnknown       ExecutionStatus = "unknown"
+	ExecutionReconciling   ExecutionStatus = "reconciling"
+	ExecutionManualReview  ExecutionStatus = "manual_review"
 	ExecutionMissing       ExecutionStatus = "missing"
 )
 
@@ -165,6 +171,12 @@ type executionFailedPayload struct {
 	ApprovalID domain.ApprovalID `json:"approval_id"`
 	Status     Status            `json:"status"`
 	FailedAt   time.Time         `json:"failed_at"`
+	Items      []ItemExecution   `json:"items"`
+}
+
+type reconciliationRequiredPayload struct {
+	ApprovalID domain.ApprovalID `json:"approval_id"`
+	CheckedAt  time.Time         `json:"checked_at"`
 	Items      []ItemExecution   `json:"items"`
 }
 
@@ -304,7 +316,7 @@ func (s *Store) MarkExecuted(ctx context.Context, id domain.ApprovalID) (Approva
 	if current.Status == StatusExecuted {
 		return clone(current), nil
 	}
-	if current.Status != StatusConfirmed {
+	if current.Status != StatusConfirmed && current.Status != StatusReconciliationRequired {
 		return Approval{}, ErrDecisionConflict
 	}
 	event, err := s.journal.Append(ctx, current.RunID, audit.Draft{
@@ -336,7 +348,7 @@ func (s *Store) MarkExecutionFailed(
 	if current.Status == StatusPartiallyFailed || current.Status == StatusFailed {
 		return clone(current), nil
 	}
-	if current.Status != StatusConfirmed {
+	if current.Status != StatusConfirmed && current.Status != StatusReconciliationRequired {
 		return Approval{}, ErrDecisionConflict
 	}
 	status, err := validateExecutionFailure(current.Items, items)
@@ -351,6 +363,45 @@ func (s *Store) MarkExecutionFailed(
 			ApprovalID: id,
 			Status:     status,
 			FailedAt:   s.clock().UTC(),
+			Items:      append([]ItemExecution(nil), items...),
+		},
+	})
+	if err != nil {
+		return Approval{}, err
+	}
+	if err := s.applyLocked(event); err != nil {
+		return Approval{}, err
+	}
+	return clone(s.approvals[id]), nil
+}
+
+func (s *Store) MarkReconciliationRequired(
+	ctx context.Context,
+	id domain.ApprovalID,
+	items []ItemExecution,
+) (Approval, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.approvals[id]
+	if !ok {
+		return Approval{}, ErrNotFound
+	}
+	if current.Status == StatusReconciliationRequired {
+		return clone(current), nil
+	}
+	if current.Status != StatusConfirmed {
+		return Approval{}, ErrDecisionConflict
+	}
+	if err := validateReconciliationRequired(current.Items, items); err != nil {
+		return Approval{}, err
+	}
+	event, err := s.journal.Append(ctx, current.RunID, audit.Draft{
+		EventID: "approval:" + string(id) + ":reconciliation_required",
+		Actor:   audit.ActorSystem,
+		Type:    audit.EventApprovalReconciliationRequired,
+		Payload: reconciliationRequiredPayload{
+			ApprovalID: id,
+			CheckedAt:  s.clock().UTC(),
 			Items:      append([]ItemExecution(nil), items...),
 		},
 	})
@@ -391,7 +442,9 @@ func (s *Store) Authorize(request AuthorizationRequest) (Authorization, error) {
 	defer s.mu.Unlock()
 	for _, value := range s.approvals {
 		if value.RunID != request.RunID ||
-			(value.Status != StatusConfirmed && value.Status != StatusExecuted) {
+			(value.Status != StatusConfirmed &&
+				value.Status != StatusReconciliationRequired &&
+				value.Status != StatusExecuted) {
 			continue
 		}
 		for _, item := range value.Items {
@@ -505,6 +558,20 @@ func (s *Store) applyLocked(event audit.Event) error {
 		}
 		current.Status = status
 		s.approvals[current.ID] = current
+	case audit.EventApprovalReconciliationRequired:
+		var payload reconciliationRequiredPayload
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return err
+		}
+		current, ok := s.approvals[payload.ApprovalID]
+		if !ok {
+			return fmt.Errorf("reconciliation references unknown approval %q", payload.ApprovalID)
+		}
+		if err := validateReconciliationRequired(current.Items, payload.Items); err != nil {
+			return fmt.Errorf("invalid reconciliation for approval %q: %w", payload.ApprovalID, err)
+		}
+		current.Status = StatusReconciliationRequired
+		s.approvals[current.ID] = current
 	}
 	return nil
 }
@@ -530,9 +597,10 @@ func validateExecutionFailure(expected []Item, actual []ItemExecution) (Status, 
 		switch result.Status {
 		case ExecutionSucceeded:
 			succeeded++
-		case ExecutionFailed, ExecutionStarted, ExecutionIndeterminate, ExecutionMissing:
+		case ExecutionFailed, ExecutionRetryable, ExecutionPermanent,
+			ExecutionStarted, ExecutionIndeterminate, ExecutionMissing:
 		default:
-			return "", fmt.Errorf("unknown execution status %q", result.Status)
+			return "", fmt.Errorf("execution failure contains non-failure status %q", result.Status)
 		}
 	}
 	if succeeded == len(actual) {
@@ -542,6 +610,39 @@ func validateExecutionFailure(expected []Item, actual []ItemExecution) (Status, 
 		return StatusPartiallyFailed, nil
 	}
 	return StatusFailed, nil
+}
+
+func validateReconciliationRequired(expected []Item, actual []ItemExecution) error {
+	if len(actual) != len(expected) {
+		return fmt.Errorf("execution results = %d, want %d", len(actual), len(expected))
+	}
+	remaining := make(map[string]Item, len(expected))
+	for _, item := range expected {
+		remaining[item.CallID] = item
+	}
+	requiresReconciliation := false
+	for _, result := range actual {
+		item, ok := remaining[result.CallID]
+		if !ok ||
+			item.Action != result.Action ||
+			item.EffectID != result.EffectID ||
+			item.IdempotencyKey != result.IdempotencyKey {
+			return fmt.Errorf("execution result does not match approved call %q", result.CallID)
+		}
+		delete(remaining, result.CallID)
+		switch result.Status {
+		case ExecutionUnknown, ExecutionReconciling, ExecutionStarted,
+			ExecutionIndeterminate, ExecutionManualReview:
+			requiresReconciliation = true
+		case ExecutionSucceeded, ExecutionRetryable, ExecutionPermanent, ExecutionFailed, ExecutionMissing:
+		default:
+			return fmt.Errorf("unknown execution status %q", result.Status)
+		}
+	}
+	if !requiresReconciliation {
+		return fmt.Errorf("execution results contain no effect requiring reconciliation")
+	}
+	return nil
 }
 
 func nextStatus(current Status, decision DecisionKind) (Status, error) {
@@ -561,7 +662,8 @@ func nextStatus(current Status, decision DecisionKind) (Status, error) {
 }
 
 func matchesDecision(status Status, decision DecisionKind) bool {
-	return (status == StatusConfirmed || status == StatusExecuted) && decision == DecisionConfirm ||
+	return (status == StatusConfirmed || status == StatusReconciliationRequired || status == StatusExecuted) &&
+		decision == DecisionConfirm ||
 		status == StatusRejected && decision == DecisionReject ||
 		status == StatusExpired && decision == DecisionExpire
 }
