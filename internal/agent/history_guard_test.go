@@ -17,9 +17,14 @@ func TestHistoryGuardRejectsProhibitedData(t *testing.T) {
 	}{
 		{name: "field", value: map[string]any{"longitude": 120.1}},
 		{name: "mobile number", value: map[string]any{"text": "contact 13800138000"}},
+		{name: "hyphenated mobile number", value: map[string]any{"text": "contact 138-0013-8000"}},
+		{name: "spaced mobile number", value: map[string]any{"text": "contact 138 0013 8000"}},
 		{name: "license plate", value: map[string]any{"text": "vehicle 浙A12345"}},
+		{name: "dotted license plate", value: map[string]any{"text": "vehicle 浙A·12345"}},
+		{name: "hyphenated license plate", value: map[string]any{"text": "vehicle 浙A-12345"}},
 		{name: "nested JSON string", value: map[string]any{"arguments": `{"template_id":"delay"}`}},
 		{name: "fenced JSON string", value: map[string]any{"text": "```json\n{\"latitude\":30.2}\n```"}},
+		{name: "escaped fenced JSON key", value: map[string]any{"text": "```json\n{\"lat\\u0069tude\":30.2}\n```"}},
 		{name: "malformed JSON string", value: map[string]any{"arguments": `{"safe":`}},
 		{name: "concatenated JSON string", value: map[string]any{"arguments": `{"safe":1}{"safe":2}`}},
 	}

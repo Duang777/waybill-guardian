@@ -23,8 +23,8 @@ const (
 var (
 	ErrUnsafeHistory = errors.New("agent history contains prohibited data")
 
-	mobileNumberPattern     = regexp.MustCompile(`(^|[^0-9])1[3-9][0-9]{9}([^0-9]|$)`)
-	licensePlatePattern     = regexp.MustCompile(`[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领][A-HJ-NP-Z][A-HJ-NP-Z0-9]{5,6}`)
+	mobileNumberPattern     = regexp.MustCompile(`(^|[^0-9])1[3-9]([ -]?[0-9]){9}([^0-9]|$)`)
+	licensePlatePattern     = regexp.MustCompile(`[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领][A-HJ-NP-Z][· -]?[A-HJ-NP-Z0-9]{5,6}`)
 	forbiddenJSONKeyPattern = regexp.MustCompile(`(?i)"(shipper_phone|phone|plate|license_plate|longitude|latitude|template_id|params)"[[:space:]]*:`)
 	forbiddenHistoryKeys    = map[string]struct{}{
 		"phone":         {},
@@ -239,9 +239,8 @@ func inspectHistoryValue(value any, path string) error {
 		if forbiddenJSONKeyPattern.MatchString(current) {
 			return fmt.Errorf("%w: prohibited JSON field at %s", ErrUnsafeHistory, path)
 		}
-		trimmed := strings.TrimSpace(current)
-		if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
-			nested, err := decodeHistoryJSON([]byte(trimmed))
+		if candidate, ok := nestedJSONCandidate(current); ok {
+			nested, err := decodeHistoryJSON([]byte(candidate))
 			if err != nil {
 				return fmt.Errorf("%w: malformed nested JSON at %s", ErrUnsafeHistory, path)
 			}
@@ -251,6 +250,27 @@ func inspectHistoryValue(value any, path string) error {
 		}
 	}
 	return nil
+}
+
+func nestedJSONCandidate(value string) (string, bool) {
+	trimmed := strings.TrimSpace(value)
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		return trimmed, true
+	}
+	if !strings.HasPrefix(trimmed, "```") || !strings.HasSuffix(trimmed, "```") {
+		return "", false
+	}
+	body := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "```"), "```"))
+	if newline := strings.IndexByte(body, '\n'); newline >= 0 {
+		language := strings.TrimSpace(body[:newline])
+		if language == "" || strings.EqualFold(language, "json") {
+			body = strings.TrimSpace(body[newline+1:])
+		}
+	}
+	if strings.HasPrefix(body, "{") || strings.HasPrefix(body, "[") {
+		return body, true
+	}
+	return "", false
 }
 
 var _ agents.Middleware = historyGuard{}
