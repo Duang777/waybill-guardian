@@ -470,6 +470,26 @@ func TestPostgresConfigFromEnvRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestStrictDurationEnv(t *testing.T) {
+	t.Setenv("HISTORY_RETENTION", "48h")
+	got, err := strictDurationEnv("HISTORY_RETENTION", 7*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 48*time.Hour {
+		t.Fatalf("history retention = %s, want 48h", got)
+	}
+
+	for _, value := range []string{"forever", "0s", "-1h"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("HISTORY_RETENTION", value)
+			if _, err := strictDurationEnv("HISTORY_RETENTION", 7*24*time.Hour); err == nil {
+				t.Fatalf("HISTORY_RETENTION=%q was accepted", value)
+			}
+		})
+	}
+}
+
 func TestCheckpointKeyFromEnv(t *testing.T) {
 	t.Setenv(
 		"CHECKPOINT_ENCRYPTION_KEY",

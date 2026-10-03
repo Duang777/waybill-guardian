@@ -119,6 +119,7 @@ func NewEngine(
 	middlewares []agents.Middleware,
 	stepDelay time.Duration,
 	modelConfig ModelConfig,
+	historyPolicies ...HistoryPolicy,
 ) (*Engine, error) {
 	mode, onlineModel, err := prepareModel(modelConfig)
 	if err != nil {
@@ -127,7 +128,14 @@ func NewEngine(
 	if registry == nil {
 		return nil, fmt.Errorf("tool registry is required")
 	}
-	fileHistory, err := openSecureHistory(historyDir)
+	if len(historyPolicies) > 1 {
+		return nil, fmt.Errorf("at most one history policy is supported")
+	}
+	var historyPolicy HistoryPolicy
+	if len(historyPolicies) == 1 {
+		historyPolicy = historyPolicies[0]
+	}
+	fileHistory, err := openSecureHistory(historyDir, historyPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("open hastekit history: %w", err)
 	}
