@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -17,6 +18,8 @@ import (
 	agentkit "github.com/Duang777/waybill-guardian/internal/agent"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
 	"github.com/Duang777/waybill-guardian/internal/platform"
+	"github.com/Duang777/waybill-guardian/internal/storage"
+	postgresstore "github.com/Duang777/waybill-guardian/internal/storage/postgres"
 	"github.com/Duang777/waybill-guardian/internal/tools"
 )
 
@@ -34,9 +37,32 @@ func run() error {
 	if err := validateHTTPAddr(httpAddr); err != nil {
 		return err
 	}
+	platformMode := strings.ToLower(envOr("PLATFORM", "mock"))
+	storageMode, err := storage.ParseMode(os.Getenv("STORAGE"))
+	if err != nil {
+		return err
+	}
+	if err := validateRuntimeModes(platformMode, storageMode); err != nil {
+		return err
+	}
+	var database *postgresstore.DB
+	if storageMode == storage.ModePostgres {
+		config, err := postgresConfigFromEnv()
+		if err != nil {
+			return err
+		}
+		database, err = postgresstore.Open(context.Background(), config)
+		if err != nil {
+			return err
+		}
+		defer database.Close()
+	}
 	clients, err := platformClients()
 	if err != nil {
 		return err
+	}
+	if storageMode == storage.ModePostgres {
+		return storage.ErrPostgresRepositoriesPending
 	}
 	service, err := guardian.Open(guardian.Config{
 		DataDir:     envOr("DATA_DIR", "data"),
@@ -75,6 +101,64 @@ func run() error {
 	}
 	slog.Info("waybill guardian listening", "addr", listener.Addr())
 	return serve(ctx, server, listener)
+}
+
+func validateRuntimeModes(platformMode string, storageMode storage.Mode) error {
+	switch platformMode {
+	case "mock":
+	case "real":
+		if storageMode != storage.ModePostgres {
+			return fmt.Errorf("PLATFORM=real requires STORAGE=postgres")
+		}
+	default:
+		return fmt.Errorf("PLATFORM must be mock or real")
+	}
+	return nil
+}
+
+func postgresConfigFromEnv() (postgresstore.Config, error) {
+	maxConns, err := int32Env("PG_MAX_CONNS", 8)
+	if err != nil {
+		return postgresstore.Config{}, err
+	}
+	minConns, err := int32Env("PG_MIN_CONNS", 0)
+	if err != nil {
+		return postgresstore.Config{}, err
+	}
+	startupTimeout, err := strictDurationEnv("PG_STARTUP_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return postgresstore.Config{}, err
+	}
+	return postgresstore.Config{
+		DatabaseURL:    strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		MaxConns:       maxConns,
+		MinConns:       minConns,
+		StartupTimeout: startupTimeout,
+	}, nil
+}
+
+func int32Env(name string, fallback int32) (int32, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer", name)
+	}
+	return int32(parsed), nil
+}
+
+func strictDurationEnv(name string, fallback time.Duration) (time.Duration, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration", name)
+	}
+	return parsed, nil
 }
 
 func serve(ctx context.Context, server *http.Server, listener net.Listener) error {
