@@ -246,6 +246,16 @@ func (s *Service) Decide(
 		RejectReason: request.RejectReason,
 	})
 	if err != nil {
+		if errors.Is(err, approval.ErrDecisionConflict) && decided.Status == approval.StatusExpired {
+			s.cancelExpiration(id)
+			if _, resumeErr := s.resumeApproval(s.ctx, decided, false); resumeErr != nil {
+				if !errors.Is(resumeErr, context.Canceled) &&
+					!errors.Is(resumeErr, agentkit.ErrEngineClosed) {
+					s.recordFailure(decided.RunID, resumeErr)
+				}
+				return approval.Approval{}, errors.Join(err, resumeErr)
+			}
+		}
 		return approval.Approval{}, err
 	}
 	s.cancelExpiration(id)

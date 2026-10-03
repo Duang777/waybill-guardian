@@ -171,17 +171,24 @@ func (s *Store) Decide(ctx context.Context, id domain.ApprovalID, decision Decis
 	if !ok {
 		return Approval{}, ErrNotFound
 	}
-	next, err := nextStatus(current.Status, decision.Kind)
-	if err != nil {
-		if matchesDecision(current.Status, decision.Kind) {
-			return clone(current), nil
+	now := s.clock().UTC()
+	expiredBeforeDecision := current.Status == StatusPending &&
+		(decision.Kind == DecisionConfirm || decision.Kind == DecisionReject) &&
+		!current.ExpiresAt.After(now)
+	next := StatusExpired
+	if !expiredBeforeDecision {
+		var err error
+		next, err = nextStatus(current.Status, decision.Kind)
+		if err != nil {
+			if matchesDecision(current.Status, decision.Kind) {
+				return clone(current), nil
+			}
+			return Approval{}, err
 		}
-		return Approval{}, err
 	}
-	if decision.Kind == DecisionReject && decision.RejectReason == "" {
+	if decision.Kind == DecisionReject && !expiredBeforeDecision && decision.RejectReason == "" {
 		return Approval{}, ErrRejectReason
 	}
-	now := s.clock().UTC()
 	payload := decisionPayload{
 		ApprovalID:   id,
 		Status:       next,
@@ -190,9 +197,10 @@ func (s *Store) Decide(ctx context.Context, id domain.ApprovalID, decision Decis
 		RejectReason: decision.RejectReason,
 	}
 	actor := audit.ActorHuman
-	if decision.Kind == DecisionExpire {
+	if decision.Kind == DecisionExpire || expiredBeforeDecision {
 		actor = audit.ActorSystem
 		payload.DecidedBy = "system"
+		payload.RejectReason = ""
 	}
 	event, err := s.journal.Append(ctx, current.RunID, audit.Draft{
 		EventID: "approval:" + string(id) + ":" + string(next),
@@ -206,7 +214,11 @@ func (s *Store) Decide(ctx context.Context, id domain.ApprovalID, decision Decis
 	if err := s.applyLocked(event); err != nil {
 		return Approval{}, err
 	}
-	return clone(s.approvals[id]), nil
+	result := clone(s.approvals[id])
+	if expiredBeforeDecision {
+		return result, ErrDecisionConflict
+	}
+	return result, nil
 }
 
 func (s *Store) MarkExecuted(ctx context.Context, id domain.ApprovalID) (Approval, error) {
