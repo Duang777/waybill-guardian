@@ -25,6 +25,7 @@ import {
   latestApproval,
   runStatus,
   timelineReducer,
+  visibleEvents,
 } from "./timeline";
 
 type Resource<T> =
@@ -142,11 +143,11 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [timeline.playback.kind]);
 
-  const currentApproval = useMemo(
-    () => latestApproval(timeline.events),
-    [timeline.events],
-  );
-  const currentStatus = runStatus(timeline.events) ?? run?.status ?? null;
+  const projectedEvents = useMemo(() => visibleEvents(timeline), [timeline]);
+  const currentApproval = useMemo(() => latestApproval(projectedEvents), [projectedEvents]);
+  const currentStatus =
+    runStatus(projectedEvents) ??
+    (timeline.playback.kind === "live" ? (run?.status ?? null) : null);
   const view = waybill.kind === "ready" ? waybill.data : null;
 
   const startDemo = async () => {
