@@ -350,6 +350,9 @@ func (s *Service) CurrentApproval(runID domain.RunID) (approval.Approval, error)
 }
 
 func (s *Service) GetWaybill(ctx context.Context, id domain.WaybillID) (WaybillView, error) {
+	if err := domain.ValidateWaybillID(id); err != nil {
+		return WaybillView{}, err
+	}
 	waybill, err := s.clients.TMS.GetWaybill(ctx, platform.GetWaybillRequest{WaybillID: id})
 	if err != nil {
 		return WaybillView{}, err

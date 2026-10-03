@@ -49,7 +49,7 @@ func NewMock(raw []byte) (*Mock, error) {
 func (m *Mock) GetWaybill(_ context.Context, req GetWaybillRequest) (Waybill, error) {
 	waybill, ok := m.data.Waybills[string(req.WaybillID)]
 	if !ok {
-		return Waybill{}, fmt.Errorf("waybill %q not found", req.WaybillID)
+		return Waybill{}, fmt.Errorf("%w: waybill %q", ErrNotFound, req.WaybillID)
 	}
 	return cloneWaybill(waybill), nil
 }
@@ -57,7 +57,7 @@ func (m *Mock) GetWaybill(_ context.Context, req GetWaybillRequest) (Waybill, er
 func (m *Mock) GetTracking(_ context.Context, req GetTrackingRequest) ([]TrackPoint, error) {
 	points, ok := m.data.Tracking[string(req.WaybillID)]
 	if !ok {
-		return nil, fmt.Errorf("tracking for waybill %q not found", req.WaybillID)
+		return nil, fmt.Errorf("%w: tracking for waybill %q", ErrNotFound, req.WaybillID)
 	}
 	return append([]TrackPoint(nil), points...), nil
 }
@@ -65,7 +65,7 @@ func (m *Mock) GetTracking(_ context.Context, req GetTrackingRequest) ([]TrackPo
 func (m *Mock) GetDriver(_ context.Context, req GetDriverRequest) (Driver, error) {
 	driver, ok := m.data.Drivers[string(req.DriverID)]
 	if !ok {
-		return Driver{}, fmt.Errorf("driver %q not found", req.DriverID)
+		return Driver{}, fmt.Errorf("%w: driver %q", ErrNotFound, req.DriverID)
 	}
 	return driver, nil
 }
@@ -73,7 +73,7 @@ func (m *Mock) GetDriver(_ context.Context, req GetDriverRequest) (Driver, error
 func (m *Mock) GetRoadWeather(_ context.Context, req GetRoadWeatherRequest) ([]RoadWeather, error) {
 	weather, ok := m.data.Weather[req.Route]
 	if !ok {
-		return nil, fmt.Errorf("weather for route %q not found", req.Route)
+		return nil, fmt.Errorf("%w: weather for route %q", ErrNotFound, req.Route)
 	}
 	return append([]RoadWeather(nil), weather...), nil
 }
@@ -89,7 +89,7 @@ func (m *Mock) Reassign(_ context.Context, req ReassignRequest) (ReassignOrder, 
 	}
 	waybill, ok := m.data.Waybills[string(req.WaybillID)]
 	if !ok {
-		return ReassignOrder{}, fmt.Errorf("waybill %q not found", req.WaybillID)
+		return ReassignOrder{}, fmt.Errorf("%w: waybill %q", ErrNotFound, req.WaybillID)
 	}
 	if !containsCarrier(waybill.CandidateCarriers, req.CarrierID) {
 		return ReassignOrder{}, fmt.Errorf("carrier %q is not a candidate", req.CarrierID)
@@ -115,7 +115,7 @@ func (m *Mock) CreateClaim(_ context.Context, req CreateClaimRequest) (ClaimOrde
 		return result, nil
 	}
 	if _, ok := m.data.Waybills[string(req.WaybillID)]; !ok {
-		return ClaimOrder{}, fmt.Errorf("waybill %q not found", req.WaybillID)
+		return ClaimOrder{}, fmt.Errorf("%w: waybill %q", ErrNotFound, req.WaybillID)
 	}
 	result := ClaimOrder{
 		ClaimID:   stableID("CL", req.IdempotencyKey),

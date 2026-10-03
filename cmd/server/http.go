@@ -14,6 +14,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
+	"github.com/Duang777/waybill-guardian/internal/platform"
 )
 
 type api struct {
@@ -160,6 +161,10 @@ func (a *api) timeline(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, domain.ErrInvalidWaybillID):
+		writeProblem(w, http.StatusBadRequest, "invalid_waybill_id", err.Error())
+	case errors.Is(err, platform.ErrNotFound):
+		writeProblem(w, http.StatusNotFound, "not_found", err.Error())
 	case guardian.IsNotFound(err):
 		writeProblem(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, approval.ErrDecisionConflict):
