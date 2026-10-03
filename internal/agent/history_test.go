@@ -42,6 +42,17 @@ func TestSecureHistoryRestrictsDirectoryAndFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertFileMode(t, filepath.Join(dir, "conversation-1.jsonl"), 0o600)
+
+	if err := manager.ConversationPersistenceAdapter.SaveSummary(
+		context.Background(),
+		Namespace,
+		history.Summary{ID: "summary-1", ThreadID: "thread-1"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "thread-1.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("summary created a second conversation file: %v", err)
+	}
 }
 
 func TestSecureHistoryRejectsLinkedConversationFiles(t *testing.T) {

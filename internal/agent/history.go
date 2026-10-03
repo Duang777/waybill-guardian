@@ -76,7 +76,15 @@ func (p *secureHistoryPersistence) SaveSummary(
 	namespace string,
 	summary history.Summary,
 ) error {
-	if err := prepareHistoryFile(p.dir, summary.ThreadID); err != nil {
+	conversationID := summary.ThreadID
+	messages, err := p.FileConversationPersistence.LoadMessages(ctx, namespace, summary.ThreadID, "")
+	if err != nil {
+		return err
+	}
+	if len(messages) > 0 && messages[0].ConversationID != "" {
+		conversationID = messages[0].ConversationID
+	}
+	if err := prepareHistoryFile(p.dir, conversationID); err != nil {
 		return err
 	}
 	return p.FileConversationPersistence.SaveSummary(ctx, namespace, summary)
