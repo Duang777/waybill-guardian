@@ -55,6 +55,11 @@ cd waybill-guardian
 | `APPROVAL_TTL` | `10m` | 审批有效期，使用 Go duration 格式 |
 | `DEMO_STEP_DELAY` | `220ms` | 确定性模型每一步的演示延迟 |
 | `PLATFORM` | `mock` | `mock` 可用；`real` 会在 adapter 未实现时拒绝启动 |
+| `STORAGE` | `jsonl` | `jsonl` 用于离线演示；`postgres` 当前只完成 schema 基础 |
+| `DATABASE_URL` | 空 | `STORAGE=postgres` 时必填，不应写入日志或仓库 |
+| `PG_MAX_CONNS` | `8` | PostgreSQL 连接池最大连接数 |
+| `PG_MIN_CONNS` | `0` | PostgreSQL 连接池最小连接数 |
+| `PG_STARTUP_TIMEOUT` | `30s` | PostgreSQL 连接、检查和迁移的总超时 |
 | `AGENT_MODE` | `demo` | `demo` 使用确定性模型；`online` 调用外部模型 |
 
 例如，使用其他端口和临时数据目录：
@@ -103,6 +108,12 @@ go test ./...
 go test -race ./...
 go vet ./...
 go build ./...
+```
+
+使用 Docker 启动临时 PostgreSQL 17，并验证迁移和数据库约束：
+
+```bash
+./scripts/test-postgres.sh
 ```
 
 运行前端检查和浏览器端完整流程：

@@ -413,6 +413,63 @@ func TestRealPlatformFailsFast(t *testing.T) {
 	}
 }
 
+func TestRuntimeStorageConfiguration(t *testing.T) {
+	if err := validateRuntimeModes("mock", "jsonl"); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRuntimeModes("mock", "postgres"); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRuntimeModes("real", "jsonl"); err == nil {
+		t.Fatal("real platform accepted JSONL storage")
+	}
+	if err := validateRuntimeModes("unknown", "jsonl"); err == nil {
+		t.Fatal("unknown platform mode was accepted")
+	}
+}
+
+func TestPostgresConfigFromEnv(t *testing.T) {
+	t.Setenv("DATABASE_URL", " postgres://localhost/waybill ")
+	t.Setenv("PG_MAX_CONNS", "12")
+	t.Setenv("PG_MIN_CONNS", "2")
+	t.Setenv("PG_STARTUP_TIMEOUT", "5s")
+
+	config, err := postgresConfigFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.DatabaseURL != "postgres://localhost/waybill" ||
+		config.MaxConns != 12 ||
+		config.MinConns != 2 ||
+		config.StartupTimeout != 5*time.Second {
+		t.Fatalf("PostgreSQL config = %+v", config)
+	}
+}
+
+func TestPostgresConfigFromEnvRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "maximum connections", key: "PG_MAX_CONNS", value: "many"},
+		{name: "minimum connections", key: "PG_MIN_CONNS", value: "0.5"},
+		{name: "startup duration", key: "PG_STARTUP_TIMEOUT", value: "soon"},
+		{name: "zero startup duration", key: "PG_STARTUP_TIMEOUT", value: "0s"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("PG_MAX_CONNS", "")
+			t.Setenv("PG_MIN_CONNS", "")
+			t.Setenv("PG_STARTUP_TIMEOUT", "")
+			t.Setenv(test.key, test.value)
+			if _, err := postgresConfigFromEnv(); err == nil {
+				t.Fatalf("%s=%q was accepted", test.key, test.value)
+			}
+		})
+	}
+}
+
 func TestValidateHTTPAddrAllowsOnlyExplicitLoopback(t *testing.T) {
 	allowed := []string{
 		defaultHTTPAddr,

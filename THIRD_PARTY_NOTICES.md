@@ -10,6 +10,7 @@
 | [hastekit/agent-sdk-go](https://github.com/hastekit/agent-sdk-go) | `v0.0.24` | Apache-2.0 | Agent loop、typed tools、file history、HITL pause/resume、provider 和模型 retry |
 | [go-yaml/yaml](https://github.com/go-yaml/yaml) | `v3.0.1` | MIT 和 Apache-2.0 双许可 | 在测试中解析 `contract.yaml` |
 | [google/uuid](https://github.com/google/uuid) | `v1.6.0` | BSD-3-Clause | 生成 run ID 和 SDK resolution message ID |
+| [jackc/pgx](https://github.com/jackc/pgx) | `v5.11.0` | MIT | PostgreSQL 连接池、协议和迁移执行 |
 
 本项目没有复制 hastekit 源码。`go.mod` 固定版本，`go.sum` 记录模块校验值。hastekit 提供
 provider fallback middleware，但当前实现没有配置 fallback。
