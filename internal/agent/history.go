@@ -342,8 +342,13 @@ func cleanHistoryFiles(dir string, retention time.Duration, now time.Time) error
 	cutoff := now.Add(-retention)
 	for conversationID := range jsonlIDs {
 		metadata, err := readHistoryMetadata(dir, conversationID)
-		if err != nil ||
-			metadata.ConversationID != conversationID ||
+		if err == nil && metadata.ConversationID == conversationID && metadata.TerminalAt == nil {
+			metadata.TerminalAt, err = terminalAtFromHistory(dir, conversationID)
+			if err == nil && metadata.TerminalAt != nil {
+				err = writeHistoryMetadata(dir, metadata)
+			}
+		}
+		if err != nil || metadata.ConversationID != conversationID ||
 			(metadata.TerminalAt != nil && metadata.TerminalAt.Before(cutoff)) {
 			if err := removeHistoryConversation(dir, conversationID); err != nil {
 				return err
@@ -358,6 +363,40 @@ func cleanHistoryFiles(dir string, retention time.Duration, now time.Time) error
 		}
 	}
 	return nil
+}
+
+func terminalAtFromHistory(dir, conversationID string) (*time.Time, error) {
+	path := filepath.Join(dir, conversationID+".jsonl")
+	file, err := securefs.OpenExistingRegular(path, os.O_RDONLY, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open hastekit history %q: %w", path, err)
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	var terminalAt *time.Time
+	for {
+		var record struct {
+			Type    string `json:"type"`
+			Message *struct {
+				Meta      map[string]any `json:"meta"`
+				UpdatedAt time.Time      `json:"updated_at"`
+			} `json:"message"`
+		}
+		if err := decoder.Decode(&record); errors.Is(err, io.EOF) {
+			return terminalAt, nil
+		} else if err != nil {
+			return nil, fmt.Errorf("decode hastekit history %q: %w", path, err)
+		}
+		if record.Type != "message" || record.Message == nil {
+			continue
+		}
+		terminalAt = nil
+		if historyIsTerminal(record.Message.Meta) {
+			updatedAt := record.Message.UpdatedAt.UTC()
+			terminalAt = &updatedAt
+		}
+	}
 }
 
 func removeHistoryConversation(dir, conversationID string) error {

@@ -209,6 +209,78 @@ func TestSecureHistoryMarksTerminalConversation(t *testing.T) {
 	}
 }
 
+func TestSecureHistoryRecoversTerminalMarkerFromJSONL(t *testing.T) {
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	retention := time.Hour
+	dir := filepath.Join(t.TempDir(), "history")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fixtures := []struct {
+		id        string
+		updatedAt time.Time
+		want      bool
+	}{
+		{id: "interrupted-expired", updatedAt: now.Add(-2 * time.Hour), want: false},
+		{id: "interrupted-recent", updatedAt: now.Add(-30 * time.Minute), want: true},
+	}
+	for _, fixture := range fixtures {
+		record := map[string]any{
+			"type": "message",
+			"message": map[string]any{
+				"group_id":        history.DefaultGroupID,
+				"run_id":          "run-" + fixture.id,
+				"thread_id":       "thread-" + fixture.id,
+				"conversation_id": fixture.id,
+				"namespace":       Namespace,
+				"messages":        []history.Message{},
+				"meta": map[string]any{
+					historySchemaKey: historySchemaVersion,
+					"run_state":      map[string]any{"status": "completed"},
+				},
+				"created_at": fixture.updatedAt,
+				"updated_at": fixture.updatedAt,
+			},
+		}
+		raw, err := json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(
+			filepath.Join(dir, fixture.id+".jsonl"),
+			append(raw, '\n'),
+			0o600,
+		); err != nil {
+			t.Fatal(err)
+		}
+		writeHistoryMetadataFixture(t, dir, historyMetadata{
+			SchemaVersion:  uint16(historySchemaVersion),
+			ConversationID: fixture.id,
+			ThreadID:       "thread-" + fixture.id,
+		})
+	}
+
+	manager, err := openSecureHistory(dir, HistoryPolicy{
+		Retention: retention,
+		Clock:     func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	for _, fixture := range fixtures {
+		assertHistoryConversationExists(t, dir, fixture.id, fixture.want)
+	}
+	metadata, err := readHistoryMetadata(dir, "interrupted-recent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.TerminalAt == nil || !metadata.TerminalAt.Equal(fixtures[1].updatedAt) {
+		t.Fatalf("recovered terminal_at = %v, want %s", metadata.TerminalAt, fixtures[1].updatedAt)
+	}
+}
+
 func writeHistoryMetadataFixture(t *testing.T, dir string, metadata historyMetadata) {
 	t.Helper()
 	raw, err := json.Marshal(metadata)
