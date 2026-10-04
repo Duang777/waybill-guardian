@@ -44,8 +44,24 @@
 .brand {
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 9px;
   min-width: 0;
+}
+
+.backButton {
+  display: grid;
+  width: 32px;
+  height: 40px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 4px;
+  color: oklch(0.78 0.01 255);
+  text-decoration: none;
+}
+
+.backButton:hover {
+  color: oklch(0.96 0.006 95);
+  background: oklch(0.3 0.018 255);
 }
 
 .brandMark {

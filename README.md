@@ -16,6 +16,7 @@
 - SSE 支持 `Last-Event-ID` 续传。前端按 `(run_id, seq)` 去重。
 - 审批支持确认、驳回和超时。首选运力被驳回后，Agent 会提交第二个候选方案。
 - `PLATFORM=file` 在启动时严格加载 JSON/CSV v1，页面可选择并处置文件中的任意运单。
+- 首页按公路港和线路聚合异常运单。风险队列支持一次启动 5 个独立 run，每个 run 保留自己的审批和 SSE。
 - 当前无认证版本只监听 loopback，并用进程锁阻止两个实例共享同一个数据目录。
 - 默认演示不需要模型密钥或高德密钥。
 
@@ -29,8 +30,9 @@ cd waybill-guardian
 ./scripts/demo.sh
 ```
 
-脚本首次运行时执行 `npm ci`，然后启动 API 和前端。打开
-<http://127.0.0.1:5173>，选择运单并点击 **启动处置**。按 `Ctrl+C` 会同时停止两个进程。
+脚本首次运行时执行 `npm ci`，然后加载仓库中的 72 港仿真数据。打开
+<http://127.0.0.1:5173> 查看经营总览。选择异常运单后点击 **交给 Agent**，或下钻到
+`/waybills/:id` 处理单张运单。按 `Ctrl+C` 会同时停止两个进程。
 
 演示流程如下：
 
@@ -57,8 +59,10 @@ cd waybill-guardian
 | `APPROVAL_TTL` | `10m` | 审批有效期，使用 Go duration 格式 |
 | `HISTORY_RETENTION` | `168h` | 已结束 Agent history 的保留期，必须为正数 |
 | `DEMO_STEP_DELAY` | `220ms` | 确定性模型每一步的演示延迟 |
-| `PLATFORM` | `mock` | `mock` 使用内嵌数据；`file` 加载 JSON/CSV；`real` 未实现时拒绝启动 |
-| `DATA_FILE` | 空 | `PLATFORM=file` 时必填的 JSON/CSV v1 文件 |
+| `PLATFORM` | `file` | `mock` 使用内嵌数据；`file` 加载 JSON/CSV；`real` 未实现时拒绝启动 |
+| `DATA_FILE` | `./data/simulated/waybills-v1.json` | `PLATFORM=file` 时必填的 JSON/CSV v1 文件 |
+| `MAX_CONCURRENT_RUNS` | `8` | 同时执行调查阶段的 run 数量，范围 1 到 64 |
+| `EVIDENCE_STEP_MINUTES` | `8` | 人工完成一次证据采集的估算分钟数，必须为正数 |
 | `STORAGE` | `jsonl` | `jsonl` 用于离线演示；`postgres` 使用事务仓储 |
 | `AUTH_MODE` | `local` | `local` 使用本机演示身份；`jwt` 验证 Bearer JWT |
 | `AUTH_JWT_ISSUER` | 空 | `AUTH_MODE=jwt` 时必填，必须精确匹配 JWT `iss` |
@@ -130,6 +134,30 @@ env -u GOROOT go run ./cmd/dataimport validate \
 `hubs`、`vehicles`、`routes` 以及运单上的港口、线路、车辆引用是 v1 的可选网络扩展。
 一旦文件提供任一网络实体，校验器会要求三类实体和全部引用同时完整，避免聚合视图读取到
 半套拓扑。仿真数据只用于产品演示和容量验证，不代表真实经营数据。
+
+### 经营总览和 KPI
+
+`GET /api/overview` 返回授权范围内的港口、线路、异常队列和三条经营简报。服务先按
+`waybill_id` 授权范围过滤，再计算所有总数和比例。简报只读取聚合结果，不调用写工具。
+
+`POST /api/runs:batch` 接受最多 20 个 `waybill_id`。服务为每个运单调用一次 `StartRun`，
+并返回逐项成功或失败结果。`MAX_CONCURRENT_RUNS` 限制同时执行的调查任务。每个已接受的
+run 使用独立的 `run_id`、审批记录和 SSE 时间线。
+
+`GET /api/kpis?window=24h` 使用以下口径。窗口结束时间取授权范围内最新异常运单的
+`last_recorded_at`。如果审计事件更新，则使用较新的审计时间。
+
+| KPI | 公式 | 数据不足时的结果 |
+|---|---|---|
+| 时效挽回 | `sum(不处置预测 ETA - 处置后 ETA)` | 缺少两个 ETA 字段时返回 `unavailable` |
+| 成本影响 | `sum(避免违约金 - 改派差价 - 处置成本)` | 缺少价格和成本字段时返回 `unavailable` |
+| 人力节省 | `成功自动证据采集步数 * EVIDENCE_STEP_MINUTES / 60` | 没有采集事件时返回 `0` 小时 |
+| 异常闭环率 | `已完成或已驳回处置的异常运单数 / 窗口内异常运单数 * 100%` | 没有异常运单时返回 `0%` |
+| 平均处置时长 | `sum(终态时间 - 启动时间) / 窗口内闭环 run 数` | 没有闭环 run 时返回 `unavailable` |
+| 人工审批通过率 | `人工确认数 / 人工决定数 * 100%` | 没有人工决定时返回 `unavailable` |
+
+时效挽回和成本影响不会用仿真假设补值。接入正式数据后，adapter 必须提供计算公式所需的
+基线、结果和成本字段。
 
 `AUTH_MODE=local` 时，`BACKEND_HOST` 必须是 loopback IP 字面量。直接运行
 `go run ./cmd/server` 时，`HTTP_ADDR` 默认是 `127.0.0.1:8080`。local 模式拒绝空 host、
@@ -205,11 +233,14 @@ npm run build
 npm audit
 npm run verify:e2e
 npm run verify:file-e2e
+npm run verify:overview
 ```
 
 `verify:e2e` 启动隔离的后端和前端，连续确认三次演示，再验证一次驳回路径。脚本还检查移动端
 横向溢出、按钮尺寸和截图。`verify:file-e2e` 使用双运单 CSV 验证目录切换、旧响应抑制、
 动态路线与异常标签，以及所选运单的完整审批执行。
+`verify:overview` 使用 72 港仿真数据检查 4 项主 KPI、港网 SVG、5 单批量触发、SSE 状态、
+单运单下钻，以及 1280、375 和 320 像素宽度。
 
 ## 录制演示
 

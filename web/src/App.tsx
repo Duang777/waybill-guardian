@@ -1,4 +1,4 @@
-import { AlertOctagon, Play, RotateCw, Route, X } from "lucide-react";
+import { AlertOctagon, ArrowLeft, Play, RotateCw, Route, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import styles from "./app.module.css";
 import {
@@ -17,6 +17,7 @@ import {
   type WaybillCatalogItem,
   type WaybillID,
   type WaybillView,
+  waybillIdSchema,
 } from "./api";
 import { ApprovalPanel } from "./components/ApprovalPanel";
 import { RouteMap } from "./components/RouteMap";
@@ -34,6 +35,7 @@ import {
   visibleEvents,
 } from "./timeline";
 import type { WaybillResource } from "./waybill-resource";
+import { OverviewPage } from "./OverviewPage";
 
 type CatalogResource =
   | { kind: "loading" }
@@ -60,6 +62,19 @@ type SelectionRequest = {
 };
 
 export default function App() {
+  const match = /^\/waybills\/([^/]+)\/?$/.exec(window.location.pathname);
+  if (match === null) {
+    return <OverviewPage />;
+  }
+  const parsed = waybillIdSchema.safeParse(decodeURIComponent(match[1] ?? ""));
+  return <WaybillWorkbench initialWaybillID={parsed.success ? parsed.data : null} />;
+}
+
+function WaybillWorkbench({
+  initialWaybillID,
+}: {
+  initialWaybillID: WaybillID | null;
+}) {
   const [catalog, setCatalog] = useState<CatalogResource>({ kind: "loading" });
   const [selection, setSelection] = useState<WaybillSelection>({ kind: "empty" });
   const [run, setRun] = useState<RunSummary | null>(null);
@@ -234,8 +249,11 @@ export default function App() {
         return;
       }
       const decision = decideRecovery({
-        activeRuns: recoverySource(activeRuns),
-        pendingApprovals: recoverySource(pendingApprovals),
+        activeRuns: scopedRecoverySource(activeRuns, initialWaybillID),
+        pendingApprovals: scopedRecoverySource(
+          pendingApprovals,
+          initialWaybillID,
+        ),
       });
       if (decision.kind === "recover") {
         await selectRun({ runID: decision.runID });
@@ -246,16 +264,16 @@ export default function App() {
         return;
       }
       const waybills = await catalogPromise;
-      const firstWaybill = waybills?.[0];
-      if (!controller.signal.aborted && firstWaybill !== undefined) {
-        await loadWaybill(firstWaybill.waybill_id);
+      const targetWaybillID = initialWaybillID ?? waybills?.[0]?.waybill_id;
+      if (!controller.signal.aborted && targetWaybillID !== undefined) {
+        await loadWaybill(targetWaybillID);
       }
     } finally {
       if (bootstrapRequest.current === controller && !controller.signal.aborted) {
         setPendingAction(null);
       }
     }
-  }, [loadCatalog, loadWaybill, selectRun]);
+  }, [initialWaybillID, loadCatalog, loadWaybill, selectRun]);
 
   useEffect(() => {
     void bootstrap();
@@ -317,6 +335,15 @@ export default function App() {
   const waybillResource = toWaybillResource(selection);
   const selectedWaybillID =
     waybillResource.kind === "empty" ? null : waybillResource.waybillID;
+  useEffect(() => {
+    if (selectedWaybillID === null) {
+      return;
+    }
+    const path = `/waybills/${encodeURIComponent(selectedWaybillID)}`;
+    if (window.location.pathname !== path) {
+      window.history.replaceState(null, "", path);
+    }
+  }, [selectedWaybillID]);
   const anomaly = view?.tracking.find((point) => point.anomaly) ?? null;
   const resourceError =
     recoveryError ??
@@ -455,6 +482,14 @@ export default function App() {
       <div className={styles.appShell}>
         <header className={styles.topbar}>
           <div className={styles.brand}>
+            <a
+              className={styles.backButton}
+              href="/"
+              aria-label="返回全国经营总览"
+              title="返回总览"
+            >
+              <ArrowLeft aria-hidden="true" size={17} />
+            </a>
             <span className={styles.brandMark} aria-hidden="true">
               WG
             </span>
@@ -626,6 +661,20 @@ function recoverySource<T>(
   return result.status === "fulfilled"
     ? { kind: "ready", data: result.value }
     : { kind: "error", message: errorMessage(result.reason) };
+}
+
+function scopedRecoverySource<T extends { waybill_id: WaybillID }>(
+  result: PromiseSettledResult<T[]>,
+  waybillID: WaybillID | null,
+): RecoverySource<T> {
+  const source = recoverySource(result);
+  if (source.kind !== "ready" || waybillID === null) {
+    return source;
+  }
+  return {
+    kind: "ready",
+    data: source.data.filter((item) => item.waybill_id === waybillID),
+  };
 }
 
 function toWaybillResource(selection: WaybillSelection): WaybillResource {
