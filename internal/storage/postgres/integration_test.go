@@ -1592,11 +1592,25 @@ func TestRepositoryValidatesRecoveryCoverage(t *testing.T) {
 		legacyRunID,
 		"CARRIER-SW-42",
 	)
-	if err := repository.ValidateRecoveryCoverage(t.Context()); !errors.Is(
+	if err := repository.ValidateRecoveryCoverage(t.Context()); err != nil {
+		t.Fatalf("supported prepared effect blocked recovery coverage: %v", err)
+	}
+	restricted := newIntegrationRepository(
+		t,
+		db,
+		tenantID,
+		"worker-restricted-coverage",
+		&advertisedWriteRuntime{
+			WriteRuntime: runtime,
+			actions:      []domain.Action{domain.ActionCreateClaim},
+		},
+	)
+	defer restricted.Close()
+	if err := restricted.ValidateRecoveryCoverage(t.Context()); !errors.Is(
 		err,
 		ErrRecoveryCoverageMissing,
 	) {
-		t.Fatalf("legacy recovery coverage error = %v", err)
+		t.Fatalf("unsupported prepared effect recovery coverage error = %v", err)
 	}
 	if _, err := db.pool.Exec(t.Context(), `
 		UPDATE waybill.effects
@@ -2675,6 +2689,15 @@ type blockingWriteRuntime struct {
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+type advertisedWriteRuntime struct {
+	platform.WriteRuntime
+	actions []domain.Action
+}
+
+func (r *advertisedWriteRuntime) AdvertisedActions() []domain.Action {
+	return append([]domain.Action(nil), r.actions...)
 }
 
 func (r *blockingWriteRuntime) Dispatch(

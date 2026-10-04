@@ -265,6 +265,11 @@ func (r *Repository) ValidateRecoveryCoverage(ctx context.Context) error {
 		}
 		binding, ok := row.binding()
 		if !ok {
+			if row.status == "prepared" &&
+				row.bindingSchemaVersion == 0 &&
+				runtimeAdvertisesAction(r.writeRuntime, row.action) {
+				continue
+			}
 			return fmt.Errorf(
 				"%w: run %q effect %q status %q has binding schema %d",
 				ErrRecoveryCoverageMissing,
@@ -289,6 +294,18 @@ func (r *Repository) ValidateRecoveryCoverage(ctx context.Context) error {
 		return fmt.Errorf("read PostgreSQL effect recovery coverage: %w", err)
 	}
 	return nil
+}
+
+func runtimeAdvertisesAction(
+	runtime platform.WriteRuntime,
+	action domain.Action,
+) bool {
+	for _, advertised := range runtime.AdvertisedActions() {
+		if advertised == action {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Repository) DueRecoveries(
