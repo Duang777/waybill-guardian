@@ -2,80 +2,124 @@
 
 ## 1. Visual theme and atmosphere
 
-The interface is a logistics control tower for dispatch operators. It uses a light, dense
-workspace with precise dividers, restrained elevation, and a single amber incident signal.
-Green appears only after a write operation completes.
+Waybill Guardian is a dense logistics command center for dispatch operators and executives.
+The default theme uses a near-black canvas, stepped graphite surfaces, and Transfar orange as
+the only primary signal. Cool blue describes the transport network, green confirms completed
+writes, and red marks failed or destructive states.
+
+The interface stays operational rather than theatrical. It has no marketing hero, decorative
+glow, glass cards, or nested card grids. The map and live operational data are the visual
+anchors.
 
 ## 2. Color palette and roles
 
-| Token | Value | Role |
+All source colors live in `src/styles/theme.css` as OKLCH custom properties. Component files
+must consume semantic variables and must not contain raw color values.
+
+| Token | Dark value | Role |
 |---|---|---|
-| Canvas | `oklch(0.965 0.006 95)` | Page background |
-| Surface | `oklch(0.992 0.003 95)` | Primary work surface |
-| Ink | `oklch(0.215 0.018 255)` | Primary text |
-| Muted ink | `oklch(0.49 0.018 255)` | Secondary text |
-| Divider | `oklch(0.875 0.012 95)` | Structural separators |
-| Signal | `oklch(0.69 0.145 67)` | Delay, anomaly, pending approval |
-| Signal wash | `oklch(0.94 0.045 75)` | Pending background |
-| Success | `oklch(0.55 0.11 155)` | Executed state |
-| Danger | `oklch(0.56 0.16 28)` | Rejection and destructive action |
+| `--background` | `oklch(0.135 0.009 250)` | Page canvas |
+| `--surface-1` | `oklch(0.175 0.012 250)` | Primary workspace |
+| `--surface-2` | `oklch(0.205 0.014 250)` | Raised operational panel |
+| `--surface-3` | `oklch(0.245 0.016 250)` | Hover and selected surface |
+| `--foreground` | `oklch(0.93 0.012 85)` | Primary text |
+| `--muted-foreground` | `oklch(0.69 0.014 250)` | Secondary text |
+| `--border` | `oklch(0.34 0.016 250)` | Structural divider |
+| `--primary` | `oklch(0.72 0.18 50)` | Pending approval and main action |
+| `--success` | `oklch(0.72 0.14 155)` | Completed write |
+| `--danger` | `oklch(0.65 0.20 28)` | Failure and destructive action |
+| `--info` | `oklch(0.70 0.10 230)` | Normal route and network context |
+
+The `.light` class provides the print and bright-projector theme with the same semantic token
+names. Dark mode remains the default so local demos require no preference bootstrap.
 
 ## 3. Typography rules
 
-Use `"Avenir Next", "PingFang SC", "Noto Sans SC", sans-serif` for interface text and
-`"SFMono-Regular", "JetBrains Mono", monospace` for identifiers and event metadata.
-Headings use 20 to 28 px at weight 600. Body text uses 13 to 15 px with 1.7 line-height for
-Chinese. Numeric values use tabular figures. Letter spacing remains zero.
+Use the self-hosted `"Noto Sans SC Variable"` family for interface text and
+`"JetBrains Mono Variable"` for identifiers, event sequence numbers, timestamps, and numeric
+metrics. Font files use `font-display: swap` and unicode-range slices.
+
+| Role | Size | Weight | Line height |
+|---|---:|---:|---:|
+| Page heading | 20 to 28 px | 650 | 1.2 |
+| Panel heading | 16 to 18 px | 650 | 1.35 |
+| Body | 13 to 15 px | 400 to 500 | 1.7 |
+| Metadata | 10 to 12 px | 500 to 650 | 1.4 |
+| KPI | 28 to 40 px | 650 | 1.05 |
+
+Chinese text keeps zero letter spacing. Numeric values use tabular figures. Compact labels may
+use uppercase English only when they also have a Chinese heading beside them.
 
 ## 4. Component styling
 
-- Buttons use a 6 px radius, a 40 px minimum hit area, and `scale(0.96)` press feedback.
-- Operational panels are flush sections separated by 1 px dividers.
+- Buttons use `--radius-md`, a 40 px minimum hit area, a visible focus ring, and a 120 ms
+  `scale(0.96)` press response. Hover styles run only on hover-capable devices.
+- Operational panels are flush sections separated by 1 px dividers. A panel uses a raised
+  surface only when it needs to separate an action boundary from surrounding evidence.
 - The approval object is the only elevated card because it is the human decision boundary.
-- Inputs and range controls use the signal color for active state and a visible focus ring.
+- Inputs use `--surface-1`, `--border`, and the orange focus ring. Disabled controls reduce
+  opacity but retain readable text.
 - Icon-only buttons use Lucide icons, tooltips, and accessible labels.
+- Pending, success, danger, and information states use their semantic wash and text tokens.
+  Orange never denotes a completed operation.
 
 ## 5. Layout principles
 
-Use a 4 px base spacing scale. The CEO overview uses a compact header, a four-segment KPI
-strip, a nationwide network map, a risk queue, and a read-only brief. The waybill workbench
-uses one status strip and a two-column workspace. Its left column holds the map and timeline,
-and its right column holds the decision boundary.
+The spacing scale is based on 4 px and defined in `theme.css`. Optical half and quarter steps
+exist for dense controls, but components must reference a spacing token rather than a raw
+length. The radius scale is `3 / 4 / 6 / 8 / full`.
 
-On the CEO overview, KPI segments form one flush band with dividers. They are not separate
-cards. The risk queue stays beside the network map on desktop and moves below the map on
-mobile. A hub or queue link opens `/waybills/:id`.
+The CEO overview uses a compact header, one flush four-segment KPI band, a nationwide network
+map, a risk queue, and a read-only brief. The waybill workbench uses one status strip and a
+two-column workspace. Its left column contains the map and audit timeline, while its right
+column contains the approval boundary.
+
+Tailwind CSS v4 owns global tokens, reset styles, and new utility styling. Existing CSS
+Modules keep component layout during migration. Do not apply a CSS Module class and Tailwind
+utility classes to the same element.
 
 ## 6. Depth and elevation
 
-Canvas, surface, and raised approval layers differ by lightness. Only the approval card uses
-`0 12px 32px oklch(0.22 0.02 255 / 0.10)`. No blur or glass effect is used.
+Dark-mode depth comes from surface lightness steps, not dark drop shadows. Use two elevation
+levels only:
+
+1. `--shadow-panel` outlines a raised operational panel.
+2. `--shadow-elevated` separates the approval boundary and map inspector.
+
+Orange and green glows are reserved for unresolved approval and completed connection status.
+Do not use blur, backdrop filters, or decorative shadows.
 
 ## 7. Do and don't
 
-- Do keep evidence and proposed effects visible without opening another surface.
-- Do link the selected route point to its timestamp and speed.
-- Do use amber only for an unresolved incident or approval.
-- Do keep event sequence numbers aligned and readable.
-- Don't place cards inside cards.
-- Don't use a marketing hero or decorative illustration.
-- Use the KPI band only on the CEO overview. Do not add a generic KPI tile grid to the
-  waybill workbench.
-- Don't animate layout properties.
+- Keep evidence and proposed effects visible without opening another surface.
+- Link the selected route point to its timestamp and speed.
+- Use orange only for an unresolved incident, an approval, or the primary action.
+- Keep event sequence numbers and metric digits aligned.
+- Keep the real map, network, or operational data as each view's visual anchor.
+- Do not place cards inside cards.
+- Do not use a marketing hero, decorative illustration, gradient text, or glow decoration.
+- Use the KPI band only on the CEO overview.
+- Do not animate layout properties or use `transition: all`.
+- Do not add raw colors, spacing values, radii, font stacks, or shadows outside `theme.css`.
 
 ## 8. Responsive behavior
 
 At 1000 px the CEO map and risk queue become one column. At 720 px its KPI band becomes two
 columns. At 960 px the waybill workspace becomes one column and approval moves above the map.
 At 640 px the workbench header wraps, route metadata becomes a two-column grid, and playback
-controls keep 40 px hit areas. Both pages must remain usable at 375 px and 320 px without
+controls retain 40 px hit areas. Both pages must remain usable at 375 px and 320 px without
 horizontal scrolling.
+
+Desktop verification uses 1280 x 900 and 1600 x 900. Mobile verification uses 375 x 812 and
+320 x 812. Later large-screen work may add 1920 x 1080 without changing these baselines.
 
 ## 9. Agent prompt guide
 
-- "Create a flush operations panel on `oklch(0.992 0.003 95)` with 1 px
-  `oklch(0.875 0.012 95)` dividers, 8 px radius, and no shadow."
-- "Create a pending approval card with a 6 px radius, `oklch(0.94 0.045 75)` header,
-  13 px body text, and a single `oklch(0.69 0.145 67)` primary action."
-- "Create a compact event row with a 48 px sequence column in monospace, 13 px event title,
-  12 px metadata, and a 1 px divider."
+- "Create a flush command-center panel on `--surface-1`, separated by `--border-subtle`,
+  using `--radius-lg`, no shadow, and spacing tokens from `theme.css`."
+- "Create a pending approval boundary on `--surface-2` with `--primary-border`, a
+  `--primary-wash` header, `--shadow-elevated`, 13 px body text, and one `--primary` action."
+- "Create a compact audit row with a 48 px mono sequence column, 13 px event title, 12 px
+  metadata, and a `--border-subtle` divider."
+- "Create a network metric using `--info` for normal transport state, `--primary` for delay,
+  `--danger` for failure, tabular numbers, and no decorative gradient."
