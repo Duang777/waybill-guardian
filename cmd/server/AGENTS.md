@@ -53,7 +53,10 @@ HTTP 和 SSE 服务入口。handler 只做请求校验、协议转换和错误�
 `main.go` 读取 `HTTP_ADDR`、存储、认证、Agent、outbox 和 metrics 配置。`HTTP_ADDR` 默认是
 `127.0.0.1:8080`。`OUTBOX_ENABLED=true` 显式启动 dispatcher。`METRICS_ADDR` 设置独立的
 Prometheus listener。两项都要求 PostgreSQL 模式。
-local 模式只接受 loopback IP 字面量，HTTP handler 也拒绝 Host 不是 loopback IP 的请求。
+local 模式默认只接受 loopback IP 字面量。容器可显式设置
+`ALLOW_NON_LOOPBACK_LOCAL=true` 监听通配地址，但 HTTP handler 仍拒绝 Host 不是 loopback
+IP 的请求，容器端口必须只发布到宿主机 loopback。`WEB_STATIC_DIR` 非空时必须包含常规文件
+`index.html`，服务会在 API 路由之后托管该目录。
 JWT 模式允许显式非 loopback IP。`PLATFORM=real` 缺少 PostgreSQL 或 JWT 认证时先返回配置
 错误；通过检查后仍会因真实 adapter 未实现而拒绝启动。
 

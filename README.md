@@ -20,11 +20,36 @@
 
 ## 快速开始
 
-准备 Go 1.25.3 或更高版本、Node.js 22.12 或更高版本，以及 npm。
+### Docker
+
+只需安装 Docker。以下命令构建单个应用镜像，并在
+<http://127.0.0.1:8080> 同时提供前端和 API：
 
 ```bash
 git clone https://github.com/Duang777/waybill-guardian.git
 cd waybill-guardian
+docker compose up --build
+```
+
+应用端口只发布到宿主机 loopback。审计与 Agent history 保存在 `app-data` 命名卷中。
+停止服务使用 `docker compose down`；需要同时删除演示数据时使用
+`docker compose down --volumes`。
+
+可选的 PostgreSQL 17 演示使用 `prod` profile：
+
+```bash
+cp .env.example .env
+STORAGE=postgres docker compose --profile prod up --build
+```
+
+`.env.example` 中的数据库密码和 checkpoint key 只供本机演示。真实部署必须替换这些值，
+改用 `AUTH_MODE=jwt`，并在 HTTPS 入口后运行服务。
+
+### 本地工具链
+
+准备 Go 1.25.3 或更高版本、Node.js 22.12 或更高版本，以及 npm：
+
+```bash
 ./scripts/demo.sh
 ```
 
@@ -52,6 +77,8 @@ cd waybill-guardian
 | `BACKEND_PORT` | `8080` | API 端口 |
 | `WEB_HOST` | `127.0.0.1` | 前端监听地址 |
 | `WEB_PORT` | `5173` | 前端端口 |
+| `WEB_STATIC_DIR` | 空 | 由 Go 服务托管的前端构建目录；容器内为 `/app/web` |
+| `ALLOW_NON_LOOPBACK_LOCAL` | `false` | 允许 local 模式监听非回环 IP；仅供端口绑定到宿主机回环地址的容器使用 |
 | `DATA_DIR` | `./data` | 审计日志和 hastekit history 目录 |
 | `APPROVAL_TTL` | `10m` | 审批有效期，使用 Go duration 格式 |
 | `HISTORY_RETENTION` | `168h` | 已结束 Agent history 的保留期，必须为正数 |
@@ -92,7 +119,9 @@ BACKEND_PORT=18080 WEB_PORT=15173 DATA_DIR=/tmp/waybill-demo ./scripts/demo.sh
 `AUTH_MODE=local` 时，`BACKEND_HOST` 必须是 loopback IP 字面量。直接运行
 `go run ./cmd/server` 时，`HTTP_ADDR` 默认是 `127.0.0.1:8080`。local 模式拒绝空 host、
 主机名、通配地址、非 loopback 地址，以及 Host 不是 loopback IP 的请求。审批审计主体固定为
-`local-demo-reviewer`。
+`local-demo-reviewer`。容器通过 `ALLOW_NON_LOOPBACK_LOCAL=true` 允许进程监听
+`0.0.0.0:8080`，但 HTTP Host 校验仍要求 loopback IP。不要把 local 模式的容器端口发布到
+非回环地址。
 
 `AUTH_MODE=jwt` 验证 RS256 签名、issuer、audience、`iat`、`nbf` 和 `exp`。JWT 还必须包含
 `sub`、`tenant_id`、`roles`，以及 `waybill_all=true` 或非空 `waybill_ids`。可用角色为

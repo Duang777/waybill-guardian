@@ -78,7 +78,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if err := validateHTTPAddr(httpAddr, authMode); err != nil {
+	allowNonLoopbackLocal, err := boolEnv("ALLOW_NON_LOOPBACK_LOCAL", false)
+	if err != nil {
+		return err
+	}
+	if err := validateHTTPAddr(httpAddr, authMode, allowNonLoopbackLocal); err != nil {
+		return err
+	}
+	frontend, err := staticFileHandler(os.Getenv("WEB_STATIC_DIR"))
+	if err != nil {
 		return err
 	}
 	platformMode := strings.ToLower(envOr("PLATFORM", "mock"))
@@ -278,7 +286,7 @@ func run() error {
 	defer stop()
 	server := &http.Server{
 		Addr:              httpAddr,
-		Handler:           newHandlerWithEvents(service, access, repository, recorder),
+		Handler:           newHandlerWithFrontend(service, access, repository, recorder, frontend),
 		ReadHeaderTimeout: 5 * time.Second,
 		BaseContext: func(net.Listener) context.Context {
 			return ctx
@@ -572,13 +580,21 @@ func serve(ctx context.Context, server *http.Server, listener net.Listener) erro
 	}
 }
 
-func validateHTTPAddr(addr string, authMode httpauth.Mode) error {
+func validateHTTPAddr(
+	addr string,
+	authMode httpauth.Mode,
+	allowNonLoopbackLocal bool,
+) error {
 	parsed, err := netip.ParseAddrPort(addr)
 	if err != nil {
 		return fmt.Errorf("invalid HTTP_ADDR %q: %w", addr, err)
 	}
-	if authMode == httpauth.ModeLocal && !parsed.Addr().IsLoopback() {
-		return fmt.Errorf("HTTP_ADDR must use a loopback IP address")
+	if authMode == httpauth.ModeLocal &&
+		!parsed.Addr().IsLoopback() &&
+		!allowNonLoopbackLocal {
+		return fmt.Errorf(
+			"HTTP_ADDR must use a loopback IP address unless ALLOW_NON_LOOPBACK_LOCAL=true",
+		)
 	}
 	return nil
 }

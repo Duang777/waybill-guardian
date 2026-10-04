@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -907,7 +909,7 @@ func TestValidateHTTPAddrAllowsOnlyExplicitLoopback(t *testing.T) {
 		"[::1]:8080",
 	}
 	for _, addr := range allowed {
-		if err := validateHTTPAddr(addr, httpauth.ModeLocal); err != nil {
+		if err := validateHTTPAddr(addr, httpauth.ModeLocal, false); err != nil {
 			t.Errorf("validateHTTPAddr(%q) = %v", addr, err)
 		}
 	}
@@ -922,12 +924,18 @@ func TestValidateHTTPAddrAllowsOnlyExplicitLoopback(t *testing.T) {
 		"127.0.0.1",
 	}
 	for _, addr := range rejected {
-		if err := validateHTTPAddr(addr, httpauth.ModeLocal); err == nil {
+		if err := validateHTTPAddr(addr, httpauth.ModeLocal, false); err == nil {
 			t.Errorf("validateHTTPAddr(%q) unexpectedly succeeded", addr)
 		}
 	}
-	if err := validateHTTPAddr("0.0.0.0:8080", httpauth.ModeJWT); err != nil {
+	if err := validateHTTPAddr("0.0.0.0:8080", httpauth.ModeJWT, false); err != nil {
 		t.Fatalf("JWT listener was rejected: %v", err)
+	}
+	if err := validateHTTPAddr("0.0.0.0:8080", httpauth.ModeLocal, true); err != nil {
+		t.Fatalf("explicit local container listener was rejected: %v", err)
+	}
+	if err := validateHTTPAddr("not-an-address", httpauth.ModeLocal, true); err == nil {
+		t.Fatal("invalid listener was accepted with ALLOW_NON_LOOPBACK_LOCAL")
 	}
 }
 
@@ -957,6 +965,52 @@ func TestHandlerAcceptsLoopbackHostWithoutPort(t *testing.T) {
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", response.Code)
+	}
+}
+
+func TestHandlerServesConfiguredFrontendWithoutShadowingHealth(t *testing.T) {
+	staticDir := t.TempDir()
+	const index = "<!doctype html><title>waybill frontend</title>"
+	if err := os.WriteFile(filepath.Join(staticDir, "index.html"), []byte(index), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	frontend, err := staticFileHandler(staticDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := newHandlerWithFrontend(nil, newLocalAccess(t), nil, nil, frontend)
+
+	pageRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/", nil)
+	pageResponse := httptest.NewRecorder()
+	handler.ServeHTTP(pageResponse, pageRequest)
+	if pageResponse.Code != http.StatusOK {
+		t.Fatalf("frontend status = %d, want 200", pageResponse.Code)
+	}
+	if pageResponse.Body.String() != index {
+		t.Fatalf("frontend body = %q, want %q", pageResponse.Body.String(), index)
+	}
+
+	healthRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/healthz", nil)
+	healthResponse := httptest.NewRecorder()
+	handler.ServeHTTP(healthResponse, healthRequest)
+	if healthResponse.Code != http.StatusOK {
+		t.Fatalf("health status = %d, want 200", healthResponse.Code)
+	}
+	if strings.Contains(healthResponse.Body.String(), "waybill frontend") {
+		t.Fatal("frontend handler shadowed /healthz")
+	}
+}
+
+func TestStaticFileHandlerRequiresIndex(t *testing.T) {
+	handler, err := staticFileHandler("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handler != nil {
+		t.Fatal("empty WEB_STATIC_DIR created a handler")
+	}
+	if _, err := staticFileHandler(t.TempDir()); err == nil {
+		t.Fatal("WEB_STATIC_DIR without index.html was accepted")
 	}
 }
 

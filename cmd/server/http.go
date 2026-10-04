@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -50,6 +52,16 @@ func newHandlerWithEvents(
 	eventStore events.Ingestor,
 	eventMetrics ingestObserver,
 ) http.Handler {
+	return newHandlerWithFrontend(service, access, eventStore, eventMetrics, nil)
+}
+
+func newHandlerWithFrontend(
+	service *guardian.Service,
+	access *httpauth.Boundary,
+	eventStore events.Ingestor,
+	eventMetrics ingestObserver,
+	frontend http.Handler,
+) http.Handler {
 	server := &api{
 		service:      service,
 		access:       access,
@@ -74,10 +86,29 @@ func newHandlerWithEvents(
 		eventMux.HandleFunc("POST /v1/events", server.ingestEvent)
 		root.Handle("/v1/events", authenticateAPI(access, eventMux))
 	}
+	if frontend != nil {
+		root.Handle("/", frontend)
+	}
 	if access.Mode() == httpauth.ModeLocal {
 		return loopbackHostOnly(root)
 	}
 	return root
+}
+
+func staticFileHandler(directory string) (http.Handler, error) {
+	directory = strings.TrimSpace(directory)
+	if directory == "" {
+		return nil, nil
+	}
+	indexPath := filepath.Join(directory, "index.html")
+	info, err := os.Stat(indexPath)
+	if err != nil {
+		return nil, fmt.Errorf("open WEB_STATIC_DIR index %q: %w", indexPath, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("WEB_STATIC_DIR index %q is not a regular file", indexPath)
+	}
+	return http.FileServer(http.Dir(directory)), nil
 }
 
 func (a *api) ingestEvent(w http.ResponseWriter, r *http.Request) {

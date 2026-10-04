@@ -1,0 +1,64 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        AMAP_BROWSER_CODE: ${VITE_AMAP_SECURITY_JS_CODE:-}
+        AMAP_BROWSER_ID: ${VITE_AMAP_KEY:-}
+    environment:
+      AGENT_MODE: ${AGENT_MODE:-demo}
+      ALLOW_NON_LOOPBACK_LOCAL: "true"
+      AUTH_MODE: local
+      CHECKPOINT_ENCRYPTION_KEY: ${CHECKPOINT_ENCRYPTION_KEY:-}
+      CHECKPOINT_KEY_ID: ${CHECKPOINT_KEY_ID:-local-v1}
+      DATABASE_URL: postgres://waybill:${POSTGRES_PASSWORD:-waybill}@postgres:5432/waybill?sslmode=disable
+      DATA_DIR: /data
+      DEMO_STEP_DELAY: ${DEMO_STEP_DELAY:-220ms}
+      HISTORY_RETENTION: ${HISTORY_RETENTION:-168h}
+      HTTP_ADDR: 0.0.0.0:8080
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_API_STYLE: ${LLM_API_STYLE:-responses}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      PLATFORM: mock
+      STORAGE: ${STORAGE:-jsonl}
+      TENANT_ID: ${TENANT_ID:-local-demo}
+      WEB_STATIC_DIR: /app/web
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+    volumes:
+      - app-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  postgres:
+    image: postgres:17-alpine
+    profiles:
+      - prod
+    environment:
+      POSTGRES_DB: waybill
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-waybill}
+      POSTGRES_USER: waybill
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready --host 127.0.0.1 --username waybill --dbname waybill
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  app-data:
+  postgres-data:
