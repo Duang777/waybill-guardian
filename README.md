@@ -144,7 +144,11 @@ go test -race ./...
 go vet ./...
 go build ./...
 ./scripts/check-history-governance.sh
+./scripts/licenses.sh
 ```
+
+`scripts/licenses.sh` 固定依赖扫描器版本，并核对已提交的 Go 和 Web 生产依赖许可清单。
+依赖变化后运行 `./scripts/licenses.sh --write` 更新清单，再提交生成结果。
 
 使用 Docker 启动临时 PostgreSQL 17，验证迁移、事务、租约、加密 history 和浏览器完整流程：
 
@@ -208,6 +212,16 @@ outbox 和 Agent history 的唯一事实源。
 - 三分钟演示讲稿：[`docs/demo-script.md`](./docs/demo-script.md)
 - 模块职责索引：[`AGENTS.md`](./AGENTS.md)
 - 第三方来源声明：[`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)
+
+## 许可证与提交身份
+
+项目使用 [Apache License 2.0](./LICENSE)。Go 和 Web 传递依赖的许可清单位于
+[`docs/licenses/`](./docs/licenses/)，外部模型与地图服务条款记录在
+[`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
+
+仓库不重写已有 Git 历史。`.mailmap` 仅让 `git shortlog` 等本地 Git 命令把已有公司邮箱
+统一显示为维护者的个人身份，原始 commit 对象和 SHA 不变。后续提交使用个人邮箱或 GitHub
+noreply 邮箱，避免继续把公司邮箱写入公开历史。
 
 ### 删除 Agent history
 
