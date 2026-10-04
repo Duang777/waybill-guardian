@@ -2,21 +2,25 @@
 
 ## 1. Visual theme and atmosphere
 
-The interface is a logistics control tower for dispatch operators. It uses a light, dense
-workspace with precise dividers, restrained elevation, and a single amber incident signal.
-Green appears only after a write operation completes.
+The interface is a white logistics strategy table for dispatch operators. The nationwide
+network is the first-viewport signal: a bright isometric 3D field with graphite labels,
+desaturated teal infrastructure, and coral risk markers. Surrounding controls stay dense,
+flat, and quiet so the network remains the visual center. Green appears only after a write
+operation completes.
 
 ## 2. Color palette and roles
 
 | Token | Value | Role |
 |---|---|---|
-| Canvas | `oklch(0.965 0.006 95)` | Page background |
-| Surface | `oklch(0.992 0.003 95)` | Primary work surface |
+| Canvas | `oklch(0.985 0.004 210)` | Page background |
+| Surface | `oklch(1 0 0)` | Primary work surface |
 | Ink | `oklch(0.215 0.018 255)` | Primary text |
 | Muted ink | `oklch(0.49 0.018 255)` | Secondary text |
-| Divider | `oklch(0.875 0.012 95)` | Structural separators |
-| Signal | `oklch(0.69 0.145 67)` | Delay, anomaly, pending approval |
-| Signal wash | `oklch(0.94 0.045 75)` | Pending background |
+| Divider | `oklch(0.91 0.009 220)` | Structural separators |
+| Network | `oklch(0.56 0.085 183)` | Hubs, normal routes, active controls |
+| Network wash | `oklch(0.955 0.018 183)` | 3D field and selected network objects |
+| Signal | `oklch(0.62 0.18 29)` | Delay, anomaly, pending approval |
+| Signal wash | `oklch(0.96 0.035 29)` | Pending background |
 | Success | `oklch(0.55 0.11 155)` | Executed state |
 | Danger | `oklch(0.56 0.16 28)` | Rejection and destructive action |
 
@@ -37,14 +41,19 @@ Chinese. Numeric values use tabular figures. Letter spacing remains zero.
 
 ## 5. Layout principles
 
-Use a 4 px base spacing scale. The CEO overview uses a compact header, a four-segment KPI
-strip, a nationwide network map, a risk queue, and a read-only brief. The waybill workbench
-uses one status strip and a two-column workspace. Its left column holds the map and timeline,
-and its right column holds the decision boundary.
+Use a 4 px base spacing scale. The CEO overview uses a compact white header, a four-segment
+KPI strip, a dominant nationwide 3D network, a narrow risk queue, and a read-only brief. The
+waybill workbench uses one status strip and a two-column workspace. Its left column holds the
+map and timeline, and its right column holds the decision boundary.
 
 On the CEO overview, KPI segments form one flush band with dividers. They are not separate
-cards. The risk queue stays beside the network map on desktop and moves below the map on
-mobile. A hub or queue link opens `/waybills/:id`.
+cards. The network must occupy at least two thirds of the desktop workspace width and retain
+a stable 16:9-like field. The risk queue stays beside it on desktop and moves below it on
+mobile. A risk hub or queue link opens `/waybills/:id`.
+
+The 3D field uses an orthographic isometric camera, an abstract grid instead of a geographic
+border, instanced hub columns, merged route geometry, and instanced moving shipment markers.
+Do not use a dark skybox, bloom, glass panels, map tiles, or decorative gradients.
 
 ## 6. Depth and elevation
 
@@ -57,8 +66,11 @@ Canvas, surface, and raised approval layers differ by lightness. Only the approv
 - Do link the selected route point to its timestamp and speed.
 - Do use amber only for an unresolved incident or approval.
 - Do keep event sequence numbers aligned and readable.
+- Do keep the 3D network useful as a static frame under reduced motion.
+- Do retain the SVG network as an automatic WebGL/error fallback.
 - Don't place cards inside cards.
 - Don't use a marketing hero or decorative illustration.
+- Don't use a dark header or orange/brown page palette on the overview.
 - Use the KPI band only on the CEO overview. Do not add a generic KPI tile grid to the
   waybill workbench.
 - Don't animate layout properties.

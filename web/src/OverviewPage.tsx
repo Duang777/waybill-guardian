@@ -24,7 +24,7 @@ import {
   type RunStatus,
   type WaybillID,
 } from "./api";
-import { NetworkMap } from "./components/NetworkMap";
+import { HubNetwork } from "./components/HubNetwork";
 import styles from "./overview.module.css";
 
 type OverviewResource =
@@ -280,7 +280,7 @@ export function OverviewPage() {
                       {resource.overview.routes.length} 条线路
                     </span>
                   </div>
-                  <NetworkMap
+                  <HubNetwork
                     hubs={resource.overview.hubs}
                     routes={resource.overview.routes}
                     anomalies={resource.overview.anomalies}

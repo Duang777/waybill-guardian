@@ -1,7 +1,7 @@
 :root {
   font-family: "Avenir Next", "SF Pro Text", "PingFang SC", "Noto Sans SC", sans-serif;
   color: oklch(0.215 0.018 255);
-  background: oklch(0.965 0.006 95);
+  background: oklch(0.985 0.004 210);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -15,7 +15,7 @@
 html {
   min-width: 320px;
   min-height: 100%;
-  background: oklch(0.965 0.006 95);
+  background: oklch(0.985 0.004 210);
 }
 
 body {
@@ -40,7 +40,7 @@ textarea:focus-visible,
 input:focus-visible,
 select:focus-visible,
 a:focus-visible {
-  outline: 2px solid oklch(0.59 0.13 67);
+  outline: 2px solid oklch(0.47 0.1 183);
   outline-offset: 2px;
 }
 
@@ -50,7 +50,7 @@ button:disabled {
 
 ::selection {
   color: oklch(0.215 0.018 255);
-  background: oklch(0.88 0.085 75);
+  background: oklch(0.88 0.06 183);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -75,7 +75,7 @@ try {
     executablePath: await findChrome(),
     headless: true,
   });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
   let batchPayload = null;
   page.on("request", (request) => {
     if (request.method() === "POST" && request.url().endsWith("/api/runs:batch")) {
@@ -97,27 +97,79 @@ try {
     (await page.locator('section[aria-label="24 小时经营指标"] article').count()) === 4,
     "overview did not render four primary KPIs",
   );
-  const networkMap = page.getByRole("img", {
-    name: /全国公路港异常网络/,
-  });
-  assert(
-    (await networkMap.locator("circle").count()) >= 72,
-    "network map did not render all hub markers",
+  const networkMap = page.locator('[data-network-renderer="webgl"]');
+  await networkMap.locator("canvas").waitFor();
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('[data-network-renderer="webgl"]')
+        ?.getAttribute("data-scene-ready") === "true",
   );
+  const networkCanvas = networkMap.locator("canvas");
+  const drawCalls = Number(await networkMap.getAttribute("data-draw-calls"));
   assert(
-    (await networkMap.locator("line").count()) === 72,
-    "network map did not render all routes",
+    Number.isFinite(drawCalls) && drawCalls > 0 && drawCalls <= 50,
+    `3D network rendered with ${drawCalls} draw calls`,
+  );
+  const pixelProbe = await probeCanvasPixels(networkCanvas);
+  assert(
+    pixelProbe !== null && pixelProbe.colors >= 3,
+    `3D network canvas is blank: ${JSON.stringify(pixelProbe)}`,
   );
   const mapBounds = await networkMap.boundingBox();
   assert(
     mapBounds !== null && mapBounds.width > 600 && mapBounds.height > 400,
     "desktop network map is blank or incorrectly framed",
   );
+  const workspaceBounds = await page
+    .locator('[aria-labelledby="map-heading"]')
+    .locator("..")
+    .boundingBox();
+  const queueBounds = await page
+    .locator('[aria-labelledby="queue-heading"]')
+    .boundingBox();
+  assert(
+    workspaceBounds !== null &&
+      queueBounds !== null &&
+      Math.abs(workspaceBounds.height - queueBounds.height) < 2,
+    "desktop risk queue stretched the workspace below the 3D scene",
+  );
+  const firstFlowFrame = await networkCanvas.screenshot();
+  await page.waitForTimeout(700);
+  const secondFlowFrame = await networkCanvas.screenshot();
+  assert(
+    !firstFlowFrame.equals(secondFlowFrame),
+    "shipment markers did not move between animation frames",
+  );
+  const measuredFPS = await measureAnimationFPS(page, 90);
+  assert(
+    measuredFPS >= 50,
+    `3D network measured ${measuredFPS.toFixed(1)} FPS, want at least 50`,
+  );
+  await page.getByRole("button", { name: "聚焦最高风险", exact: true }).click();
+  await page.waitForTimeout(1_600);
+  const mapDrilldown = page.locator(
+    '[role="status"] a[aria-label^="下钻 "]',
+  );
+  await mapDrilldown.waitFor();
   assert(!(await hasHorizontalOverflow(page)), "desktop overview overflowed horizontally");
   await page.screenshot({
-    path: join(artifactDir, "overview-desktop.png"),
+    path: join(artifactDir, "overview-desktop-1920.png"),
     fullPage: true,
   });
+  await page.setViewportSize({ width: 1600, height: 900 });
+  assert(!(await hasHorizontalOverflow(page)), "1600px overview overflowed horizontally");
+  await page.screenshot({
+    path: join(artifactDir, "overview-desktop-1600.png"),
+  });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  assert(!(await hasHorizontalOverflow(page)), "1280px overview overflowed horizontally");
+  await page.screenshot({
+    path: join(artifactDir, "overview-desktop.png"),
+  });
+
+  await verifyReducedMotion(browser, webURL);
+  await verifyWebGLFallback(webURL);
 
   await page.getByRole("button", { name: "选择前 5", exact: true }).click();
   assert(
@@ -217,7 +269,6 @@ try {
     .getByText("已闭环", { exact: true })
     .waitFor();
 
-  const mapDrilldown = page.locator('svg a[aria-label^="下钻 "]').first();
   const href = await mapDrilldown.getAttribute("href");
   assert(
     typeof href === "string" && /^\/waybills\/YD\d{10}$/.test(href),
@@ -282,12 +333,18 @@ try {
         first_visible_ms: Math.round(visibleInMilliseconds),
         hubs: 72,
         routes: 72,
+        renderer: "webgl",
+        draw_calls: drawCalls,
+        sampled_canvas_colors: pixelProbe.colors,
+        measured_fps: Math.round(measuredFPS),
+        reduced_motion: "static",
+        webgl_fallback: "svg",
         primary_kpis: 4,
         batch_runs: 5,
         independent_approvals: 5,
         approvals_left_pending: 4,
         map_drilldown_waybill: drilldownWaybillID,
-        responsive_widths: [1280, 375, 320],
+        responsive_widths: [1920, 1600, 1280, 375, 320],
       },
       null,
       2,
@@ -303,6 +360,122 @@ async function hasHorizontalOverflow(page) {
   return page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   );
+}
+
+async function probeCanvasPixels(canvas) {
+  return canvas.evaluate(async (element) => {
+    const gl =
+      element.getContext("webgl2") ??
+      element.getContext("webgl");
+    if (gl === null) {
+      return null;
+    }
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const samples = [];
+    const pixel = new Uint8Array(4);
+    for (let y = 1; y < 8; y += 1) {
+      for (let x = 1; x < 8; x += 1) {
+        gl.readPixels(
+          Math.floor((gl.drawingBufferWidth * x) / 8),
+          Math.floor((gl.drawingBufferHeight * y) / 8),
+          1,
+          1,
+          gl.RGBA,
+          gl.UNSIGNED_BYTE,
+          pixel,
+        );
+        samples.push([...pixel].join(","));
+      }
+    }
+    return {
+      width: gl.drawingBufferWidth,
+      height: gl.drawingBufferHeight,
+      colors: new Set(samples).size,
+    };
+  });
+}
+
+async function measureAnimationFPS(page, frames) {
+  return page.evaluate(
+    (frameCount) =>
+      new Promise((resolve) => {
+        let count = 0;
+        let startedAt = 0;
+        const tick = (time) => {
+          if (count === 0) {
+            startedAt = time;
+          }
+          count += 1;
+          if (count >= frameCount) {
+            resolve(((count - 1) * 1_000) / (time - startedAt));
+            return;
+          }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }),
+    frames,
+  );
+}
+
+async function verifyReducedMotion(browser, webURL) {
+  const page = await browser.newPage({
+    viewport: { width: 1280, height: 900 },
+    reducedMotion: "reduce",
+  });
+  try {
+    await page.goto(webURL, { waitUntil: "networkidle" });
+    const stage = page.locator('[data-network-renderer="webgl"]');
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[data-network-renderer="webgl"]')
+          ?.getAttribute("data-scene-ready") === "true",
+    );
+    const canvas = stage.locator("canvas");
+    const firstFrame = await canvas.screenshot();
+    await page.waitForTimeout(700);
+    const secondFrame = await canvas.screenshot();
+    assert(
+      firstFrame.equals(secondFrame),
+      "reduced-motion network continued animating",
+    );
+  } finally {
+    await page.close();
+  }
+}
+
+async function verifyWebGLFallback(webURL) {
+  const fallbackBrowser = await chromium.launch({
+    executablePath: await findChrome(),
+    headless: true,
+    args: ["--disable-webgl"],
+  });
+  try {
+    const page = await fallbackBrowser.newPage({
+      viewport: { width: 1280, height: 900 },
+    });
+    await page.goto(webURL, { waitUntil: "networkidle" });
+    const fallback = page.locator('[data-network-renderer="svg"]');
+    await fallback.waitFor();
+    const networkMap = fallback.getByRole("img", {
+      name: /全国公路港异常网络/,
+    });
+    assert(
+      (await networkMap.locator("circle").count()) >= 72,
+      "SVG fallback did not render all hub markers",
+    );
+    assert(
+      (await networkMap.locator("line").count()) === 72,
+      "SVG fallback did not render all routes",
+    );
+    assert(
+      (await fallback.locator("canvas").count()) === 0,
+      "WebGL-disabled page still rendered a canvas",
+    );
+  } finally {
+    await fallbackBrowser.close();
+  }
 }
 
 async function undersizedButtons(page) {
