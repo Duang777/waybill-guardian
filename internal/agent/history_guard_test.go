@@ -33,6 +33,10 @@ func TestHistoryGuardRejectsProhibitedData(t *testing.T) {
 			name:  "mobile number under id-suffixed ordinary field",
 			value: map[string]any{"valid": "SMS-13800138000a"},
 		},
+		{
+			name:  "mobile number in queued approval",
+			value: map[string]any{"queued_approvals": []string{"13800138000"}},
+		},
 		{name: "license plate", value: map[string]any{"text": "vehicle 浙A12345"}},
 		{name: "dotted license plate", value: map[string]any{"text": "vehicle 浙A·12345"}},
 		{name: "hyphenated license plate", value: map[string]any{"text": "vehicle 浙A-12345"}},
@@ -55,12 +59,14 @@ func TestHistoryGuardRejectsProhibitedData(t *testing.T) {
 func TestHistoryGuardAllowsOpaqueUUIDIdentifiers(t *testing.T) {
 	const phoneLikeUUID = "13800138-000a-4abc-8def-123456789abc"
 	safe := map[string]any{
-		"id":          phoneLikeUUID,
-		"message_id":  "msg_" + phoneLikeUUID,
-		"incident_id": "delay-" + phoneLikeUUID,
-		"output_id":   "msg_13800138000a1234",
-		"tool_output": `{"order_id":"RA-13800138000a","message_id":"SMS-13800138000a"}`,
-		"text":        "safe",
+		"id":                phoneLikeUUID,
+		"message_id":        "msg_" + phoneLikeUUID,
+		"incident_id":       "delay-" + phoneLikeUUID,
+		"output_id":         "msg_13800138000a1234",
+		"queued_approvals":  []string{"call_13800138000a1234"},
+		"queued_rejections": []string{"call_13900139000b1234"},
+		"tool_output":       `{"order_id":"RA-13800138000a","message_id":"SMS-13800138000a"}`,
+		"text":              "safe",
 	}
 	if err := validateHistoryValue("test value", safe); err != nil {
 		t.Fatalf("opaque identifiers were rejected: %v", err)

@@ -215,26 +215,30 @@ func decodeHistoryJSON(raw []byte) (any, error) {
 }
 
 func inspectHistoryValue(value any, path string) error {
+	return inspectHistoryField(value, path, "")
+}
+
+func inspectHistoryField(value any, path, field string) error {
 	switch current := value.(type) {
 	case map[string]any:
 		for key, child := range current {
 			if _, prohibited := forbiddenHistoryKeys[strings.ToLower(key)]; prohibited {
 				return fmt.Errorf("%w: prohibited field at %s.%s", ErrUnsafeHistory, path, key)
 			}
-			if text, ok := child.(string); ok && isOpaqueHistoryIdentifier(key, text) {
-				continue
-			}
-			if err := inspectHistoryValue(child, path+"."+key); err != nil {
+			if err := inspectHistoryField(child, path+"."+key, key); err != nil {
 				return err
 			}
 		}
 	case []any:
 		for index, child := range current {
-			if err := inspectHistoryValue(child, fmt.Sprintf("%s[%d]", path, index)); err != nil {
+			if err := inspectHistoryField(child, fmt.Sprintf("%s[%d]", path, index), field); err != nil {
 				return err
 			}
 		}
 	case string:
+		if isOpaqueHistoryIdentifier(field, current) {
+			return nil
+		}
 		if candidate, ok := nestedJSONCandidate(current); ok {
 			nested, err := decodeHistoryJSON([]byte(candidate))
 			if err != nil {
@@ -257,6 +261,9 @@ func inspectHistoryValue(value any, path string) error {
 
 func isOpaqueHistoryIdentifier(key string, value string) bool {
 	key = strings.ToLower(key)
+	if key == "queued_approvals" || key == "queued_rejections" {
+		return opaqueIDPattern.MatchString(value)
+	}
 	if key != "id" &&
 		key != "traceid" &&
 		!strings.HasSuffix(key, "_id") {
