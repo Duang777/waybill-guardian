@@ -101,7 +101,7 @@ func briefInputForOverview(overview Overview) agentkit.BriefInput {
 	}
 	if len(overview.AnomalyDistribution) > 0 {
 		top := overview.AnomalyDistribution[0]
-		input.TopAnomalyType = top.Type
+		input.TopAnomalyType = briefAnomalyCategory(top.Type)
 		input.TopAnomalyCount = top.Count
 		input.TopAnomalySharePct = percentage(top.Count, overview.Totals.Anomalies)
 	}
@@ -115,6 +115,15 @@ func briefInputForOverview(overview Overview) agentkit.BriefInput {
 		input.BusiestHubHandling = hub.Handling
 	}
 	return input
+}
+
+func briefAnomalyCategory(value string) string {
+	switch value {
+	case "delay", "damage", "fatigue", "loss", "weather":
+		return value
+	default:
+		return "other"
+	}
 }
 
 func materializeGeneratedBrief(
@@ -238,6 +247,8 @@ func anomalyTypeLabel(value string) string {
 		return "货物丢失"
 	case "weather":
 		return "天气影响"
+	case "other":
+		return "其他异常"
 	default:
 		return value
 	}
