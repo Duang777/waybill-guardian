@@ -208,7 +208,7 @@ LLM_MODEL=gpt-5-mini \
 ./scripts/demo.sh
 ```
 
-`LLM_API_STYLE` 可以是 `responses` 或 `chat_completions`，默认 `responses`。`LLM_BASE_URL` 必须是 API 根路径，不能以 `/` 结尾，也不能带上 `/responses` 或 `/chat/completions`。在线模式只配置一个 provider，模型调用最多三次，没有 provider fallback。
+`LLM_API_STYLE` 可以是 `responses` 或 `chat_completions`，默认 `responses`。`LLM_BASE_URL` 必须是 API 根路径，不能以 `/` 结尾，也不能带上 `/responses` 或 `/chat/completions`。在线模式只配置一个 provider，没有 provider fallback。一次模型调用最多尝试三次，包含第一次。
 
 这仍不是 issue 59 里的默认真实推理演示。
 

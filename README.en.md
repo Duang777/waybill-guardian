@@ -208,7 +208,7 @@ LLM_MODEL=gpt-5-mini \
 ./scripts/demo.sh
 ```
 
-`LLM_API_STYLE` is `responses` or `chat_completions`. The default is `responses`. `LLM_BASE_URL` must be the API root. It must not end in `/`, and it must not include `/responses` or `/chat/completions`. Online mode configures one provider, retries a model call at most three times, and does not enable provider fallback.
+`LLM_API_STYLE` is `responses` or `chat_completions`. The default is `responses`. `LLM_BASE_URL` must be the API root. It must not end in `/`, and it must not include `/responses` or `/chat/completions`. Online mode configures one provider and does not enable provider fallback. A model call is attempted at most three times, including the first try.
 
 This is still not the real-model default demo in issue 59.
 
