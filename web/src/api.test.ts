@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  approvalSchema,
+  confirmApproval,
   getKPIs,
   listWaybills,
   startBatch,
@@ -82,6 +84,47 @@ describe("waybill API", () => {
     expect(requestInit?.headers).toEqual({ "Content-Type": "application/json" });
     expect(requestInit?.body).toBe(JSON.stringify({ waybill_id: selected }));
     expect(run.waybill_id).toBe("YD2026101042");
+  });
+
+  it("confirms an approval with an explicit empty JSON object", async () => {
+    const approval = approvalSchema.parse({
+      id: "approval-1",
+      run_id: "run-1",
+      sdk_run_id: "sdk-run-1",
+      waybill_id: "YD2026101042",
+      plan_version: 1,
+      items: [
+        {
+          call_id: "call-1",
+          action: "tms.reassign",
+          wire_name: "tms.reassign",
+          params: {},
+          arguments_hash: "arguments-hash",
+          idempotency_key: "idempotency-key",
+        },
+      ],
+      reason: "driver fatigue",
+      evidence: [],
+      status: "executed",
+      requested_at: "2026-10-11T13:06:00Z",
+      expires_at: "2026-10-11T13:16:00Z",
+      decided_by: "local-demo-reviewer",
+      decided_at: "2026-10-11T13:07:00Z",
+    });
+    let requestInit: RequestInit | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        requestInit = init;
+        return Promise.resolve(jsonResponse(approval, 202));
+      }),
+    );
+
+    await confirmApproval(approval.id);
+
+    expect(requestInit?.method).toBe("POST");
+    expect(requestInit?.headers).toEqual({ "Content-Type": "application/json" });
+    expect(requestInit?.body).toBe("{}");
   });
 
   it("parses KPI availability instead of coercing missing values to zero", async () => {

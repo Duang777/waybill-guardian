@@ -224,7 +224,7 @@ GitHub Actions 会在 pull request 和 `main` 推送上运行 Go race、恢复�
 
 ## 配置
 
-`./scripts/demo.sh` 会设置下面四项，其余变量从当前 shell 继承。直接运行 `go run ./cmd/server` 时，监听地址用 `HTTP_ADDR`，默认 `127.0.0.1:8080`。
+`./scripts/demo.sh` 会读取下面四项，并默认从前端地址生成 `ALLOWED_ORIGINS`；其余变量从当前 shell 继承。直接运行 `go run ./cmd/server` 时，监听地址用 `HTTP_ADDR`，默认 `127.0.0.1:8080`。
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
@@ -233,6 +233,7 @@ GitHub Actions 会在 pull request 和 `main` 推送上运行 Go race、恢复�
 | `WEB_HOST` | `127.0.0.1` | 前端监听地址，只给 `demo.sh` 使用 |
 | `WEB_PORT` | `5173` | 前端端口，只给 `demo.sh` 使用 |
 | `HTTP_ADDR` | `127.0.0.1:8080` | 服务监听地址。local 模式必须是 loopback IP |
+| `ALLOWED_ORIGINS` | 空 | 逗号分隔的可信浏览器来源，格式为精确的 `scheme://host[:port]`。仅跨来源部署需要配置 |
 | `WEB_STATIC_DIR` | 空 | 由 Go 服务托管的前端构建目录。容器内是 `/app/web` |
 | `ALLOW_NON_LOOPBACK_LOCAL` | `false` | 允许 local 模式监听非 loopback IP，只供端口绑定到宿主机 loopback 的容器使用 |
 | `LOCAL_TRUSTED_REMOTE` | 空 | 上一项为 `true` 时必填。请求 TCP 对端必须匹配该 IP、主机名或 `container-gateway` |
@@ -421,7 +422,10 @@ COMMIT;
 loopback。审批主体固定为 `local-demo-reviewer`。客户端送来的 `Authorization` 和
 `X-Actor` 不决定身份。
 
-非 GET 接口还没有 Origin 或 Sec-Fetch-Site 检查。见 [issue 64](https://github.com/Duang777/waybill-guardian/issues/64)。
+API 的非安全方法由 Go 标准库 `CrossOriginProtection` 校验 `Sec-Fetch-Site` 和 `Origin`。
+同源请求、`ALLOWED_ORIGINS` 中精确匹配的来源，以及不带浏览器来源头的 CLI/服务调用会
+放行；其他跨站浏览器请求返回 403。审批确认、驳回和演示触发还要求
+`Content-Type: application/json`；无参数请求发送 `{}`。
 
 ## 开源声明
 

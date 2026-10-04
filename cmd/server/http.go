@@ -54,7 +54,15 @@ func newHandlerWithEvents(
 	eventStore events.Ingestor,
 	eventMetrics ingestObserver,
 ) http.Handler {
-	return newHandlerWithFrontend(service, access, eventStore, eventMetrics, nil, nil)
+	return newHandlerWithFrontend(
+		service,
+		access,
+		eventStore,
+		eventMetrics,
+		nil,
+		nil,
+		defaultCrossOriginProtection(),
+	)
 }
 
 func newHandlerWithFrontend(
@@ -64,6 +72,7 @@ func newHandlerWithFrontend(
 	eventMetrics ingestObserver,
 	frontend http.Handler,
 	trustedLocalRemotes []netip.Addr,
+	crossOrigin *http.CrossOriginProtection,
 ) http.Handler {
 	server := &api{
 		service:      service,
@@ -88,11 +97,11 @@ func newHandlerWithFrontend(
 	server.mux.HandleFunc("GET /api/waybills/{id}", server.waybill)
 	root := http.NewServeMux()
 	root.HandleFunc("GET /healthz", server.health)
-	root.Handle("/api/", authenticateAPI(access, server.mux))
+	root.Handle("/api/", crossOrigin.Handler(authenticateAPI(access, server.mux)))
 	if eventStore != nil {
 		eventMux := http.NewServeMux()
 		eventMux.HandleFunc("POST /v1/events", server.ingestEvent)
-		root.Handle("/v1/events", authenticateAPI(access, eventMux))
+		root.Handle("/v1/events", crossOrigin.Handler(authenticateAPI(access, eventMux)))
 	}
 	if frontend != nil {
 		root.Handle("/", readOnlyFiles(frontend))
@@ -101,6 +110,36 @@ func newHandlerWithFrontend(
 		return loopbackHostOnly(root, trustedLocalRemotes)
 	}
 	return root
+}
+
+func defaultCrossOriginProtection() *http.CrossOriginProtection {
+	protection := http.NewCrossOriginProtection()
+	protection.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeProblem(
+			w,
+			http.StatusForbidden,
+			"cross_origin_denied",
+			"cross-origin browser request is not allowed",
+		)
+	}))
+	return protection
+}
+
+func crossOriginProtection(allowedOrigins string) (*http.CrossOriginProtection, error) {
+	protection := defaultCrossOriginProtection()
+	if strings.TrimSpace(allowedOrigins) == "" {
+		return protection, nil
+	}
+	for _, value := range strings.Split(allowedOrigins, ",") {
+		origin := strings.TrimSpace(value)
+		if origin == "" {
+			return nil, fmt.Errorf("ALLOWED_ORIGINS must not contain an empty origin")
+		}
+		if err := protection.AddTrustedOrigin(origin); err != nil {
+			return nil, fmt.Errorf("invalid ALLOWED_ORIGINS entry %q: %w", origin, err)
+		}
+	}
+	return protection, nil
 }
 
 func staticFileHandler(directory string) (http.Handler, error) {
@@ -293,7 +332,11 @@ func (a *api) triggerDemo(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := requireEmptyBody(r.Body); err != nil {
+	if err := requireJSONContentType(r.Header.Get("Content-Type")); err != nil {
+		writeProblem(w, http.StatusUnsupportedMediaType, "invalid_content_type", err.Error())
+		return
+	}
+	if err := requireEmptyJSONObject(r.Body); err != nil {
 		writeProblem(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
@@ -539,7 +582,11 @@ func (a *api) confirm(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := requireEmptyBody(r.Body); err != nil {
+	if err := requireJSONContentType(r.Header.Get("Content-Type")); err != nil {
+		writeProblem(w, http.StatusUnsupportedMediaType, "invalid_content_type", err.Error())
+		return
+	}
+	if err := requireEmptyJSONObject(r.Body); err != nil {
 		writeProblem(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
@@ -561,6 +608,10 @@ func (a *api) confirm(w http.ResponseWriter, r *http.Request) {
 func (a *api) reject(w http.ResponseWriter, r *http.Request) {
 	principal, grant, ok := a.grant(w, r, httpauth.DecideApproval)
 	if !ok {
+		return
+	}
+	if err := requireJSONContentType(r.Header.Get("Content-Type")); err != nil {
+		writeProblem(w, http.StatusUnsupportedMediaType, "invalid_content_type", err.Error())
 		return
 	}
 	var body struct {
@@ -920,15 +971,15 @@ func parseKPIWindow(r *http.Request) (time.Duration, error) {
 	return window, nil
 }
 
-func requireEmptyBody(body io.Reader) error {
-	decoder := json.NewDecoder(body)
-	var extra any
-	if err := decoder.Decode(&extra); err == io.EOF {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("request body must be empty")
+func requireEmptyJSONObject(body io.Reader) error {
+	var value map[string]json.RawMessage
+	if err := decodeJSON(body, &value); err != nil {
+		return err
 	}
-	return fmt.Errorf("request body must be empty")
+	if value == nil || len(value) != 0 {
+		return fmt.Errorf("request body must be an empty JSON object")
+	}
+	return nil
 }
 
 func decodeJSON(body io.Reader, target any) error {

@@ -391,8 +391,9 @@ POST /api/runs
 4. 先执行 `grant.Require(waybill_id)`，再查询是否存在，避免越权探测。
 5. 调用 `StartRun` 并返回 202。
 
-`POST /api/demo/trigger` 保留为空请求体兼容别名。handler 先按授权范围过滤目录，再选择第一张
-含异常轨迹的运单，然后调用相同的 `StartRun`。没有可用异常运单时返回 404。
+`POST /api/demo/trigger` 保留为兼容别名，请求体为 JSON `{}`。handler 先按授权范围过滤
+目录，再选择第一张含异常轨迹的运单，然后调用相同的 `StartRun`。没有可用异常运单时返回
+404。
 
 ### 前端状态
 
@@ -449,7 +450,7 @@ internal/guardian
 - `PLATFORM=mock` 继续使用内嵌数据、local auth、JSONL 和七个工具。
 - `PLATFORM=file` 要求 `DATA_FILE`、local auth 和 JSONL，保留回环监听和 Host 检查。
 - `PLATFORM=real` 继续使用内嵌读快照、PostgreSQL、JWT、sandbox 改派和恢复覆盖检查。
-- `/api/demo/trigger`、详情、审批、run snapshot 和 SSE 响应保持兼容。
+- `/api/demo/trigger`、详情、审批、run snapshot 和 SSE 响应保持兼容；写请求统一使用 JSON。
 - 运单 ID 语法保持不变。
 - 不实现热更新、通用 mapping DSL、数据库导入或真实只读 TMS。
 - v1 网络扩展保持向后兼容：旧文件可不含网络列；带网络数据的文件必须提供完整实体和引用。

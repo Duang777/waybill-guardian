@@ -14,6 +14,7 @@ AGENT_MODE="${AGENT_MODE:-demo}"
 PLATFORM="${PLATFORM:-file}"
 API_URL="http://$BACKEND_HOST:$BACKEND_PORT"
 WEB_URL="http://$WEB_HOST:$WEB_PORT"
+ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-$WEB_URL}"
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/waybill-guardian.XXXXXX")"
 BACKEND_PID=""
 WEB_PID=""
@@ -101,6 +102,7 @@ printf 'Starting API at %s...\n' "$API_URL"
 		PLATFORM="$PLATFORM" \
 		DATA_DIR="$DATA_DIR" \
 		HTTP_ADDR="$BACKEND_HOST:$BACKEND_PORT" \
+		ALLOWED_ORIGINS="$ALLOWED_ORIGINS" \
 		"$TEMP_DIR/waybill-guardian"
 ) &
 BACKEND_PID=$!

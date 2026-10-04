@@ -592,6 +592,8 @@ export function getRunSnapshot(runID: RunID, signal?: AbortSignal): Promise<RunS
 export function confirmApproval(id: ApprovalID): Promise<Approval> {
   return request(`/api/approvals/${encodeURIComponent(id)}/confirm`, approvalSchema, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
   });
 }
 
