@@ -108,7 +108,7 @@ function TimelineFeed({ state }: TimelineFeedProps) {
       <div className={styles.timelineEmpty}>
         <History aria-hidden="true" size={20} />
         <strong>尚无审计事件</strong>
-        <span>启动演示后，工具调用、审批和平台写入会按序出现。</span>
+        <span>处置启动后，工具调用、审批和平台写入会按序出现。</span>
       </div>
     );
   }

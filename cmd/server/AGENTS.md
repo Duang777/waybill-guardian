@@ -10,7 +10,11 @@ HTTP 和 SSE 服务入口。handler 只做请求校验、协议转换和错误�
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/healthz` | 健康检查，返回 200 |
-| POST | `/api/demo/trigger` | 启动杭州到成都演示 run，返回 202 |
+| GET | `/api/waybills` | 返回授权范围内的运单目录 |
+| POST | `/api/runs` | 对请求中的 `waybill_id` 启动 run，返回 202 |
+| POST | `/api/demo/trigger` | 兼容别名，启动第一张可用异常运单 |
+| GET | `/api/runs` | 返回活跃 run，支持 `status=active` |
+| GET | `/api/runs/:id` | 返回 run 与完整审计快照 |
 | GET | `/api/runs/:id/timeline` | 先回放再推送审计事件 |
 | POST | `/api/approvals/:id/confirm` | 记录确认并恢复 run，返回 202 |
 | POST | `/api/approvals/:id/reject` | 记录驳回原因并恢复 run，返回 202 |
@@ -33,6 +37,7 @@ HTTP 和 SSE 服务入口。handler 只做请求校验、协议转换和错误�
 
 - confirm 请求体必须为空。重复 confirm 返回当前决定或执行结果，不会重复调用 platform。
 - reject 请求体为 `{"reason":"..."}`，拒绝未知字段，且 `reason` 不能为空。
+- start run 请求体为 `{"waybill_id":"..."}`，要求 JSON content type，拒绝未知字段。
 - `/healthz` 允许匿名访问。其他路由统一经过 `internal/httpauth.Boundary`。
 - `AUTH_MODE=local` 固定使用 `local-demo-reviewer`，客户端提供的 `Authorization` 和
   `X-Actor` 不参与身份判断。
@@ -50,14 +55,16 @@ HTTP 和 SSE 服务入口。handler 只做请求校验、协议转换和错误�
 
 ## 启动配置
 
-`main.go` 读取 `HTTP_ADDR`、存储、认证、Agent、outbox 和 metrics 配置。`HTTP_ADDR` 默认是
+`main.go` 读取 `HTTP_ADDR`、平台、数据文件、存储、认证、Agent、outbox 和 metrics 配置。`HTTP_ADDR` 默认是
 `127.0.0.1:8080`。`OUTBOX_ENABLED=true` 显式启动 dispatcher。`METRICS_ADDR` 设置独立的
 Prometheus listener。两项都要求 PostgreSQL 模式。
+`PLATFORM=file` 要求 `DATA_FILE`、local auth 和 JSONL storage，并在监听端口前完成文件校验。
 local 模式只接受 loopback IP 字面量，HTTP handler 也拒绝 Host 不是 loopback IP 的请求。
 JWT 模式允许显式非 loopback IP。`PLATFORM=real` 缺少 PostgreSQL 或 JWT 认证时先返回配置
 错误；通过检查后仍会因真实 adapter 未实现而拒绝启动。
 
 ## 验证
 
-`http_test.go` 覆盖触发、确认、驳回、错误映射、重复决定、SSE 游标续传和启动检查。
+`http_test.go` 覆盖目录、任意运单启动、兼容触发、确认、驳回、错误映射、重复决定、
+SSE 游标续传和启动检查。
 `http_auth_test.go` 覆盖匿名访问、租户和运单越权、角色不足、列表过滤与可信审批主体。

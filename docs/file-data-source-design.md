@@ -1,5 +1,11 @@
 # 文件数据源与任意运单设计
 
+## 实现状态
+
+本设计已落实到 `internal/platform/filestore`、`cmd/dataimport`、`POST /api/runs` 和前端运单目录。
+`web/scripts/verify-file-data.mjs` 使用不同城市的双运单 CSV 验证选择、竞态抑制、审批和写入。
+`scripts/check-production-fixture-literals.sh` 阻止已知演示值重新进入生产 Go/TypeScript 源码。
+
 ## 问题
 
 Issue #60 要让服务从 JSON 或 CSV 加载运单数据，并对文件中的任意运单执行完整处置流程。
@@ -494,4 +500,4 @@ Candidate 1 是基线，因为它完整表达了不可变快照、候选关系�
 - 快照没有共享 writer，effect runtime 只锁自己的结果 map。
 - 热路径最多为 HTTP 到 Guardian 到快照，或 tool 到快照。
 
-第一个实现动作是完成数据契约、loader 和跨格式等价测试。
+实现按上述三个切片落地；每个切片都在独立提交中保留可重复验证的边界。

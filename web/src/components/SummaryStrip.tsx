@@ -1,9 +1,10 @@
 import { Clock3, CloudSun, Route, ShieldCheck, Truck } from "lucide-react";
-import type { RunStatus, WaybillView } from "../api";
+import type { RunStatus, WaybillID, WaybillView } from "../api";
 import styles from "../app.module.css";
 
 type SummaryStripProps = {
   view: WaybillView | null;
+  waybillID: WaybillID | null;
   status: RunStatus | null;
   connected: boolean;
 };
@@ -19,8 +20,18 @@ const statusLabels = {
   manual_review: "等待人工复核",
 } satisfies Record<RunStatus, string>;
 
-export function SummaryStrip({ view, status, connected }: SummaryStripProps) {
-  const route = view === null ? "杭州 → 成都" : `${view.waybill.origin} → ${view.waybill.destination}`;
+export function SummaryStrip({
+  view,
+  waybillID,
+  status,
+  connected,
+}: SummaryStripProps) {
+  const route =
+    view !== null
+      ? `${view.waybill.origin} → ${view.waybill.destination}`
+      : waybillID === null
+        ? "暂无可处置运单"
+        : "正在读取路线";
   return (
     <section className={styles.summaryStrip} aria-label="运单状态摘要">
       <div className={styles.routeSummary}>
@@ -30,9 +41,7 @@ export function SummaryStrip({ view, status, connected }: SummaryStripProps) {
         <div>
           <span className={styles.eyebrow}>异常运单</span>
           <strong className={styles.routeTitle}>{route}</strong>
-          <span className={styles.mono}>
-            {view?.waybill.waybill_id ?? "YD2026101001"}
-          </span>
+          <span className={styles.mono}>{waybillID ?? "尚未选择运单"}</span>
         </div>
       </div>
 

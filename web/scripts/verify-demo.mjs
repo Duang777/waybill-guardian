@@ -65,7 +65,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   let triggerRequests = 0;
   page.on("request", (request) => {
-    if (request.method() === "POST" && request.url().endsWith("/api/demo/trigger")) {
+    if (request.method() === "POST" && request.url().endsWith("/api/runs")) {
       triggerRequests += 1;
     }
   });
@@ -74,7 +74,7 @@ try {
 
   const runs = [];
   for (let index = 0; index < 3; index += 1) {
-    const buttonName = index === 0 ? "启动演示" : "重新演示";
+    const buttonName = index === 0 ? "启动处置" : "重新处置";
     await page.getByRole("button", { name: buttonName, exact: true }).click();
     await page.getByText("改派至川行快运", { exact: true }).waitFor();
     await page.getByText("待确认", { exact: true }).waitFor();
@@ -139,7 +139,7 @@ try {
     path: join(artifactDir, "mobile-completed.png"),
   });
 
-  await page.getByRole("button", { name: "重新演示", exact: true }).click();
+  await page.getByRole("button", { name: "重新处置", exact: true }).click();
   await page.getByText("改派至川行快运", { exact: true }).waitFor();
   await page.getByRole("button", { name: "驳回方案", exact: true }).click();
   const rejectionReason = "首选承运商当前无可用车辆";

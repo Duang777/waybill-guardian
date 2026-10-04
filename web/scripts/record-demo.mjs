@@ -109,7 +109,7 @@ try {
     "Agent 开始调查",
     "系统依次查询运单、轨迹、司机和天气，工具调用实时写入审计日志。",
   );
-  await page.getByRole("button", { name: "启动演示", exact: true }).click();
+  await page.getByRole("button", { name: "启动处置", exact: true }).click();
   await page.getByText("改派至川行快运", { exact: true }).waitFor();
   await page.getByText("待确认", { exact: true }).waitFor();
   await hold(page, 2_000);
@@ -155,7 +155,7 @@ try {
     "人工可以驳回方案",
     "驳回必须填写原因，Agent 会读取决定并提交第二个候选运力。",
   );
-  await page.getByRole("button", { name: "重新演示", exact: true }).click();
+  await page.getByRole("button", { name: "重新处置", exact: true }).click();
   await page.getByText("改派至川行快运", { exact: true }).waitFor();
   await page.getByRole("button", { name: "驳回方案", exact: true }).click();
   await page
