@@ -1,6 +1,6 @@
 {
   "schema_version": "v1",
-  "dataset_id": "embedded-demo",
+  "dataset_id": "template-v1",
   "waybills": [
     {
       "waybill_id": "YD2026101001",
@@ -56,36 +56,6 @@
     {
       "waybill_id": "YD2026101001",
       "sequence": 2,
-      "label": "宣城",
-      "recorded_at": "2026-10-10T05:42:00Z",
-      "longitude": 118.7588,
-      "latitude": 30.9407,
-      "speed_kph": 76,
-      "anomaly": false
-    },
-    {
-      "waybill_id": "YD2026101001",
-      "sequence": 3,
-      "label": "武汉",
-      "recorded_at": "2026-10-10T13:18:00Z",
-      "longitude": 114.3054,
-      "latitude": 30.5931,
-      "speed_kph": 68,
-      "anomaly": false
-    },
-    {
-      "waybill_id": "YD2026101001",
-      "sequence": 4,
-      "label": "安康",
-      "recorded_at": "2026-10-10T22:03:00Z",
-      "longitude": 109.0293,
-      "latitude": 32.6847,
-      "speed_kph": 63,
-      "anomaly": false
-    },
-    {
-      "waybill_id": "YD2026101001",
-      "sequence": 5,
       "label": "绵阳北服务区",
       "recorded_at": "2026-10-11T04:21:00Z",
       "longitude": 104.6796,
@@ -96,7 +66,7 @@
     },
     {
       "waybill_id": "YD2026101001",
-      "sequence": 6,
+      "sequence": 3,
       "label": "成都分拨中心",
       "recorded_at": "2026-10-11T13:06:00Z",
       "longitude": 104.0665,

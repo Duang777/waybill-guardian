@@ -153,6 +153,16 @@ type GetRoadWeatherRequest struct {
 	Route string
 }
 
+type WaybillSummary struct {
+	WaybillID      domain.WaybillID
+	Origin         string
+	Destination    string
+	Status         string
+	HasAnomaly     bool
+	AnomalyLabel   string
+	LastRecordedAt time.Time
+}
+
 type ReassignRequest struct {
 	WaybillID      domain.WaybillID
 	CarrierID      domain.CarrierID
@@ -177,17 +187,35 @@ type LookupEffectRequest struct {
 	IdempotencyKey domain.IdempotencyKey
 }
 
-type TMSClient interface {
+type TMSReader interface {
 	GetWaybill(context.Context, GetWaybillRequest) (Waybill, error)
 	GetTracking(context.Context, GetTrackingRequest) ([]TrackPoint, error)
 	GetDriver(context.Context, GetDriverRequest) (Driver, error)
+}
+
+type WeatherReader interface {
+	GetRoadWeather(context.Context, GetRoadWeatherRequest) ([]RoadWeather, error)
+}
+
+type WaybillCatalog interface {
+	ListWaybills(context.Context) ([]WaybillSummary, error)
+}
+
+type ReadSet struct {
+	TMS     TMSReader
+	Weather WeatherReader
+	Catalog WaybillCatalog
+}
+
+type TMSClient interface {
+	TMSReader
 	Reassign(context.Context, ReassignRequest) (ReassignOrder, error)
 	CreateClaim(context.Context, CreateClaimRequest) (ClaimOrder, error)
 	LookupEffect(context.Context, LookupEffectRequest) (EffectResult, error)
 }
 
 type WeatherClient interface {
-	GetRoadWeather(context.Context, GetRoadWeatherRequest) ([]RoadWeather, error)
+	WeatherReader
 }
 
 type NotificationClient interface {

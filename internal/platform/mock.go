@@ -11,17 +11,10 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/domain"
 )
 
-type DemoData struct {
-	Waybills map[string]Waybill       `json:"waybills"`
-	Tracking map[string][]TrackPoint  `json:"tracking"`
-	Drivers  map[string]Driver        `json:"drivers"`
-	Weather  map[string][]RoadWeather `json:"weather"`
-}
-
 type Mock struct {
 	mu sync.Mutex
 
-	data DemoData
+	reads ReadSet
 
 	reassignments map[domain.IdempotencyKey]ReassignOrder
 	claims        map[domain.IdempotencyKey]ClaimOrder
@@ -29,16 +22,12 @@ type Mock struct {
 	writeCalls    map[domain.Action]int
 }
 
-func NewMock(raw []byte) (*Mock, error) {
-	var data DemoData
-	if err := json.Unmarshal(raw, &data); err != nil {
-		return nil, fmt.Errorf("decode demo data: %w", err)
-	}
-	if len(data.Waybills) == 0 {
-		return nil, fmt.Errorf("demo data has no waybills")
+func NewMock(reads ReadSet) (*Mock, error) {
+	if reads.TMS == nil || reads.Weather == nil || reads.Catalog == nil {
+		return nil, fmt.Errorf("fixture read set is incomplete")
 	}
 	return &Mock{
-		data:          data,
+		reads:         reads,
 		reassignments: make(map[domain.IdempotencyKey]ReassignOrder),
 		claims:        make(map[domain.IdempotencyKey]ClaimOrder),
 		messages:      make(map[domain.IdempotencyKey]SMSReceipt),
@@ -46,53 +35,42 @@ func NewMock(raw []byte) (*Mock, error) {
 	}, nil
 }
 
-func (m *Mock) GetWaybill(_ context.Context, req GetWaybillRequest) (Waybill, error) {
-	waybill, ok := m.data.Waybills[string(req.WaybillID)]
-	if !ok {
-		return Waybill{}, fmt.Errorf("%w: waybill %q", ErrNotFound, req.WaybillID)
-	}
-	return cloneWaybill(waybill), nil
+func (m *Mock) GetWaybill(ctx context.Context, req GetWaybillRequest) (Waybill, error) {
+	return m.reads.TMS.GetWaybill(ctx, req)
 }
 
-func (m *Mock) GetTracking(_ context.Context, req GetTrackingRequest) ([]TrackPoint, error) {
-	points, ok := m.data.Tracking[string(req.WaybillID)]
-	if !ok {
-		return nil, fmt.Errorf("%w: tracking for waybill %q", ErrNotFound, req.WaybillID)
-	}
-	return append([]TrackPoint(nil), points...), nil
+func (m *Mock) GetTracking(ctx context.Context, req GetTrackingRequest) ([]TrackPoint, error) {
+	return m.reads.TMS.GetTracking(ctx, req)
 }
 
-func (m *Mock) GetDriver(_ context.Context, req GetDriverRequest) (Driver, error) {
-	driver, ok := m.data.Drivers[string(req.DriverID)]
-	if !ok {
-		return Driver{}, fmt.Errorf("%w: driver %q", ErrNotFound, req.DriverID)
-	}
-	return driver, nil
+func (m *Mock) GetDriver(ctx context.Context, req GetDriverRequest) (Driver, error) {
+	return m.reads.TMS.GetDriver(ctx, req)
 }
 
-func (m *Mock) GetRoadWeather(_ context.Context, req GetRoadWeatherRequest) ([]RoadWeather, error) {
-	weather, ok := m.data.Weather[req.Route]
-	if !ok {
-		return nil, fmt.Errorf("%w: weather for route %q", ErrNotFound, req.Route)
-	}
-	return append([]RoadWeather(nil), weather...), nil
+func (m *Mock) GetRoadWeather(
+	ctx context.Context,
+	req GetRoadWeatherRequest,
+) ([]RoadWeather, error) {
+	return m.reads.Weather.GetRoadWeather(ctx, req)
 }
 
-func (m *Mock) Reassign(_ context.Context, req ReassignRequest) (ReassignOrder, error) {
+func (m *Mock) Reassign(ctx context.Context, req ReassignRequest) (ReassignOrder, error) {
 	if req.IdempotencyKey == "" {
 		return ReassignOrder{}, fmt.Errorf("idempotency key is required")
+	}
+	waybill, err := m.reads.TMS.GetWaybill(ctx, GetWaybillRequest{
+		WaybillID: req.WaybillID,
+	})
+	if err != nil {
+		return ReassignOrder{}, err
+	}
+	if !containsCarrier(waybill.CandidateCarriers, req.CarrierID) {
+		return ReassignOrder{}, fmt.Errorf("carrier %q is not a candidate", req.CarrierID)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if result, ok := m.reassignments[req.IdempotencyKey]; ok {
 		return result, nil
-	}
-	waybill, ok := m.data.Waybills[string(req.WaybillID)]
-	if !ok {
-		return ReassignOrder{}, fmt.Errorf("%w: waybill %q", ErrNotFound, req.WaybillID)
-	}
-	if !containsCarrier(waybill.CandidateCarriers, req.CarrierID) {
-		return ReassignOrder{}, fmt.Errorf("carrier %q is not a candidate", req.CarrierID)
 	}
 	result := ReassignOrder{
 		OrderID:   stableID("RA", req.IdempotencyKey),
@@ -105,17 +83,22 @@ func (m *Mock) Reassign(_ context.Context, req ReassignRequest) (ReassignOrder, 
 	return result, nil
 }
 
-func (m *Mock) CreateClaim(_ context.Context, req CreateClaimRequest) (ClaimOrder, error) {
+func (m *Mock) CreateClaim(
+	ctx context.Context,
+	req CreateClaimRequest,
+) (ClaimOrder, error) {
 	if req.IdempotencyKey == "" {
 		return ClaimOrder{}, fmt.Errorf("idempotency key is required")
+	}
+	if _, err := m.reads.TMS.GetWaybill(ctx, GetWaybillRequest{
+		WaybillID: req.WaybillID,
+	}); err != nil {
+		return ClaimOrder{}, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if result, ok := m.claims[req.IdempotencyKey]; ok {
 		return result, nil
-	}
-	if _, ok := m.data.Waybills[string(req.WaybillID)]; !ok {
-		return ClaimOrder{}, fmt.Errorf("%w: waybill %q", ErrNotFound, req.WaybillID)
 	}
 	result := ClaimOrder{
 		ClaimID:   stableID("CL", req.IdempotencyKey),
@@ -190,12 +173,6 @@ func (m *Mock) WriteCount(action domain.Action) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.writeCalls[action]
-}
-
-func cloneWaybill(in Waybill) Waybill {
-	out := in
-	out.CandidateCarriers = append([]Carrier(nil), in.CandidateCarriers...)
-	return out
 }
 
 func containsCarrier(carriers []Carrier, id domain.CarrierID) bool {

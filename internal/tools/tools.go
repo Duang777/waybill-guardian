@@ -8,6 +8,7 @@ import (
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/platform"
+	"github.com/Duang777/waybill-guardian/internal/platform/filestore"
 )
 
 //go:embed testdata/demo.json
@@ -16,7 +17,11 @@ var demoData []byte
 var ErrWriteMiddlewareRequired = errors.New("write middleware required")
 
 func NewDemoClients() (platform.Clients, *platform.Mock, error) {
-	mock, err := platform.NewMock(demoData)
+	loaded, err := filestore.LoadEmbeddedJSON("demo.json", demoData)
+	if err != nil {
+		return platform.Clients{}, nil, err
+	}
+	mock, err := platform.NewMock(loaded.Reads)
 	if err != nil {
 		return platform.Clients{}, nil, err
 	}
