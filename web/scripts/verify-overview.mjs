@@ -122,18 +122,32 @@ try {
     mapBounds !== null && mapBounds.width > 600 && mapBounds.height > 400,
     "desktop network map is blank or incorrectly framed",
   );
-  const workspaceBounds = await page
+  const mapPanelBounds = await page
     .locator('[aria-labelledby="map-heading"]')
-    .locator("..")
     .boundingBox();
   const queueBounds = await page
     .locator('[aria-labelledby="queue-heading"]')
     .boundingBox();
   assert(
-    workspaceBounds !== null &&
+    mapPanelBounds !== null &&
       queueBounds !== null &&
-      Math.abs(workspaceBounds.height - queueBounds.height) < 2,
+      Math.abs(mapPanelBounds.height - queueBounds.height) < 2,
     "desktop risk queue stretched the workspace below the 3D scene",
+  );
+  const riskQueue = page.locator('[aria-labelledby="queue-heading"]');
+  const queueItems = riskQueue.locator("article");
+  const initialQueueSize = await queueItems.count();
+  assert(initialQueueSize > 5, "risk queue did not render enough anomalies");
+  await riskQueue.getByRole("radio", { name: "处置中", exact: true }).check();
+  await riskQueue.getByText("当前视图暂无任务", { exact: true }).waitFor();
+  assert(
+    (await queueItems.count()) === 0,
+    "active queue view rendered unassigned anomalies",
+  );
+  await riskQueue.getByRole("radio", { name: "全部", exact: true }).check();
+  assert(
+    (await queueItems.count()) === initialQueueSize,
+    "all queue view did not restore every anomaly",
   );
   const firstFlowFrame = await networkCanvas.screenshot();
   await page.waitForTimeout(700);
@@ -225,6 +239,12 @@ try {
       .getByText("待审批", { exact: true })
       .waitFor();
   }
+  await riskQueue.getByRole("radio", { name: "处置中", exact: true }).check();
+  assert(
+    (await queueItems.count()) === acceptedRuns.length,
+    "active queue view did not isolate the five running incidents",
+  );
+  await riskQueue.getByRole("radio", { name: "全部", exact: true }).check();
 
   const runToWaybill = new Map(
     acceptedRuns.map((run) => [run.run_id, run.waybill_id]),
@@ -340,6 +360,7 @@ try {
         measured_fps: Math.round(measuredFPS),
         reduced_motion: "static",
         webgl_fallback: "svg",
+        queue_views: 3,
         primary_kpis: 4,
         batch_runs: 5,
         independent_approvals: 5,

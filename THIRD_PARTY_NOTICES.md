@@ -89,5 +89,8 @@ provider fallback middleware，但当前实现没有配置 fallback。
 - [WareTrack 概念视频](https://x.com/threejs/status/2106721710670238104)：
   只借鉴“等轴测运营沙盘”和“对象即数据”的视觉语言。原作者未发布代码或许可证，
   本仓库没有使用其代码、模型、纹理或其他素材。
+- [BoardUI](https://github.com/BoardUI/boardui)：
+  参考其 MIT 许可公开源码中的浅灰分组底、白色内部工作面板、轻量接触阴影和分段控件
+  层级。本仓库使用 CSS Modules 独立实现，没有复制 BoardUI 组件、模板或素材。
 
 若以后复制第三方文件或代码片段，必须在此登记项目、来源路径、目标路径、用途和许可证要求。
