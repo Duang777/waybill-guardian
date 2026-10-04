@@ -57,16 +57,17 @@ export function RouteMap({
         if (disposed || mapElement.current === null) {
           return;
         }
+        const colors = readMapColors();
         map = new AMap.Map(mapElement.current, {
           viewMode: "2D",
           zoom: 5,
           center: [points[0].longitude, points[0].latitude],
-          mapStyle: "amap://styles/whitesmoke",
+          mapStyle: "amap://styles/darkblue",
         });
         const path = points.map(coordinate);
         const route = new AMap.Polyline({
           path,
-          strokeColor: "#31383d",
+          strokeColor: colors.route,
           strokeWeight: 5,
           strokeOpacity: 0.88,
           lineJoin: "round",
@@ -77,9 +78,11 @@ export function RouteMap({
           const marker = new AMap.CircleMarker({
             center: [point.longitude, point.latitude],
             radius: point.anomaly ? 10 : 6,
-            strokeColor: point.anomaly ? "#ae6814" : "#ffffff",
+            strokeColor: point.anomaly
+              ? colors.anomalyBorder
+              : colors.markerBorder,
             strokeWeight: point.anomaly ? 4 : 2,
-            fillColor: point.anomaly ? "#dc8b24" : "#31383d",
+            fillColor: point.anomaly ? colors.anomaly : colors.hub,
             fillOpacity: 1,
             zIndex: point.anomaly ? 30 : 20,
           });
@@ -250,6 +253,17 @@ function FallbackMap({
 
 function coordinate(point: TrackPoint): Coordinate {
   return [point.longitude, point.latitude];
+}
+
+function readMapColors() {
+  const styles = getComputedStyle(document.documentElement);
+  return {
+    route: styles.getPropertyValue("--map-route").trim(),
+    hub: styles.getPropertyValue("--map-hub").trim(),
+    anomaly: styles.getPropertyValue("--map-hub-anomaly").trim(),
+    anomalyBorder: styles.getPropertyValue("--primary-border").trim(),
+    markerBorder: styles.getPropertyValue("--map-marker-border").trim(),
+  };
 }
 
 function projectPoints(points: readonly TrackPoint[]): readonly ProjectedPoint[] {

@@ -93,6 +93,38 @@ try {
     visibleInMilliseconds < 3_000,
     `overview became visible after ${Math.round(visibleInMilliseconds)}ms`,
   );
+  const fontMetrics = await page.evaluate(async () => {
+    await document.fonts.ready;
+    const resources = performance
+      .getEntriesByType("resource")
+      .filter((entry) => entry.name.endsWith(".woff2"));
+    return {
+      bytes: resources.reduce((total, entry) => total + entry.transferSize, 0),
+      files: resources.length,
+      sansLoaded: document.fonts.check('12px "WG Sans SC"'),
+      monoLoaded: document.fonts.check('12px "JetBrains Mono Variable"'),
+    };
+  });
+  assert(
+    fontMetrics.sansLoaded && fontMetrics.monoLoaded,
+    `self-hosted fonts did not load: ${JSON.stringify(fontMetrics)}`,
+  );
+  assert(
+    fontMetrics.bytes < 400_000,
+    `first-screen fonts transferred ${fontMetrics.bytes} bytes, expected less than 400000`,
+  );
+  const themeColors = await page.evaluate(() => {
+    const root = document.documentElement;
+    const dark = getComputedStyle(root).getPropertyValue("--background").trim();
+    root.classList.add("light");
+    const light = getComputedStyle(root).getPropertyValue("--background").trim();
+    root.classList.remove("light");
+    return { dark, light };
+  });
+  assert(
+    themeColors.dark !== themeColors.light,
+    `light theme did not override the dark canvas: ${JSON.stringify(themeColors)}`,
+  );
   assert(
     (await page.locator('section[aria-label="24 小时经营指标"] article').count()) === 4,
     "overview did not render four primary KPIs",
@@ -280,6 +312,8 @@ try {
     JSON.stringify(
       {
         first_visible_ms: Math.round(visibleInMilliseconds),
+        first_screen_fonts: fontMetrics,
+        theme_switch: themeColors,
         hubs: 72,
         routes: 72,
         primary_kpis: 4,

@@ -27,7 +27,7 @@ must consume semantic variables and must not contain raw color values.
 | `--border` | `oklch(0.34 0.016 250)` | Structural divider |
 | `--primary` | `oklch(0.72 0.18 50)` | Pending approval and main action |
 | `--success` | `oklch(0.72 0.14 155)` | Completed write |
-| `--danger` | `oklch(0.65 0.20 28)` | Failure and destructive action |
+| `--danger` | `oklch(0.57 0.19 28)` | Failure and destructive action |
 | `--info` | `oklch(0.70 0.10 230)` | Normal route and network context |
 
 The `.light` class provides the print and bright-projector theme with the same semantic token
@@ -35,9 +35,10 @@ names. Dark mode remains the default so local demos require no preference bootst
 
 ## 3. Typography rules
 
-Use the self-hosted `"Noto Sans SC Variable"` family for interface text and
+Use the self-hosted `"WG Sans SC"` subset of Noto Sans SC for interface text and
 `"JetBrains Mono Variable"` for identifiers, event sequence numbers, timestamps, and numeric
-metrics. Font files use `font-display: swap` and unicode-range slices.
+metrics. The committed 400, 500, and 700 weight subsets cover runtime UI and fixture text,
+use `font-display: swap`, and can be regenerated with `npm run font:subset`.
 
 | Role | Size | Weight | Line height |
 |---|---:|---:|---:|

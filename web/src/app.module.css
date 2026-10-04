@@ -3,12 +3,12 @@
   z-index: 1000;
   top: 8px;
   left: 8px;
-  padding: 10px 14px;
-  color: oklch(0.99 0 0);
-  background: oklch(0.215 0.018 255);
-  border-radius: 6px;
+  padding: var(--space-2-5) var(--space-3-5);
+  color: var(--foreground-strong);
+  background: var(--surface-0);
+  border-radius: var(--radius-md);
   transform: translateY(-160%);
-  transition: transform 140ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform var(--duration-focus) var(--ease-out);
 }
 
 .skipLink:focus-visible {
@@ -20,48 +20,50 @@
   min-height: 100vh;
   margin: 0 auto;
   overflow: hidden;
-  background: oklch(0.992 0.003 95);
-  box-shadow: 0 0 0 1px oklch(0.875 0.012 95);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-panel);
 }
 
 .topbar {
   position: relative;
   z-index: 20;
   display: grid;
-  grid-template-columns:
-    minmax(210px, 1fr)
+  grid-template-columns: minmax(210px, 1fr)
     minmax(250px, 360px)
     auto
     minmax(150px, 1fr);
   align-items: center;
-  gap: 18px;
+  gap: var(--space-4-5);
   min-height: 64px;
-  padding: 10px 20px;
-  background: oklch(0.215 0.018 255);
-  color: oklch(0.96 0.006 95);
+  padding: var(--space-2-5) var(--space-5);
+  background: var(--surface-0);
+  color: var(--foreground-strong);
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: var(--space-2-25);
   min-width: 0;
 }
 
 .backButton {
   display: grid;
-  width: 32px;
+  width: 40px;
   height: 40px;
   flex: 0 0 auto;
   place-items: center;
-  border-radius: 4px;
-  color: oklch(0.78 0.01 255);
+  border-radius: var(--radius-sm);
+  color: var(--subtle-foreground);
   text-decoration: none;
+  transition:
+    transform var(--duration-press) var(--ease-out),
+    background-color var(--duration-state) var(--ease-out),
+    color var(--duration-state) var(--ease-out);
 }
 
-.backButton:hover {
-  color: oklch(0.96 0.006 95);
-  background: oklch(0.3 0.018 255);
+.backButton:active {
+  transform: scale(0.96);
 }
 
 .brandMark {
@@ -70,10 +72,10 @@
   height: 38px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid oklch(0.72 0.14 67);
-  border-radius: 4px;
-  color: oklch(0.83 0.115 75);
-  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  border: 1px solid var(--primary-border);
+  border-radius: var(--radius-sm);
+  color: var(--primary-text);
+  font-family: var(--font-family-mono);
   font-size: 12px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -81,7 +83,7 @@
 
 .brand div {
   display: grid;
-  gap: 1px;
+  gap: var(--space-0-25);
   min-width: 0;
 }
 
@@ -94,7 +96,7 @@
 }
 
 .brand div > span {
-  color: oklch(0.72 0.012 255);
+  color: var(--subtle-foreground);
   font-size: 11px;
 }
 
@@ -102,13 +104,13 @@
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   min-width: 0;
 }
 
 .waybillPicker > span {
-  color: oklch(0.74 0.105 75);
-  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  color: var(--primary-text);
+  font-family: var(--font-family-mono);
   font-size: 10px;
 }
 
@@ -116,11 +118,11 @@
   width: 100%;
   min-width: 0;
   height: 40px;
-  padding: 0 32px 0 10px;
-  border: 1px solid oklch(0.42 0.018 255);
-  border-radius: 6px;
-  color: oklch(0.92 0.006 95);
-  background: oklch(0.27 0.018 255);
+  padding: 0 var(--space-8) 0 var(--space-2-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--foreground-strong);
+  background: var(--surface-3);
   font-size: 12px;
   cursor: pointer;
 }
@@ -133,19 +135,19 @@
 .runContext {
   display: flex;
   align-items: center;
-  gap: 9px;
-  color: oklch(0.72 0.012 255);
+  gap: var(--space-2-25);
+  color: var(--subtle-foreground);
   font-size: 11px;
 }
 
 .runLabel {
-  color: oklch(0.74 0.105 75);
-  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  color: var(--primary-text);
+  font-family: var(--font-family-mono);
   font-size: 10px;
 }
 
 .mono {
-  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-family: var(--font-family-mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
@@ -159,13 +161,12 @@
 .iconButton {
   min-height: 40px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
-  transition:
-    transform 120ms cubic-bezier(0.16, 1, 0.3, 1),
-    background-color 160ms cubic-bezier(0.16, 1, 0.3, 1),
-    color 160ms cubic-bezier(0.16, 1, 0.3, 1),
-    opacity 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform var(--duration-press) var(--ease-out),
+    background-color var(--duration-state) var(--ease-out),
+    color var(--duration-state) var(--ease-out),
+    opacity var(--duration-state) var(--ease-out);
 }
 
 .triggerButton:active,
@@ -183,11 +184,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--space-2);
   min-width: 132px;
-  padding: 0 16px;
-  background: oklch(0.75 0.145 72);
-  color: oklch(0.22 0.035 67);
+  padding: 0 var(--space-4);
+  background: var(--primary);
+  color: var(--primary-foreground);
   font-size: 13px;
   font-weight: 700;
 }
@@ -198,7 +199,7 @@
 
 .main {
   min-height: calc(100vh - 64px);
-  background: oklch(0.965 0.006 95);
+  background: var(--surface-1);
 }
 
 .summaryStrip {
@@ -206,20 +207,20 @@
   grid-template-columns: minmax(230px, 1fr) minmax(440px, 1.7fr) minmax(310px, 1.1fr);
   align-items: stretch;
   min-height: 112px;
-  background: oklch(0.992 0.003 95);
-  border-bottom: 1px solid oklch(0.875 0.012 95);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .routeSummary,
 .shipmentFacts,
 .riskCluster {
-  padding: 18px 20px;
+  padding: var(--space-4-5) var(--space-5);
 }
 
 .routeSummary {
   display: flex;
   align-items: center;
-  gap: 13px;
+  gap: var(--space-3-25);
 }
 
 .routeIcon {
@@ -228,20 +229,20 @@
   height: 42px;
   flex: 0 0 auto;
   place-items: center;
-  border-radius: 8px;
-  background: oklch(0.94 0.045 75);
-  color: oklch(0.48 0.13 62);
+  border-radius: var(--radius-lg);
+  background: var(--surface-3);
+  color: var(--primary-text);
 }
 
 .routeSummary > div:last-child {
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 
 .eyebrow {
   display: block;
-  color: oklch(0.49 0.018 255);
-  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  color: var(--muted-foreground);
+  font-family: var(--font-family-mono);
   font-size: 10px;
   font-weight: 600;
   line-height: 1.4;
@@ -255,21 +256,21 @@
 }
 
 .routeSummary .mono {
-  color: oklch(0.49 0.018 255);
+  color: var(--muted-foreground);
 }
 
 .shipmentFacts {
   display: grid;
   grid-template-columns: repeat(4, minmax(82px, 1fr));
   align-items: center;
-  border-right: 1px solid oklch(0.875 0.012 95);
-  border-left: 1px solid oklch(0.875 0.012 95);
+  border-right: 1px solid var(--border-subtle);
+  border-left: 1px solid var(--border-subtle);
 }
 
 .shipmentFacts > div {
   min-width: 0;
-  padding: 0 14px;
-  border-right: 1px solid oklch(0.9 0.009 95);
+  padding: 0 var(--space-3-5);
+  border-right: 1px solid var(--border-subtle);
 }
 
 .shipmentFacts > div:first-child {
@@ -284,9 +285,9 @@
 .shipmentFacts dt {
   display: flex;
   align-items: center;
-  gap: 5px;
-  margin-bottom: 6px;
-  color: oklch(0.49 0.018 255);
+  gap: var(--space-1-25);
+  margin-bottom: var(--space-1-5);
+  color: var(--muted-foreground);
   font-size: 11px;
 }
 
@@ -302,47 +303,47 @@
 .connectionValue {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 .connectionDot {
   width: 7px;
   height: 7px;
   flex: 0 0 auto;
-  border-radius: 50%;
-  background: oklch(0.64 0.02 255);
+  border-radius: var(--radius-full);
+  background: var(--surface-3);
 }
 
 .connectionDotOnline {
-  background: oklch(0.55 0.11 155);
-  box-shadow: 0 0 0 3px oklch(0.88 0.055 155);
+  background: var(--success);
+  box-shadow: var(--glow-success);
 }
 
 .riskCluster {
   display: grid;
   align-content: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .riskItem {
   display: grid;
   grid-template-columns: 72px 1fr;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2-5);
 }
 
 .riskLabel {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 6px;
-  color: oklch(0.49 0.018 255);
+  gap: var(--space-1-5);
+  color: var(--muted-foreground);
   font-size: 11px;
 }
 
 .riskLabel strong {
-  color: oklch(0.215 0.018 255);
-  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  color: var(--foreground-strong);
+  font-family: var(--font-family-mono);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
@@ -351,8 +352,8 @@
   position: relative;
   height: 5px;
   overflow: hidden;
-  border-radius: 4px;
-  background: oklch(0.9 0.009 95);
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
 }
 
 .riskFill {
@@ -362,28 +363,28 @@
 }
 
 .riskFillHigh {
-  background: oklch(0.64 0.16 55);
+  background: var(--primary);
 }
 
 .riskFillMedium {
-  background: oklch(0.68 0.12 86);
+  background: var(--primary);
 }
 
 .riskFillLow {
-  background: oklch(0.55 0.11 155);
+  background: var(--success);
 }
 
 .errorBanner {
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 10px;
-  margin: 12px 16px 0;
-  padding: 10px 12px;
-  border: 1px solid oklch(0.8 0.07 28);
-  border-radius: 6px;
-  background: oklch(0.95 0.035 28);
-  color: oklch(0.38 0.12 28);
+  gap: var(--space-2-5);
+  margin: var(--space-3) var(--space-4) 0;
+  padding: var(--space-2-5) var(--space-3);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-md);
+  background: var(--danger-wash);
+  color: var(--danger-text);
   font-size: 13px;
 }
 
@@ -401,26 +402,25 @@
 .errorActions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .retryButton {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-height: 40px;
-  padding: 0 10px;
+  padding: 0 var(--space-2-5);
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: inherit;
-  background: oklch(0.91 0.04 28);
+  background: var(--surface-3);
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
-  transition:
-    transform 120ms cubic-bezier(0.16, 1, 0.3, 1),
-    background-color 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform var(--duration-press) var(--ease-out),
+    background-color var(--duration-state) var(--ease-out);
 }
 
 .retryButton:active {
@@ -430,17 +430,17 @@
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(360px, 400px);
-  gap: 16px;
-  padding: 16px;
+  gap: var(--space-4);
+  padding: var(--space-4);
 }
 
 .primaryColumn {
   display: grid;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid oklch(0.875 0.012 95);
-  border-radius: 8px;
-  background: oklch(0.992 0.003 95);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
 }
 
 .mapPanel {
@@ -453,16 +453,16 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--space-4);
   min-height: 58px;
-  padding: 10px 16px;
-  border-bottom: 1px solid oklch(0.875 0.012 95);
+  padding: var(--space-2-5) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .panelTitleRow h2,
 .timelineHeader h2,
 .approvalLead h2 {
-  margin: 1px 0 0;
+  margin: var(--space-0-25) 0 0;
   font-size: 17px;
   font-weight: 650;
   line-height: 1.35;
@@ -472,8 +472,8 @@
 .anomalyLegend {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  color: oklch(0.42 0.09 55);
+  gap: var(--space-1-75);
+  color: var(--primary-text);
   font-size: 12px;
   font-weight: 600;
 }
@@ -481,9 +481,9 @@
 .anomalyLegend > span {
   width: 8px;
   height: 8px;
-  border: 2px solid oklch(0.87 0.08 75);
-  border-radius: 50%;
-  background: oklch(0.64 0.16 55);
+  border: 2px solid var(--primary-border);
+  border-radius: var(--radius-full);
+  background: var(--primary);
 }
 
 .mapStage {
@@ -491,7 +491,7 @@
   height: 330px;
   min-height: 330px;
   overflow: hidden;
-  background: oklch(0.925 0.013 105);
+  background: var(--map-canvas);
 }
 
 .mapEmpty,
@@ -500,14 +500,14 @@
   display: grid;
   place-items: center;
   align-content: center;
-  gap: 8px;
-  color: oklch(0.49 0.018 255);
+  gap: var(--space-2);
+  color: var(--muted-foreground);
   text-align: center;
 }
 
 .mapEmpty {
   height: 330px;
-  background: oklch(0.94 0.01 105);
+  background: var(--map-canvas);
 }
 
 .amapCanvas {
@@ -515,7 +515,7 @@
   inset: 0;
   z-index: 2;
   opacity: 0;
-  transition: opacity 240ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity var(--duration-reveal) var(--ease-out);
 }
 
 .mapVisible {
@@ -527,16 +527,15 @@
   inset: 0;
   z-index: 1;
   overflow: hidden;
-  background: oklch(0.925 0.013 105);
+  background: var(--map-canvas);
 }
 
 .mapGrid {
   position: absolute;
   inset: 0;
   opacity: 0.58;
-  background-image:
-    linear-gradient(oklch(0.82 0.018 105 / 0.5) 1px, transparent 1px),
-    linear-gradient(90deg, oklch(0.82 0.018 105 / 0.5) 1px, transparent 1px);
+  background-image: linear-gradient(var(--map-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--map-grid) 1px, transparent 1px);
   background-size: 42px 42px;
 }
 
@@ -550,7 +549,7 @@
 
 .routeLine polyline {
   fill: none;
-  stroke: oklch(0.32 0.025 255);
+  stroke: var(--map-route);
   stroke-width: 5px;
   stroke-linecap: round;
   stroke-linejoin: round;
@@ -565,7 +564,7 @@
   padding: 0;
   place-items: center;
   border: 0;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: transparent;
   cursor: pointer;
   transform: translate(-50%, -50%);
@@ -574,13 +573,12 @@
 .routePoint > span {
   width: 10px;
   height: 10px;
-  border: 2px solid oklch(0.992 0.003 95);
-  border-radius: 50%;
-  background: oklch(0.32 0.025 255);
-  box-shadow: 0 1px 5px oklch(0.22 0.02 255 / 0.25);
-  transition:
-    transform 120ms cubic-bezier(0.16, 1, 0.3, 1),
-    box-shadow 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  border: 2px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--surface-3);
+  box-shadow: var(--shadow-elevated);
+  transition: transform var(--duration-press) var(--ease-out),
+    box-shadow var(--duration-state) var(--ease-out);
 }
 
 .routePoint:active > span {
@@ -590,14 +588,12 @@
 .routePointAnomaly > span {
   width: 15px;
   height: 15px;
-  border: 4px solid oklch(0.91 0.07 75);
-  background: oklch(0.64 0.16 55);
+  border: 4px solid var(--primary-border);
+  background: var(--primary);
 }
 
 .routePointSelected > span {
-  box-shadow:
-    0 0 0 5px oklch(0.69 0.145 67 / 0.2),
-    0 2px 7px oklch(0.22 0.02 255 / 0.25);
+  box-shadow: var(--glow-primary);
 }
 
 .routeEndpointLabel {
@@ -605,7 +601,7 @@
   z-index: 2;
   max-width: 9ch;
   overflow: hidden;
-  color: oklch(0.43 0.02 255);
+  color: var(--foreground);
   font-size: 11px;
   font-weight: 650;
   white-space: nowrap;
@@ -620,19 +616,19 @@
   top: 12px;
   left: 12px;
   max-width: calc(100% - 24px);
-  padding: 8px 10px;
-  border-radius: 4px;
-  background: oklch(0.992 0.003 95 / 0.94);
-  box-shadow: 0 2px 10px oklch(0.22 0.02 255 / 0.12);
-  color: oklch(0.43 0.02 255);
+  padding: var(--space-2) var(--space-2-5);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-elevated);
+  color: var(--foreground);
   font-size: 11px;
 }
 
 .mapNotice {
   display: flex;
   align-items: center;
-  gap: 7px;
-  color: oklch(0.42 0.09 55);
+  gap: var(--space-1-75);
+  color: var(--primary-text);
 }
 
 .pointInspector {
@@ -644,21 +640,21 @@
   display: grid;
   grid-template-columns: minmax(145px, 1fr) minmax(300px, 1.6fr);
   align-items: center;
-  gap: 16px;
-  padding: 11px 13px;
-  border-radius: 6px;
-  background: oklch(0.215 0.018 255 / 0.94);
-  color: oklch(0.96 0.006 95);
-  box-shadow: 0 8px 22px oklch(0.22 0.02 255 / 0.22);
+  gap: var(--space-4);
+  padding: var(--space-2-75) var(--space-3-25);
+  border-radius: var(--radius-md);
+  background: var(--surface-0);
+  color: var(--foreground-strong);
+  box-shadow: var(--shadow-elevated);
 }
 
 .pointInspector > div {
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 
 .pointInspector .eyebrow {
-  color: oklch(0.72 0.012 255);
+  color: var(--subtle-foreground);
 }
 
 .pointInspector strong {
@@ -669,7 +665,7 @@
 .pointInspector dl {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
+  gap: var(--space-3);
   margin: 0;
 }
 
@@ -678,14 +674,14 @@
 }
 
 .pointInspector dt {
-  color: oklch(0.7 0.012 255);
+  color: var(--subtle-foreground);
   font-size: 10px;
 }
 
 .pointInspector dd {
   overflow: hidden;
-  margin: 2px 0 0;
-  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  margin: var(--space-0-5) 0 0;
+  font-family: var(--font-family-mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -696,19 +692,19 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--space-4);
   min-height: 54px;
-  padding: 7px 12px 7px 16px;
-  border-top: 1px solid oklch(0.875 0.012 95);
-  border-bottom: 1px solid oklch(0.875 0.012 95);
-  background: oklch(0.975 0.005 95);
+  padding: var(--space-1-75) var(--space-3) var(--space-1-75) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-1);
 }
 
 .playbackLabel {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  color: oklch(0.43 0.02 255);
+  gap: var(--space-1-75);
+  color: var(--foreground);
   font-size: 12px;
   font-weight: 650;
 }
@@ -717,7 +713,7 @@
   display: grid;
   grid-template-columns: 40px minmax(110px, 220px) 52px 66px;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .iconButton {
@@ -725,8 +721,8 @@
   width: 40px;
   padding: 0;
   place-items: center;
-  background: oklch(0.9 0.009 95);
-  color: oklch(0.3 0.02 255);
+  background: var(--surface-3);
+  color: var(--foreground-strong);
 }
 
 .iconButton:disabled {
@@ -735,7 +731,7 @@
 
 .playbackRange {
   width: 100%;
-  accent-color: oklch(0.59 0.13 67);
+  accent-color: var(--focus-ring);
   cursor: pointer;
 }
 
@@ -745,8 +741,8 @@
 }
 
 .playbackPosition {
-  color: oklch(0.49 0.018 255);
-  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  color: var(--muted-foreground);
+  font-family: var(--font-family-mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   text-align: center;
@@ -756,16 +752,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 0 10px;
+  gap: var(--space-1-25);
+  padding: 0 var(--space-2-5);
   background: transparent;
-  color: oklch(0.49 0.018 255);
+  color: var(--muted-foreground);
   font-size: 11px;
 }
 
 .liveButtonActive {
-  color: oklch(0.45 0.1 155);
-  background: oklch(0.92 0.035 155);
+  color: var(--success-text);
+  background: var(--surface-3);
 }
 
 .timelinePanel {
@@ -777,20 +773,20 @@
 }
 
 .eventCount {
-  color: oklch(0.49 0.018 255);
-  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  color: var(--muted-foreground);
+  font-family: var(--font-family-mono);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
 
 .timelineEmpty {
   min-height: 238px;
-  padding: 32px;
+  padding: var(--space-8);
 }
 
 .timelineEmpty strong,
 .approvalIdle strong {
-  color: oklch(0.3 0.02 255);
+  color: var(--foreground-strong);
   font-size: 14px;
 }
 
@@ -817,17 +813,17 @@
   display: grid;
   grid-template-columns: 38px 24px minmax(0, 1fr);
   min-height: 72px;
-  padding: 12px 16px 12px 10px;
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-2-5);
 }
 
 .timelineEvent:not(:last-child) {
-  border-bottom: 1px solid oklch(0.915 0.008 95);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .sequence {
-  padding-top: 2px;
-  color: oklch(0.59 0.016 255);
-  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  padding-top: var(--space-0-5);
+  color: var(--muted-foreground);
+  font-family: var(--font-family-mono);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -837,8 +833,8 @@
   position: relative;
   display: grid;
   place-items: start center;
-  padding-top: 2px;
-  color: oklch(0.54 0.025 255);
+  padding-top: var(--space-0-5);
+  color: var(--muted-foreground);
 }
 
 .eventNode::after {
@@ -847,7 +843,7 @@
   bottom: -20px;
   left: 50%;
   width: 1px;
-  background: oklch(0.875 0.012 95);
+  background: var(--surface-3);
   content: "";
 }
 
@@ -856,31 +852,31 @@
 }
 
 .eventNodeWarning {
-  color: oklch(0.59 0.13 67);
+  color: var(--primary-text);
 }
 
 .eventNodeSuccess {
-  color: oklch(0.5 0.11 155);
+  color: var(--success-text);
 }
 
 .eventNodeDanger {
-  color: oklch(0.56 0.16 28);
+  color: var(--danger-text);
 }
 
 .eventNodeNeutral {
-  color: oklch(0.54 0.025 255);
+  color: var(--muted-foreground);
 }
 
 .eventContent {
   min-width: 0;
-  padding-left: 6px;
+  padding-left: var(--space-1-5);
 }
 
 .eventTitle {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .eventTitle strong {
@@ -890,16 +886,16 @@
 
 .eventTitle time {
   flex: 0 0 auto;
-  color: oklch(0.59 0.016 255);
-  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  color: var(--muted-foreground);
+  font-family: var(--font-family-mono);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
 
 .eventContent p {
   overflow: hidden;
-  margin: 3px 0 5px;
-  color: oklch(0.49 0.018 255);
+  margin: var(--space-0-75) 0 var(--space-1-25);
+  color: var(--muted-foreground);
   font-size: 12px;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -908,8 +904,8 @@
 .eventActor {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  color: oklch(0.59 0.016 255);
+  gap: var(--space-1);
+  color: var(--muted-foreground);
   font-size: 10px;
 }
 
@@ -917,26 +913,24 @@
   align-self: start;
   min-width: 0;
   overflow: hidden;
-  border-radius: 8px;
-  background: oklch(0.995 0.002 95);
-  box-shadow:
-    0 12px 32px oklch(0.22 0.02 255 / 0.1),
-    0 0 0 1px oklch(0.875 0.012 95);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-elevated);
 }
 
 .panelHeading {
   min-height: 64px;
-  background: oklch(0.225 0.02 255);
-  color: oklch(0.96 0.006 95);
+  background: var(--surface-0);
+  color: var(--foreground-strong);
 }
 
 .panelHeading > div {
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 
 .panelHeading .eyebrow {
-  color: oklch(0.73 0.07 75);
+  color: var(--primary-text);
 }
 
 .panelHeading strong {
@@ -946,19 +940,19 @@
 .guardIndicator {
   width: 11px;
   height: 11px;
-  border: 3px solid oklch(0.82 0.095 75);
-  border-radius: 50%;
-  background: oklch(0.59 0.13 67);
-  box-shadow: 0 0 0 5px oklch(0.69 0.145 67 / 0.15);
+  border: 3px solid var(--primary-border);
+  border-radius: var(--radius-full);
+  background: var(--primary);
+  box-shadow: var(--glow-primary);
 }
 
 .successIcon {
-  color: oklch(0.7 0.12 155);
+  color: var(--success-text);
 }
 
 .approvalIdle {
   min-height: 448px;
-  padding: 40px 28px;
+  padding: var(--space-10) var(--space-7);
 }
 
 .agentSweep {
@@ -967,35 +961,35 @@
   width: 58px;
   height: 58px;
   place-items: center;
-  border: 1px solid oklch(0.82 0.02 255);
-  border-radius: 50%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
 }
 
 .agentSweep::before,
 .agentSweep::after,
 .agentSweep span {
   position: absolute;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   content: "";
 }
 
 .agentSweep::before {
   width: 38px;
   height: 38px;
-  border: 1px solid oklch(0.84 0.03 75);
+  border: 1px solid var(--border);
 }
 
 .agentSweep::after {
   width: 7px;
   height: 7px;
-  background: oklch(0.59 0.13 67);
+  background: var(--primary);
 }
 
 .agentSweep span {
   width: 1px;
   height: 25px;
   border-radius: 0;
-  background: oklch(0.59 0.13 67);
+  background: var(--primary);
   transform: translateY(-12px);
   transform-origin: bottom;
   animation: sweep 2.6s linear infinite;
@@ -1008,14 +1002,14 @@
 }
 
 .approvalBody {
-  padding: 18px;
+  padding: var(--space-4-5);
 }
 
 .approvalLead {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .approvalLead h2 {
@@ -1024,43 +1018,43 @@
 
 .approvalStatus {
   flex: 0 0 auto;
-  padding: 5px 8px;
-  border-radius: 4px;
+  padding: var(--space-1-25) var(--space-2);
+  border-radius: var(--radius-sm);
   font-size: 11px;
   font-weight: 700;
 }
 
 .approvalStatuspending {
-  color: oklch(0.42 0.1 55);
-  background: oklch(0.94 0.045 75);
+  color: var(--primary-text);
+  background: var(--primary-wash);
 }
 
 .approvalStatusconfirmed {
-  color: oklch(0.37 0.075 255);
-  background: oklch(0.91 0.028 255);
+  color: var(--info-text);
+  background: var(--info-wash);
 }
 
 .approvalStatusreconciliation_required {
-  color: oklch(0.42 0.1 55);
-  background: oklch(0.94 0.045 75);
+  color: var(--primary-text);
+  background: var(--primary-wash);
 }
 
 .approvalStatusexecuted {
-  color: oklch(0.38 0.1 155);
-  background: oklch(0.92 0.035 155);
+  color: var(--success-text);
+  background: var(--success-wash);
 }
 
 .approvalStatuspartially_failed,
 .approvalStatusfailed,
 .approvalStatusrejected,
 .approvalStatusexpired {
-  color: oklch(0.45 0.13 28);
-  background: oklch(0.94 0.035 28);
+  color: var(--danger-text);
+  background: var(--danger-wash);
 }
 
 .approvalReason {
-  margin: 10px 0 18px;
-  color: oklch(0.43 0.02 255);
+  margin: var(--space-2-5) 0 var(--space-4-5);
+  color: var(--foreground);
   font-size: 13px;
   line-height: 1.7;
   text-wrap: pretty;
@@ -1068,17 +1062,17 @@
 
 .effectSection,
 .evidenceSection {
-  padding: 14px 0;
-  border-top: 1px solid oklch(0.875 0.012 95);
+  padding: var(--space-3-5) 0;
+  border-top: 1px solid var(--border-subtle);
 }
 
 .sectionLabel {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 9px;
-  color: oklch(0.49 0.018 255);
+  gap: var(--space-2);
+  margin-bottom: var(--space-2-25);
+  color: var(--muted-foreground);
   font-size: 11px;
   font-weight: 650;
 }
@@ -1095,13 +1089,13 @@
   display: grid;
   grid-template-columns: 34px 1fr;
   align-items: center;
-  gap: 9px;
+  gap: var(--space-2-25);
   min-height: 48px;
-  padding: 7px 0;
+  padding: var(--space-1-75) 0;
 }
 
 .effectRow + .effectRow {
-  border-top: 1px solid oklch(0.92 0.007 95);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .effectIcon {
@@ -1109,14 +1103,14 @@
   width: 32px;
   height: 32px;
   place-items: center;
-  border-radius: 6px;
-  background: oklch(0.925 0.015 255);
-  color: oklch(0.39 0.045 255);
+  border-radius: var(--radius-md);
+  background: var(--surface-3);
+  color: var(--foreground);
 }
 
 .effectRow > div:last-child {
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-width: 0;
 }
 
@@ -1126,7 +1120,7 @@
 
 .effectRow span {
   overflow: hidden;
-  color: oklch(0.49 0.018 255);
+  color: var(--muted-foreground);
   font-size: 11px;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -1135,26 +1129,26 @@
 .evidenceList {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 1px;
+  gap: var(--space-0-25);
   margin: 0;
   overflow: hidden;
-  border-radius: 6px;
-  background: oklch(0.875 0.012 95);
+  border-radius: var(--radius-md);
+  background: var(--surface-3);
 }
 
 .evidenceList > div {
   min-width: 0;
-  padding: 10px;
-  background: oklch(0.97 0.006 95);
+  padding: var(--space-2-5);
+  background: var(--surface-1);
 }
 
 .evidenceList dt {
-  color: oklch(0.49 0.018 255);
+  color: var(--muted-foreground);
   font-size: 10px;
 }
 
 .evidenceList dd {
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
   overflow-wrap: anywhere;
   font-size: 12px;
   font-weight: 650;
@@ -1162,22 +1156,22 @@
 
 .approvalMeta {
   display: grid;
-  gap: 5px;
-  padding: 10px 0 14px;
-  color: oklch(0.59 0.016 255);
+  gap: var(--space-1-25);
+  padding: var(--space-2-5) 0 var(--space-3-5);
+  color: var(--muted-foreground);
   font-size: 10px;
 }
 
 .approvalMeta > span:last-child {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1-25);
 }
 
 .approvalActions {
   display: grid;
   grid-template-columns: 1fr 1.35fr;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .primaryButton,
@@ -1187,30 +1181,30 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  padding: 0 14px;
+  gap: var(--space-1-75);
+  padding: 0 var(--space-3-5);
   font-size: 12px;
   font-weight: 700;
 }
 
 .primaryButton {
-  background: oklch(0.69 0.145 67);
-  color: oklch(0.22 0.035 67);
-  box-shadow: 0 4px 10px oklch(0.48 0.12 62 / 0.2);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  box-shadow: var(--shadow-primary);
 }
 
 .secondaryButton {
-  background: oklch(0.91 0.009 95);
-  color: oklch(0.35 0.03 255);
+  background: var(--surface-3);
+  color: var(--foreground-strong);
 }
 
 .dangerButton {
-  background: oklch(0.56 0.16 28);
-  color: oklch(0.97 0.008 28);
+  background: var(--danger);
+  color: var(--danger-foreground);
 }
 
 .textButton {
-  color: oklch(0.43 0.02 255);
+  color: var(--foreground);
   background: transparent;
 }
 
@@ -1223,13 +1217,13 @@
 
 .rejectForm {
   display: grid;
-  gap: 8px;
-  padding-top: 12px;
-  border-top: 1px solid oklch(0.875 0.012 95);
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .rejectForm label {
-  color: oklch(0.43 0.02 255);
+  color: var(--foreground);
   font-size: 11px;
   font-weight: 650;
 }
@@ -1238,11 +1232,11 @@
   width: 100%;
   resize: vertical;
   min-height: 76px;
-  padding: 10px;
-  border: 1px solid oklch(0.79 0.018 255);
-  border-radius: 6px;
-  color: oklch(0.215 0.018 255);
-  background: oklch(0.992 0.003 95);
+  padding: var(--space-2-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--foreground-strong);
+  background: var(--surface-2);
   font-size: 12px;
   line-height: 1.6;
 }
@@ -1250,27 +1244,32 @@
 .rejectActions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 @media (hover: hover) {
+  .backButton:hover {
+    color: var(--foreground-strong);
+    background: var(--surface-3);
+  }
+
   .triggerButton:hover,
   .primaryButton:hover {
-    background: oklch(0.73 0.15 67);
+    background: var(--primary-hover);
   }
 
   .secondaryButton:hover,
   .iconButton:hover {
-    background: oklch(0.87 0.012 95);
+    background: var(--surface-3);
   }
 
   .dangerButton:hover {
-    background: oklch(0.51 0.16 28);
+    background: var(--danger-hover);
   }
 
   .textButton:hover,
   .liveButton:hover {
-    background: oklch(0.92 0.007 95);
+    background: var(--surface-3);
   }
 
   .routePoint:hover > span {
@@ -1278,7 +1277,7 @@
   }
 
   .retryButton:hover {
-    background: oklch(0.88 0.055 28);
+    background: var(--danger-border);
   }
 }
 
@@ -1290,9 +1289,9 @@
   .riskCluster {
     grid-column: 1 / -1;
     grid-template-columns: repeat(3, 1fr);
-    padding-top: 12px;
-    padding-bottom: 12px;
-    border-top: 1px solid oklch(0.875 0.012 95);
+    padding-top: var(--space-3);
+    padding-bottom: var(--space-3);
+    border-top: 1px solid var(--border-subtle);
   }
 
   .workspace {
@@ -1314,7 +1313,7 @@
   }
 
   .shipmentFacts {
-    border-top: 1px solid oklch(0.875 0.012 95);
+    border-top: 1px solid var(--border-subtle);
     border-right: 0;
     border-left: 0;
   }
@@ -1340,9 +1339,8 @@
   .topbar {
     grid-template-columns: minmax(0, 1fr) auto;
     min-height: 68px;
-    padding:
-      10px max(12px, env(safe-area-inset-right))
-      10px max(12px, env(safe-area-inset-left));
+    padding: var(--space-2-5) max(var(--space-3), env(safe-area-inset-right))
+      var(--space-2-5) max(var(--space-3), env(safe-area-inset-left));
   }
 
   .brand div > span {
@@ -1360,7 +1358,7 @@
 
   .triggerButton {
     min-width: 118px;
-    padding: 0 12px;
+    padding: 0 var(--space-3);
   }
 
   .waybillPicker {
@@ -1371,12 +1369,12 @@
   .routeSummary,
   .shipmentFacts,
   .riskCluster {
-    padding: 14px;
+    padding: var(--space-3-5);
   }
 
   .shipmentFacts {
     grid-template-columns: repeat(2, 1fr);
-    gap: 14px 0;
+    gap: var(--space-3-5) 0;
   }
 
   .shipmentFacts > div:nth-child(2) {
@@ -1392,14 +1390,14 @@
   }
 
   .workspace {
-    gap: 12px;
-    padding: 12px;
+    gap: var(--space-3);
+    padding: var(--space-3);
   }
 
   .panelTitleRow,
   .timelineHeader {
     min-height: 56px;
-    padding: 9px 12px;
+    padding: var(--space-2-25) var(--space-3);
   }
 
   .mapStage,
@@ -1410,18 +1408,18 @@
 
   .pointInspector {
     grid-template-columns: 1fr;
-    gap: 7px;
+    gap: var(--space-1-75);
   }
 
   .pointInspector dl {
-    gap: 8px;
+    gap: var(--space-2);
   }
 
   .playbackBand {
     align-items: flex-start;
     flex-direction: column;
-    gap: 5px;
-    padding: 8px 10px;
+    gap: var(--space-1-25);
+    padding: var(--space-2) var(--space-2-5);
   }
 
   .playbackLabel {
@@ -1439,18 +1437,18 @@
 
   .timelineEvent {
     grid-template-columns: 30px 22px minmax(0, 1fr);
-    padding-right: 12px;
-    padding-left: 6px;
+    padding-right: var(--space-3);
+    padding-left: var(--space-1-5);
   }
 
   .eventTitle {
     align-items: flex-start;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
   }
 
   .approvalBody {
-    padding: 15px;
+    padding: var(--space-3-75);
   }
 
   .approvalLead h2 {

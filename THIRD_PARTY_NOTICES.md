@@ -31,6 +31,8 @@ provider fallback middleware，但当前实现没有配置 fallback。
 |---|---|---|---|
 | `react`、`react-dom` | `19.3.0` | MIT | 页面和状态渲染 |
 | `@amap/amap-jsapi-loader` | `1.0.1` | MIT | 按需加载高德 JS API |
+| `@fontsource-variable/jetbrains-mono` | `5.3.0` | OFL-1.1 | 自托管运单号、事件序号和指标数字字体 |
+| Noto Sans SC 字体子集 | 基于 `@fontsource/noto-sans-sc@5.3.0` | OFL-1.1 | 自托管中文界面字体，按仓库运行时文本生成 400/500/700 三个子集 |
 | `lucide-react` | `1.50.0` | ISC | 界面图标 |
 | `zod` | `4.6.5` | MIT | 浏览器端 API 边界校验 |
 
@@ -39,15 +41,22 @@ provider fallback middleware，但当前实现没有配置 fallback。
 | npm 包 | 版本 | 许可证 |
 |---|---|---|
 | `@amap/amap-jsapi-types` | `0.0.15` | MIT |
+| `@fontsource/noto-sans-sc` | `5.3.0` | OFL-1.1 |
+| `@tailwindcss/vite`、`tailwindcss` | `4.3.3` | MIT |
 | `@types/node` | `24.10.0` | MIT |
 | `@types/react`、`@types/react-dom` | `19.3.0` | MIT |
 | `@vitejs/plugin-react` | `6.1.1` | MIT |
 | `vite` | `8.3.2` | MIT |
 | `vitest` | `5.0.3` | MIT |
 | `playwright-core` | `1.63.0` | Apache-2.0 |
+| `subset-font` | `2.9.0` | BSD-3-Clause |
 | `typescript` | `7.0.2` | Apache-2.0 |
 
 `web/package-lock.json` 固定直接依赖和传递依赖。各 npm 包自带许可证文件。
+Noto Sans SC 子集由 [`web/scripts/generate-font-subset.mjs`](./web/scripts/generate-font-subset.mjs)
+生成到 `web/src/assets/fonts/`。字体许可证见
+[`docs/licenses/OFL-Noto-Sans-SC.txt`](./docs/licenses/OFL-Noto-Sans-SC.txt) 和
+[`docs/licenses/OFL-JetBrains-Mono.txt`](./docs/licenses/OFL-JetBrains-Mono.txt)。
 
 ## 外部服务
 
