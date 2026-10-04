@@ -1,5 +1,7 @@
 # waybill-guardian 运单守护
 
+[![CI](https://github.com/Duang777/waybill-guardian/actions/workflows/ci.yml/badge.svg)](https://github.com/Duang777/waybill-guardian/actions/workflows/ci.yml)
+
 异常运单处置 Agent。「AI 重构产业 · 架构师大赛」AI+物流赛道参赛项目。
 
 延误、破损或丢件发生后，Agent 查询运单、轨迹、司机和天气，形成归因和处置方案。
@@ -198,6 +200,10 @@ npm run verify:e2e
 
 `verify:e2e` 启动隔离的后端和前端，连续确认三次演示，再验证一次驳回路径。脚本还检查移动端
 横向溢出、按钮尺寸和截图。
+
+GitHub Actions 会在 pull request 和 `main` 推送上运行 Go race、恢复稳定性、PostgreSQL
+17、Web、许可证与 Docker 检查。浏览器 E2E 每日定时运行，也可在 Actions 页面手动触发；
+运行结果会上传 `web/artifacts/*.png`。
 
 ## 录制演示
 

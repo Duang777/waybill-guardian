@@ -1,0 +1,184 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 18 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+
+  recovery-stability:
+    name: Recovery stability
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - run: go test -race -count=20 -run '^TestRecoverReplaysConfirmedApproval$' ./internal/guardian
+
+  postgres:
+    name: PostgreSQL 17
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: waybill
+          POSTGRES_PASSWORD: waybill
+          POSTGRES_USER: waybill
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --host 127.0.0.1 --username waybill --dbname waybill"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://waybill:waybill@127.0.0.1:5432/waybill?sslmode=disable
+      TEST_DATABASE_URL: postgres://waybill:waybill@127.0.0.1:5432/waybill?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - run: go test -tags=integration -count=1 ./internal/storage/postgres
+      - run: go test -tags=integration -count=1 -run TestEventIngressConcurrentReplayWithPostgreSQL ./cmd/server
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npm audit --omit=dev --audit-level=high
+
+  licenses:
+    name: Licenses
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: ./scripts/licenses.sh
+
+  docker:
+    name: Docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Dockerfile
+        run: docker build --check .
+      - name: Build image
+        run: docker build --tag waybill-guardian:ci .
+      - name: Verify image contents and size
+        run: |
+          set -euo pipefail
+          size="$(docker image inspect waybill-guardian:ci --format '{{.Size}}')"
+          test "$size" -lt 62914560
+          container="$(docker create waybill-guardian:ci)"
+          trap 'docker rm --volumes "$container" >/dev/null' EXIT
+          docker export "$container" | tar -tf - > image-files.txt
+          if grep -Eq '\.(go|tsx?|env)$|(^|/)go\.(mod|sum)$|(^|/)package(-lock)?\.json$' image-files.txt; then
+            echo "runtime image contains source or environment files" >&2
+            exit 1
+          fi
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          docker run --detach --rm \
+            --name waybill-guardian-ci \
+            --publish 127.0.0.1:18080:8080 \
+            --env HTTP_ADDR=0.0.0.0:8080 \
+            --env ALLOW_NON_LOOPBACK_LOCAL=true \
+            waybill-guardian:ci
+          trap 'docker rm --force waybill-guardian-ci >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 40); do
+            if curl --fail --silent http://127.0.0.1:18080/healthz; then
+              break
+            fi
+            sleep 0.25
+          done
+          curl --fail --silent http://127.0.0.1:18080/ | grep -F '<title>Waybill Guardian</title>'
+
+  e2e:
+    name: Browser E2E
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    needs:
+      - go
+      - web
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AGENT_MODE: demo
+      CHROME_PATH: /usr/bin/google-chrome
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run verify:e2e
+        working-directory: web
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: web/artifacts/*.png
+          if-no-files-found: warn
+          retention-days: 7
