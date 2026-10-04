@@ -9,12 +9,12 @@ cd "$ROOT_DIR"
 
 set +e
 matches="$(
-	rg -n \
-		--glob '*.go' \
-		--glob '*.ts' \
-		--glob '*.tsx' \
-		--glob '!**/*_test.go' \
-		--glob '!**/*.test.ts' \
+	grep -rEnH \
+		--include='*.go' \
+		--include='*.ts' \
+		--include='*.tsx' \
+		--exclude='*_test.go' \
+		--exclude='*.test.ts' \
 		"$PATTERN" \
 		cmd internal web/src
 )"
