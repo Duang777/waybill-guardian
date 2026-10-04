@@ -454,7 +454,7 @@ func BuildEvent(
 		SchemaVersion: 1,
 		EventID:       draft.EventID,
 		Seq:           seq,
-		TS:            now.UTC(),
+		TS:            now.UTC().Truncate(time.Microsecond),
 		RunID:         runID,
 		Actor:         draft.Actor,
 		Type:          draft.Type,

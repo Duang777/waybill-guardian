@@ -17,8 +17,9 @@
   <a href="https://go.dev/dl/"><img alt="Go 1.25.3" src="https://img.shields.io/badge/Go-1.25.3-00ADD8?logo=go&logoColor=white"></a>
   <a href="https://react.dev/"><img alt="React 19.3.0" src="https://img.shields.io/badge/React-19.3.0-087EA4?logo=react&logoColor=white"></a>
   <a href="https://nodejs.org/"><img alt="Node.js 22.12 或更高版本" src="https://img.shields.io/badge/Node.js-%3E%3D22.12-339933?logo=nodedotjs&logoColor=white"></a>
+  <a href="https://github.com/Duang777/waybill-guardian/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Duang777/waybill-guardian/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/Duang777/waybill-guardian/issues"><img alt="GitHub issues" src="https://img.shields.io/github/issues/Duang777/waybill-guardian"></a>
-  <a href="https://github.com/Duang777/waybill-guardian/issues/62"><img alt="许可证尚未选定" src="https://img.shields.io/badge/license-pending-lightgrey"></a>
+  <a href="LICENSE"><img alt="Apache 2.0 license" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
 </p>
 
 传化集团与动势科技的「AI 重构产业架构师大赛」，赛道是 AI+物流。本仓库是参赛项目。标志是原创图形，没有使用主办方商标。
@@ -99,16 +100,16 @@ flowchart TD
 | 服务端幂等键 | 已交付 | 模型不提交 `effect_id` 或幂等键。同一键的 10 个并发调用只会进入 platform 一次，见 [`idempotency_test.go`](internal/idempotency/idempotency_test.go)。 |
 | JSONL 审计、哈希链、SSE 回放 | 已交付 | 前端按 run 和 `seq` 去重。 |
 | PostgreSQL 存储 | 已交付 | 保存 run、审批、effect、审计、outbox，以及 AES-256-GCM 加密的 Agent history。 |
-| 本地身份和 JWT | 已交付 | `AUTH_MODE=local` 只监听 loopback。`jwt` 校验 RS256、issuer、audience、时效、租户、角色和运单范围。 |
+| 本地身份和 JWT | 已交付 | `AUTH_MODE=local` 默认监听 loopback；容器额外校验 Host 和 TCP 对端。`jwt` 校验 RS256、issuer、audience、时效、租户、角色和运单范围。 |
 | 高德地图或本地轨迹 | 已交付 | 没有 key，或 SDK 加载失败时，页面改用本地坐标。 |
 | 改派 HTTP 沙箱 | 已交付 | 仅 `tms.reassign`。读仍是内置样例。不是生产 TMS。 |
 | 在线模型调用 | 进行中 | 可以配置 OpenAI 兼容 API。默认演示仍是脚本。验收标准见 [issue 59](https://github.com/Duang777/waybill-guardian/issues/59)。 |
 | 文件导入 | 已交付 | `PLATFORM=file` 在启动时加载 JSON 或 CSV v1，页面可以选择其中的运单。写操作留在内存 fixture 运行时。见已关闭的 [issue 60](https://github.com/Duang777/waybill-guardian/issues/60) 和 [`docs/file-data-source-design.md`](docs/file-data-source-design.md)。 |
 | 公路港总览 | 计划中 | [issue 61](https://github.com/Duang777/waybill-guardian/issues/61) |
-| 许可证文件 | 计划中 | [issue 62](https://github.com/Duang777/waybill-guardian/issues/62) |
+| Apache-2.0 与依赖许可清单 | 已交付 | 根目录含 `LICENSE`，传递依赖清单位于 [`docs/licenses/`](docs/licenses/)。 |
 | 非 GET 请求的 CSRF 检查 | 计划中 | [issue 64](https://github.com/Duang777/waybill-guardian/issues/64) |
-| Docker Compose | 计划中 | [issue 65](https://github.com/Duang777/waybill-guardian/issues/65) |
-| GitHub Actions | 计划中 | [issue 67](https://github.com/Duang777/waybill-guardian/issues/67)。仓库里还没有 workflow，所以本页没有 CI 徽章。 |
+| Docker Compose | 已交付 | 单容器提供前端和 API，可选 PostgreSQL 17 profile。 |
+| GitHub Actions | 已交付 | PR 和 main 运行 Go、Web、PostgreSQL、许可与镜像检查。 |
 | 指挥中心视觉 | 计划中 | [issue 77](https://github.com/Duang777/waybill-guardian/issues/77)，包含 issue 69 到 76。 |
 
 ## 演示
@@ -139,11 +140,39 @@ npm run record:demo
 
 ## 快速开始
 
-需要 Go 1.25.3 或更高版本，以及 Node.js 22.12 或更高版本。本次核对使用 Go 1.25.3 和 Node.js 22.14.0。`./scripts/demo.sh` 能把 API 和前端拉起来，`npm run verify:e2e` 已通过。
+### Docker
+
+只需安装 Docker。以下命令构建单个应用镜像，并在
+<http://127.0.0.1:8080> 同时提供前端和 API：
 
 ```bash
 git clone https://github.com/Duang777/waybill-guardian.git
 cd waybill-guardian
+docker compose up --build
+```
+
+应用端口只发布到宿主机 loopback。审计与 Agent history 保存在 `app-data` 命名卷中。
+停止服务使用 `docker compose down`；需要同时删除演示数据时使用
+`docker compose down --volumes`。
+
+可选的 PostgreSQL 17 演示使用 `prod` profile：
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+复制后的 `.env` 会通过 `COMPOSE_PROFILES=prod` 持续启用 PostgreSQL，避免后续启动切回
+JSONL。示例中的数据库密码和 checkpoint key 只供本机演示。真实部署必须替换这些值，改用
+`AUTH_MODE=jwt`，并在 HTTPS 入口后运行服务。修改 PostgreSQL 密码时，还要把
+`DATABASE_URL` 中的密码改为对应的 URL 编码值。
+
+### 本地工具链
+
+需要 Go 1.25.3 或更高版本，以及 Node.js 22.12 或更高版本。本次核对使用 Go 1.25.3 和
+Node.js 24.16.0。`./scripts/demo.sh` 能把 API 和前端拉起来，`npm run verify:e2e` 已通过。
+
+```bash
 ./scripts/demo.sh
 ```
 
@@ -164,9 +193,20 @@ go vet ./...
 go build ./...
 ./scripts/check-production-fixture-literals.sh
 ./scripts/check-history-governance.sh
+./scripts/licenses.sh
 ```
 
-`./scripts/test-postgres.sh` 用 Docker 启动临时 PostgreSQL 17，检查迁移、事务、租约和加密 history。
+`scripts/licenses.sh` 固定依赖扫描器版本，并核对已提交的 Go 和 Web 生产依赖许可清单。
+依赖变化后运行 `./scripts/licenses.sh --write` 更新清单，再提交生成结果。
+
+`./scripts/test-postgres.sh` 用 Docker 启动临时 PostgreSQL 17，检查迁移、事务、租约、加密
+history 和浏览器完整流程。
+
+```bash
+./scripts/test-postgres.sh
+```
+
+前端检查和浏览器流程：
 
 ```bash
 cd web
@@ -176,6 +216,10 @@ npm run build
 npm run verify:e2e
 npm run verify:file-e2e
 ```
+
+GitHub Actions 会在 pull request 和 `main` 推送上运行 Go race、恢复稳定性、PostgreSQL
+17、Web、许可证与 Docker 检查。浏览器 E2E 每日定时运行，也可在 Actions 页面手动触发；
+运行结果会上传 `web/artifacts/*.png`。
 
 ## 配置
 
@@ -188,6 +232,9 @@ npm run verify:file-e2e
 | `WEB_HOST` | `127.0.0.1` | 前端监听地址，只给 `demo.sh` 使用 |
 | `WEB_PORT` | `5173` | 前端端口，只给 `demo.sh` 使用 |
 | `HTTP_ADDR` | `127.0.0.1:8080` | 服务监听地址。local 模式必须是 loopback IP |
+| `WEB_STATIC_DIR` | 空 | 由 Go 服务托管的前端构建目录。容器内是 `/app/web` |
+| `ALLOW_NON_LOOPBACK_LOCAL` | `false` | 允许 local 模式监听非 loopback IP，只供端口绑定到宿主机 loopback 的容器使用 |
+| `LOCAL_TRUSTED_REMOTE` | 空 | 上一项为 `true` 时必填。请求 TCP 对端必须匹配该 IP、主机名或 `container-gateway` |
 | `DATA_DIR` | `data` | JSONL 审计和 hastekit history 目录 |
 | `AGENT_MODE` | `demo` | `demo` 使用 `ScenarioModel`。`online` 调用外部模型 |
 | `PLATFORM` | `mock` | `mock` 使用内置样例。`file` 加载 `DATA_FILE`。`real` 使用改派沙箱，见下文 |
@@ -218,6 +265,14 @@ PLATFORM=file \
 DATA_FILE=./data/templates/waybills-v1.csv \
 DATA_DIR=/tmp/waybill-file-demo \
 ./scripts/demo.sh
+```
+
+Compose 将仓库的 `data/` 目录只读挂载到 `/app/data`。容器内运行模板数据：
+
+```bash
+COMPOSE_PROFILES= STORAGE=jsonl PLATFORM=file \
+DATA_FILE=/app/data/templates/waybills-v1.json \
+docker compose up --build
 ```
 
 `PLATFORM=file` 还要求 `STORAGE=jsonl` 和 `AUTH_MODE=local`。服务启动时一次性加载完整文件。语法、引用、坐标或时间顺序错误会在监听端口前失败。运行期间不会热更新，替换文件后需要重启。字段和校验规则见 [`docs/file-data-source-design.md`](docs/file-data-source-design.md)。页面上的运单选择器列出文件中的运单。
@@ -318,7 +373,11 @@ COMMIT;
 
 读工具返回给模型的字段不包括电话、车牌和精确坐标。短信工具只接收运单、接收方角色和承运商。电话和模板在审批之后由服务端解析。history guard 拒绝把电话、车牌、精确坐标和短信供应商参数写进模型 history。运营接口里的电话和车牌会打码。地图接口仍会返回轨迹坐标，供控制台画线。
 
-`AUTH_MODE=local` 只接受 loopback IP，并拒绝 Host 不是 loopback IP 的请求。审批主体固定为 `local-demo-reviewer`。客户端送来的 `Authorization` 和 `X-Actor` 不决定身份。
+`AUTH_MODE=local` 默认只监听 loopback IP，并拒绝 Host 不是 loopback IP 的请求。容器通过
+`ALLOW_NON_LOOPBACK_LOCAL=true` 监听通配地址，同时用
+`LOCAL_TRUSTED_REMOTE=container-gateway` 校验 TCP 对端。Compose 只把端口发布到宿主机
+loopback。审批主体固定为 `local-demo-reviewer`。客户端送来的 `Authorization` 和
+`X-Actor` 不决定身份。
 
 非 GET 接口还没有 Origin 或 Sec-Fetch-Site 检查。见 [issue 64](https://github.com/Duang777/waybill-guardian/issues/64)。
 
@@ -341,10 +400,10 @@ hastekit `agent-sdk-go` v0.0.24 以 Go module 引入，许可证是 Apache-2.0�
 | [59](https://github.com/Duang777/waybill-guardian/issues/59) | 演示改为真实模型推理，补结构化证据引用 |
 | [60](https://github.com/Duang777/waybill-guardian/issues/60) | 已关闭。启动时加载 JSON 或 CSV v1，并在页面上选择运单。范围不包括公路港网络 |
 | [61](https://github.com/Duang777/waybill-guardian/issues/61) | 多公路港总览和可核验的 KPI |
-| [62](https://github.com/Duang777/waybill-guardian/issues/62) | 选定并加入 LICENSE |
+| [62](https://github.com/Duang777/waybill-guardian/issues/62) | 已完成。Apache-2.0、传递依赖清单和 `.mailmap` |
 | [64](https://github.com/Duang777/waybill-guardian/issues/64) | 非 GET 请求的 CSRF 检查 |
-| [65](https://github.com/Duang777/waybill-guardian/issues/65) | Docker Compose |
-| [67](https://github.com/Duang777/waybill-guardian/issues/67) | GitHub Actions |
+| [65](https://github.com/Duang777/waybill-guardian/issues/65) | 已完成。单容器镜像和 Docker Compose |
+| [67](https://github.com/Duang777/waybill-guardian/issues/67) | 已完成。GitHub Actions |
 | [68](https://github.com/Duang777/waybill-guardian/issues/68) | 仍开放。本页有架构图、边界、演示入口，以及文件格式和校验命令。量化指标和配音视频仍未完成 |
 | [77](https://github.com/Duang777/waybill-guardian/issues/77) | 前端视觉，含 issue 69 到 76 |
 
@@ -354,9 +413,13 @@ hastekit `agent-sdk-go` v0.0.24 以 Go module 引入，许可证是 Apache-2.0�
 
 ## 许可证
 
-本仓库还没有 `LICENSE` 文件，也还没有选定开源许可证。见 [issue 62](https://github.com/Duang777/waybill-guardian/issues/62)。在那个文件合入之前，不要把本仓库当成已经按某个 OSI 许可证授权。
+项目使用 [Apache License 2.0](LICENSE)。Go 和 Web 传递依赖的许可清单位于
+[`docs/licenses/`](docs/licenses/)，外部模型与地图服务条款记录在
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
-第三方组件的许可证见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+仓库不重写已有 Git 历史。`.mailmap` 仅让 `git shortlog` 等本地 Git 命令把已有公司邮箱
+统一显示为维护者的个人身份，原始 commit 对象和 SHA 不变。后续提交使用个人邮箱或 GitHub
+noreply 邮箱，避免继续把公司邮箱写入公开历史。
 
 ## 延伸阅读
 

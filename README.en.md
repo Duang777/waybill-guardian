@@ -17,8 +17,9 @@
   <a href="https://go.dev/dl/"><img alt="Go 1.25.3" src="https://img.shields.io/badge/Go-1.25.3-00ADD8?logo=go&logoColor=white"></a>
   <a href="https://react.dev/"><img alt="React 19.3.0" src="https://img.shields.io/badge/React-19.3.0-087EA4?logo=react&logoColor=white"></a>
   <a href="https://nodejs.org/"><img alt="Node.js 22.12 or newer" src="https://img.shields.io/badge/Node.js-%3E%3D22.12-339933?logo=nodedotjs&logoColor=white"></a>
+  <a href="https://github.com/Duang777/waybill-guardian/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Duang777/waybill-guardian/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/Duang777/waybill-guardian/issues"><img alt="GitHub issues" src="https://img.shields.io/github/issues/Duang777/waybill-guardian"></a>
-  <a href="https://github.com/Duang777/waybill-guardian/issues/62"><img alt="License not chosen yet" src="https://img.shields.io/badge/license-pending-lightgrey"></a>
+  <a href="LICENSE"><img alt="Apache 2.0 license" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
 </p>
 
 This repository is an entry in the 传化集团 and 动势科技 architect contest, on the AI + logistics track. The logo is original. It does not use the organizers' marks.
@@ -99,16 +100,16 @@ The status describes the code in this repository.
 | Server-generated idempotency key | Shipped | The model does not submit `effect_id` or the key. Ten concurrent calls for one key reach the platform once. See [`idempotency_test.go`](internal/idempotency/idempotency_test.go). |
 | JSONL audit, hash chain, SSE replay | Shipped | The UI deduplicates by run and `seq`. |
 | PostgreSQL storage | Shipped | Stores runs, approvals, effects, audit, outbox, and AES-256-GCM agent history. |
-| Local identity and JWT | Shipped | `AUTH_MODE=local` listens on loopback only. `jwt` checks RS256, issuer, audience, time, tenant, role, and waybill scope. |
+| Local identity and JWT | Shipped | `AUTH_MODE=local` listens on loopback by default; the container also checks the Host and TCP peer. `jwt` checks RS256, issuer, audience, time, tenant, role, and waybill scope. |
 | Amap or a local track | Shipped | With no key, or if the SDK fails to load, the page draws local coordinates. |
 | Reassign HTTP sandbox | Shipped | `tms.reassign` only. Reads stay on the fixture. Not a production TMS. |
 | Online model calls | In progress | An OpenAI-compatible API can be configured. The default demo is still the script. See [issue 59](https://github.com/Duang777/waybill-guardian/issues/59). |
 | File import | Shipped | `PLATFORM=file` loads JSON or CSV v1 at startup, and the page can select a waybill from the file. Writes stay on the in-memory fixture runtime. See closed [issue 60](https://github.com/Duang777/waybill-guardian/issues/60) and [`docs/file-data-source-design.md`](docs/file-data-source-design.md). |
 | Highway-port overview | Planned | [Issue 61](https://github.com/Duang777/waybill-guardian/issues/61) |
-| LICENSE file | Planned | [Issue 62](https://github.com/Duang777/waybill-guardian/issues/62) |
+| Apache-2.0 and dependency manifests | Shipped | The root has `LICENSE`. Transitive dependency manifests are in [`docs/licenses/`](docs/licenses/). |
 | CSRF checks on non-GET requests | Planned | [Issue 64](https://github.com/Duang777/waybill-guardian/issues/64) |
-| Docker Compose | Planned | [Issue 65](https://github.com/Duang777/waybill-guardian/issues/65) |
-| GitHub Actions | Planned | [Issue 67](https://github.com/Duang777/waybill-guardian/issues/67). There is no workflow yet, so this page has no CI badge. |
+| Docker Compose | Shipped | One container serves the frontend and API, with an optional PostgreSQL 17 profile. |
+| GitHub Actions | Shipped | Pull requests and `main` run Go, Web, PostgreSQL, license, and image checks. |
 | Command-center visual design | Planned | [Issue 77](https://github.com/Duang777/waybill-guardian/issues/77), including issues 69 through 76. |
 
 ## Demo
@@ -139,11 +140,38 @@ The file is `web/artifacts/waybill-guardian-demo.mp4`, at 1600 by 900. That dire
 
 ## Quick start
 
-You need Go 1.25.3 or newer, and Node.js 22.12 or newer. This check used Go 1.25.3 and Node.js 22.14.0. `./scripts/demo.sh` brought up the API and the web console, and `npm run verify:e2e` passed.
+### Docker
+
+With Docker installed, one command builds the image and serves the frontend and API at
+<http://127.0.0.1:8080>:
 
 ```bash
 git clone https://github.com/Duang777/waybill-guardian.git
 cd waybill-guardian
+docker compose up --build
+```
+
+Compose publishes the application only on host loopback. The `app-data` volume stores the audit and
+agent history. Use `docker compose down` to stop it, or `docker compose down --volumes` to delete the
+demo data too.
+
+To use the optional PostgreSQL 17 profile:
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+The copied `.env` keeps the `prod` profile and PostgreSQL storage enabled on later starts. Its
+database password and checkpoint key are local demo values. Replace them for a real deployment, use
+`AUTH_MODE=jwt`, and run behind HTTPS. If the PostgreSQL password changes, URL-encode it in
+`DATABASE_URL`.
+
+### Local toolchain
+
+You need Go 1.25.3 or newer, Node.js 22.12 or newer, and npm:
+
+```bash
 ./scripts/demo.sh
 ```
 
@@ -164,18 +192,33 @@ go vet ./...
 go build ./...
 ./scripts/check-production-fixture-literals.sh
 ./scripts/check-history-governance.sh
+./scripts/licenses.sh
 ```
 
-`./scripts/test-postgres.sh` starts a temporary PostgreSQL 17 with Docker and checks migrations, transactions, leases, and encrypted history.
+`scripts/licenses.sh` pins its scanners and verifies that the committed Go and Web production
+dependency manifests match the lock files. Run `./scripts/licenses.sh --write` after a dependency
+change.
+
+`./scripts/test-postgres.sh` starts a temporary PostgreSQL 17 with Docker and checks migrations,
+transactions, leases, encrypted history, and the browser workflow.
+
+```bash
+./scripts/test-postgres.sh
+```
 
 ```bash
 cd web
 npm ci
 npm test
 npm run build
+npm audit --omit=dev --audit-level=high
 npm run verify:e2e
 npm run verify:file-e2e
 ```
+
+GitHub Actions runs the Go race suite, recovery stability loop, PostgreSQL integration, Web,
+license, and image checks on pull requests and `main`. Scheduled and manual runs also execute both
+browser E2E suites and upload `web/artifacts/*.png`.
 
 ## Configuration
 
@@ -188,6 +231,9 @@ npm run verify:file-e2e
 | `WEB_HOST` | `127.0.0.1` | Web host, used by `demo.sh` |
 | `WEB_PORT` | `5173` | Web port, used by `demo.sh` |
 | `HTTP_ADDR` | `127.0.0.1:8080` | Server listen address. Local mode requires a loopback IP |
+| `WEB_STATIC_DIR` | empty | Frontend build directory served by Go. The container uses `/app/web` |
+| `ALLOW_NON_LOOPBACK_LOCAL` | `false` | Allow local mode to listen on a non-loopback IP, only for a container published on host loopback |
+| `LOCAL_TRUSTED_REMOTE` | empty | Required with the previous option. The TCP peer must match this IP, hostname, or `container-gateway` |
 | `DATA_DIR` | `data` | JSONL audit and hastekit history directory |
 | `AGENT_MODE` | `demo` | `demo` uses `ScenarioModel`. `online` calls an external model |
 | `PLATFORM` | `mock` | `mock` uses the fixture. `file` loads `DATA_FILE`. `real` uses the reassign sandbox |
@@ -218,6 +264,15 @@ PLATFORM=file \
 DATA_FILE=./data/templates/waybills-v1.csv \
 DATA_DIR=/tmp/waybill-file-demo \
 ./scripts/demo.sh
+```
+
+Compose mounts the repository's `data/` directory read-only at `/app/data`. Run the template in the
+container with:
+
+```bash
+COMPOSE_PROFILES= STORAGE=jsonl PLATFORM=file \
+DATA_FILE=/app/data/templates/waybills-v1.json \
+docker compose up --build
 ```
 
 `PLATFORM=file` also requires `STORAGE=jsonl` and `AUTH_MODE=local`. The server loads the whole file once at startup. A syntax, reference, coordinate, or time-order error fails before the process listens. It does not reload the file while running. Replacing the file requires a restart. Fields and checks are in [`docs/file-data-source-design.md`](docs/file-data-source-design.md). The waybill selector lists the waybills in the file.
@@ -318,7 +373,11 @@ Audit events are append-only. `seq`, `prev_hash`, and `hash` let a reader check 
 
 The read-tool payloads sent to the model omit phone numbers, license plates, and exact coordinates. The SMS tool receives the waybill, the recipient role, and the carrier. The server resolves the phone number and template after approval. The history guard rejects phone numbers, license plates, exact coordinates, and SMS provider parameters in model history. The operator API masks phone numbers and license plates. The map API still returns track coordinates so the console can draw the route.
 
-`AUTH_MODE=local` accepts only a loopback IP, and it rejects a request whose Host is not a loopback IP. The approval subject is fixed as `local-demo-reviewer`. A client-supplied `Authorization` header or `X-Actor` header does not choose the identity.
+`AUTH_MODE=local` listens on loopback by default and rejects a request whose Host is not a loopback
+IP. The container listens on all interfaces with `ALLOW_NON_LOOPBACK_LOCAL=true`, validates the TCP
+peer with `LOCAL_TRUSTED_REMOTE=container-gateway`, and publishes the Compose port only on host
+loopback. The approval subject is fixed as `local-demo-reviewer`. A client-supplied `Authorization`
+header or `X-Actor` header does not choose the identity.
 
 Non-GET routes do not yet check `Origin` or `Sec-Fetch-Site`. See [issue 64](https://github.com/Duang777/waybill-guardian/issues/64).
 
@@ -341,10 +400,10 @@ These three projects were used to compare interaction and domain splits. None of
 | [59](https://github.com/Duang777/waybill-guardian/issues/59) | Run the demo on a real model, with structured evidence references |
 | [60](https://github.com/Duang777/waybill-guardian/issues/60) | Closed. Load JSON or CSV v1 at startup and select a waybill on the page. No highway-port network |
 | [61](https://github.com/Duang777/waybill-guardian/issues/61) | Highway-port overview and KPIs that can be checked |
-| [62](https://github.com/Duang777/waybill-guardian/issues/62) | Choose and add a LICENSE |
+| [62](https://github.com/Duang777/waybill-guardian/issues/62) | Complete. Apache-2.0, transitive dependency manifests, and `.mailmap` |
 | [64](https://github.com/Duang777/waybill-guardian/issues/64) | CSRF checks for non-GET requests |
-| [65](https://github.com/Duang777/waybill-guardian/issues/65) | Docker Compose |
-| [67](https://github.com/Duang777/waybill-guardian/issues/67) | GitHub Actions |
+| [65](https://github.com/Duang777/waybill-guardian/issues/65) | Complete. Single-container image and Docker Compose |
+| [67](https://github.com/Duang777/waybill-guardian/issues/67) | Complete. GitHub Actions |
 | [68](https://github.com/Duang777/waybill-guardian/issues/68) | Still open. This page has the diagram, the boundaries, the demo entry, and the file-format checks. Measured KPIs and a dubbed video are still open |
 | [77](https://github.com/Duang777/waybill-guardian/issues/77) | Frontend visual work, including issues 69 through 76 |
 
@@ -354,9 +413,13 @@ The social preview image is [`docs/assets/social-preview.png`](docs/assets/socia
 
 ## License
 
-This repository has no `LICENSE` file, and no open-source license has been chosen. See [issue 62](https://github.com/Duang777/waybill-guardian/issues/62). Until that file lands, do not treat this repository as granted under an OSI license.
+This project uses the [Apache License 2.0](LICENSE). Transitive Go and Web dependency manifests are
+in [`docs/licenses/`](docs/licenses/). External model and map service terms are recorded in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-Third-party component licenses are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+The repository does not rewrite existing Git history. `.mailmap` makes local commands such as
+`git shortlog` display old company-email commits under the maintainer's personal identity. It does
+not change commit objects or SHAs. Future commits use a personal or GitHub noreply address.
 
 ## Further reading
 
