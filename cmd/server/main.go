@@ -50,9 +50,10 @@ type eventRuntimeConfig struct {
 }
 
 type realPlatformRuntimeConfig struct {
-	profileID  string
-	readSource string
-	adapter    tmssandbox.Config
+	profileID     string
+	readSource    string
+	reconcilePoll time.Duration
+	adapter       tmssandbox.Config
 }
 
 type platformRuntime struct {
@@ -61,6 +62,7 @@ type platformRuntime struct {
 	activeActions []domain.Action
 	profileID     string
 	readSource    string
+	reconcilePoll time.Duration
 }
 
 func main() {
@@ -221,6 +223,7 @@ func run() error {
 		"profile", runtimeProfile.profileID,
 		"read_source", runtimeProfile.readSource,
 		"write_actions", runtimeProfile.writeRuntime.AdvertisedActions(),
+		"effect_reconcile_poll_interval", runtimeProfile.reconcilePoll,
 	)
 	defer service.Close()
 	if err := service.Recover(context.Background()); err != nil {
@@ -286,6 +289,11 @@ func run() error {
 		func(ctx context.Context) error {
 			return serve(ctx, server, listener)
 		},
+	}
+	if runtimeProfile.reconcilePoll > 0 {
+		components = append(components, func(ctx context.Context) error {
+			return service.RunEffectReconciler(ctx, runtimeProfile.reconcilePoll)
+		})
 	}
 	if dispatcher != nil {
 		components = append(components, dispatcher.Run)
@@ -636,8 +644,9 @@ func openPlatformRuntime(
 				domain.ActionGetRoadWeather,
 				domain.ActionReassign,
 			},
-			profileID:  config.profileID,
-			readSource: config.readSource,
+			profileID:     config.profileID,
+			readSource:    config.readSource,
+			reconcilePoll: config.reconcilePoll,
 		}, nil
 	default:
 		return platformRuntime{}, errors.New("PLATFORM must be mock or real")
@@ -689,6 +698,13 @@ func realPlatformConfigFromEnv(
 	if err != nil {
 		return realPlatformRuntimeConfig{}, err
 	}
+	reconcilePoll, err := strictDurationEnv(
+		"EFFECT_RECONCILE_POLL_INTERVAL",
+		time.Second,
+	)
+	if err != nil {
+		return realPlatformRuntimeConfig{}, err
+	}
 	maxConsistencyWindow, err := strictDurationEnv(
 		"PLATFORM_MAX_LOOKUP_CONSISTENCY_WINDOW",
 		30*time.Second,
@@ -697,8 +713,9 @@ func realPlatformConfigFromEnv(
 		return realPlatformRuntimeConfig{}, err
 	}
 	return realPlatformRuntimeConfig{
-		profileID:  profileID,
-		readSource: readSource,
+		profileID:     profileID,
+		readSource:    readSource,
+		reconcilePoll: reconcilePoll,
 		adapter: tmssandbox.Config{
 			BaseURL:               baseURL,
 			Token:                 token,

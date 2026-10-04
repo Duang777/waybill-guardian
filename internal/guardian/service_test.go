@@ -13,6 +13,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/approval"
 	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/idempotency"
 	"github.com/Duang777/waybill-guardian/internal/platform"
 	"github.com/Duang777/waybill-guardian/internal/tools"
 )
@@ -536,6 +537,163 @@ func TestRecoverReplaysConfirmedApproval(t *testing.T) {
 	}
 }
 
+func TestEffectReconcilerResumesDuePreparedApproval(t *testing.T) {
+	clients, mock, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := Open(Config{DataDir: t.TempDir(), Clients: clients, StepDelay: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+
+	run, err := service.StartDemo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := waitForApproval(t, service, run.RunID)
+	confirmed, err := service.approvals.Decide(context.Background(), pending.ID, approval.Decision{
+		Kind:      approval.DecisionConfirm,
+		DecidedBy: "reconciler-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := confirmed.Items[0].Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.effects = &scheduledRecoveryExecutor{
+		Executor: service.effects,
+		command: idempotency.Command{
+			RunID:    confirmed.RunID,
+			CallID:   confirmed.Items[0].CallID,
+			Identity: identity,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- service.RunEffectReconciler(ctx, 5*time.Millisecond)
+	}()
+	waitForRunStatus(t, service, run.RunID, domain.RunCompleted)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("effect reconciler did not stop")
+	}
+
+	recovered, err := service.GetApproval(confirmed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != approval.StatusExecuted {
+		t.Fatalf("approval status = %q, want executed", recovered.Status)
+	}
+	if mock.WriteCount(domain.ActionReassign) != 1 ||
+		mock.WriteCount(domain.ActionSendSMS) != 2 {
+		t.Fatalf(
+			"writes = reassign:%d sms:%d",
+			mock.WriteCount(domain.ActionReassign),
+			mock.WriteCount(domain.ActionSendSMS),
+		)
+	}
+}
+
+func TestEffectReconcilerKeepsBusyAndPendingEffectsPaused(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome idempotency.RecoveryOutcome
+	}{
+		{
+			name: "busy",
+			outcome: idempotency.RecoveryOutcome{
+				Decision: idempotency.RecoveryBusy,
+				State:    idempotency.StateStarted,
+			},
+		},
+		{
+			name: "pending",
+			outcome: idempotency.RecoveryOutcome{
+				Decision: idempotency.RecoveryPending,
+				State:    idempotency.StateUnknown,
+				RetryAt:  time.Now().UTC().Add(time.Minute),
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clients, mock, err := tools.NewDemoClients()
+			if err != nil {
+				t.Fatal(err)
+			}
+			service, err := Open(Config{
+				DataDir:   t.TempDir(),
+				Clients:   clients,
+				StepDelay: 0,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer service.Close()
+
+			run, err := service.StartDemo(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending := waitForApproval(t, service, run.RunID)
+			confirmed, err := service.approvals.Decide(
+				context.Background(),
+				pending.ID,
+				approval.Decision{
+					Kind:      approval.DecisionConfirm,
+					DecidedBy: "reconciler-test",
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			identity, err := confirmed.Items[0].Identity()
+			if err != nil {
+				t.Fatal(err)
+			}
+			service.effects = &fixedRecoveryExecutor{
+				Executor: service.effects,
+				command: idempotency.Command{
+					RunID:    confirmed.RunID,
+					CallID:   confirmed.Items[0].CallID,
+					Identity: identity,
+				},
+				outcome: test.outcome,
+			}
+
+			if err := service.reconcileDueEffects(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			recovered, err := service.GetApproval(confirmed.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if recovered.Status != approval.StatusReconciliationRequired {
+				t.Fatalf(
+					"approval status = %q, want reconciliation_required",
+					recovered.Status,
+				)
+			}
+			if mock.WriteCount(domain.ActionReassign) != 0 ||
+				mock.WriteCount(domain.ActionSendSMS) != 0 {
+				t.Fatal("busy or pending recovery resumed mutations")
+			}
+		})
+	}
+}
+
 func TestRecoverReschedulesPendingApprovalExpiry(t *testing.T) {
 	dataDir := t.TempDir()
 	clients, _, err := tools.NewDemoClients()
@@ -961,7 +1119,9 @@ func waitForDifferentApproval(
 		time.Sleep(10 * time.Millisecond)
 	}
 	run, _ := service.GetRun(runID)
-	t.Fatalf("timed out waiting for approval; run=%+v", run)
+	events, _ := service.Replay(context.Background(), runID, 0)
+	encodedEvents, _ := json.Marshal(events)
+	t.Fatalf("timed out waiting for approval; run=%+v events=%s", run, encodedEvents)
 	return approval.Approval{}
 }
 
@@ -979,7 +1139,14 @@ func waitForRunStatus(t *testing.T, service *Service, runID domain.RunID, want d
 		time.Sleep(10 * time.Millisecond)
 	}
 	run, _ := service.GetRun(runID)
-	t.Fatalf("timed out waiting for run status %q; run=%+v", want, run)
+	events, _ := service.Replay(context.Background(), runID, 0)
+	encodedEvents, _ := json.Marshal(events)
+	t.Fatalf(
+		"timed out waiting for run status %q; run=%+v events=%s",
+		want,
+		run,
+		encodedEvents,
+	)
 	return RunView{}
 }
 
@@ -1029,4 +1196,49 @@ func (unknownLookupTMS) LookupEffect(
 	platform.LookupEffectRequest,
 ) (platform.EffectResult, error) {
 	return platform.EffectResult{Disposition: platform.EffectUnknown}, nil
+}
+
+type scheduledRecoveryExecutor struct {
+	idempotency.Executor
+	command idempotency.Command
+}
+
+func (e *scheduledRecoveryExecutor) DueRecoveries(
+	context.Context,
+) ([]idempotency.Command, error) {
+	state, ok := e.Status(e.command)
+	if ok {
+		switch state {
+		case idempotency.StateSucceeded,
+			idempotency.StatePermanentFailed,
+			idempotency.StateManualReview:
+			return nil, nil
+		}
+	}
+	return []idempotency.Command{e.command}, nil
+}
+
+type fixedRecoveryExecutor struct {
+	idempotency.Executor
+	command idempotency.Command
+	outcome idempotency.RecoveryOutcome
+}
+
+func (e *fixedRecoveryExecutor) DueRecoveries(
+	context.Context,
+) ([]idempotency.Command, error) {
+	return []idempotency.Command{e.command}, nil
+}
+
+func (e *fixedRecoveryExecutor) Recover(
+	context.Context,
+	idempotency.Command,
+) (idempotency.RecoveryOutcome, error) {
+	return e.outcome, nil
+}
+
+func (e *fixedRecoveryExecutor) Status(
+	idempotency.Command,
+) (idempotency.State, bool) {
+	return e.outcome.State, true
 }

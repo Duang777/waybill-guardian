@@ -168,6 +168,10 @@ func (r *Repository) AcquireRun(
 	}, nil
 }
 
+func (r *Repository) IsRunUnavailable(err error) bool {
+	return errors.Is(err, ErrRunLeaseHeld) || errors.Is(err, ErrRunQuarantined)
+}
+
 func (r *Repository) validateClaimOwner(claim *runClaim) error {
 	if claim == nil || claim.repository != r || claim.runID == "" ||
 		claim.owner != r.workerID || claim.fence <= 0 {

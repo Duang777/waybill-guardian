@@ -551,6 +551,7 @@ func TestRealPlatformConfigFromEnv(t *testing.T) {
 	t.Setenv("PLATFORM_REQUEST_TIMEOUT", "4s")
 	t.Setenv("PLATFORM_STARTUP_TIMEOUT", "6s")
 	t.Setenv("EFFECT_RECONCILE_HORIZON", "48h")
+	t.Setenv("EFFECT_RECONCILE_POLL_INTERVAL", "750ms")
 	t.Setenv("PLATFORM_MAX_LOOKUP_CONSISTENCY_WINDOW", "45s")
 
 	config, err := realPlatformConfigFromEnv("tenant-a")
@@ -565,6 +566,7 @@ func TestRealPlatformConfigFromEnv(t *testing.T) {
 		config.adapter.RequestTimeout != 4*time.Second ||
 		config.adapter.StartupTimeout != 6*time.Second ||
 		config.adapter.ReconciliationHorizon != 48*time.Hour ||
+		config.reconcilePoll != 750*time.Millisecond ||
 		config.adapter.MaxConsistencyWindow != 45*time.Second ||
 		config.adapter.Clock == nil {
 		t.Fatalf("real platform config = %+v", config)
@@ -605,6 +607,12 @@ func TestRealPlatformConfigRejectsIncompleteOrCrossTenantProfile(t *testing.T) {
 		{
 			name:     "invalid timeout",
 			key:      "PLATFORM_REQUEST_TIMEOUT",
+			value:    "0s",
+			tenantID: "tenant-a",
+		},
+		{
+			name:     "invalid reconcile poll",
+			key:      "EFFECT_RECONCILE_POLL_INTERVAL",
 			value:    "0s",
 			tenantID: "tenant-a",
 		},
@@ -651,6 +659,7 @@ func setValidRealPlatformEnv(t *testing.T) {
 		"PLATFORM_REQUEST_TIMEOUT":               "",
 		"PLATFORM_STARTUP_TIMEOUT":               "",
 		"EFFECT_RECONCILE_HORIZON":               "",
+		"EFFECT_RECONCILE_POLL_INTERVAL":         "",
 		"PLATFORM_MAX_LOOKUP_CONSISTENCY_WINDOW": "",
 	} {
 		t.Setenv(name, value)

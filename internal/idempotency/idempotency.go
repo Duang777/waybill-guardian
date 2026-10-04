@@ -56,6 +56,10 @@ type Executor interface {
 	Status(Command) (State, bool)
 }
 
+type RecoverySource interface {
+	DueRecoveries(context.Context) ([]Command, error)
+}
+
 type StoreConfig struct {
 	Runtime platform.WriteRuntime
 	Clock   func() time.Time

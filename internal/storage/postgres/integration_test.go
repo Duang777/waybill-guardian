@@ -1665,6 +1665,93 @@ func TestRepositoryValidatesRecoveryCoverage(t *testing.T) {
 	}
 }
 
+func TestRepositoryListsOnlyDueEffectRecoveries(t *testing.T) {
+	db := openIntegrationDB(t)
+	tenantID := "tenant-" + uuid.NewString()
+	clients, _, err := guardtools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := guardtools.NewFixtureWriteRuntime(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := newIntegrationRepository(t, db, tenantID, "worker-due", runtime)
+	defer repository.Close()
+
+	runID := domain.RunID(uuid.NewString())
+	_, command, _ := prepareApprovedReassignEffect(
+		t,
+		repository,
+		runID,
+		"CARRIER-SW-42",
+	)
+	assertDue := func(want int) {
+		t.Helper()
+		commands, err := repository.DueRecoveries(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(commands) != want {
+			t.Fatalf("due recoveries = %+v, want %d", commands, want)
+		}
+		if want == 1 && commands[0] != command {
+			t.Fatalf("due recovery = %+v, want %+v", commands[0], command)
+		}
+	}
+	assertDue(1)
+
+	if _, err := db.pool.Exec(t.Context(), `
+		UPDATE waybill.effects
+		SET status = 'dispatching',
+		    lease_owner = 'live-worker',
+		    lease_deadline = clock_timestamp() + interval '1 hour'
+		WHERE tenant_id = $1 AND effect_id = $2
+	`, tenantID, command.Identity.EffectID); err != nil {
+		t.Fatal(err)
+	}
+	assertDue(0)
+
+	if _, err := db.pool.Exec(t.Context(), `
+		UPDATE waybill.effects
+		SET lease_deadline = clock_timestamp() - interval '1 second'
+		WHERE tenant_id = $1 AND effect_id = $2
+	`, tenantID, command.Identity.EffectID); err != nil {
+		t.Fatal(err)
+	}
+	assertDue(1)
+
+	if _, err := db.pool.Exec(t.Context(), `
+		UPDATE waybill.effects
+		SET status = 'unknown',
+		    retry_after = clock_timestamp() + interval '1 hour',
+		    lease_owner = NULL,
+		    lease_deadline = NULL
+		WHERE tenant_id = $1 AND effect_id = $2
+	`, tenantID, command.Identity.EffectID); err != nil {
+		t.Fatal(err)
+	}
+	assertDue(0)
+
+	if _, err := db.pool.Exec(t.Context(), `
+		UPDATE waybill.effects
+		SET retry_after = clock_timestamp() - interval '1 second'
+		WHERE tenant_id = $1 AND effect_id = $2
+	`, tenantID, command.Identity.EffectID); err != nil {
+		t.Fatal(err)
+	}
+	assertDue(1)
+
+	if _, err := db.pool.Exec(t.Context(), `
+		UPDATE waybill.effects
+		SET status = 'succeeded', retry_after = NULL
+		WHERE tenant_id = $1 AND effect_id = $2
+	`, tenantID, command.Identity.EffectID); err != nil {
+		t.Fatal(err)
+	}
+	assertDue(0)
+}
+
 func TestRepositoryExecutesAndReplaysApprovedEffect(t *testing.T) {
 	db := openIntegrationDB(t)
 	tenantID := "tenant-" + uuid.NewString()

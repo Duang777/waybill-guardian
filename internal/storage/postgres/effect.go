@@ -291,6 +291,79 @@ func (r *Repository) ValidateRecoveryCoverage(ctx context.Context) error {
 	return nil
 }
 
+func (r *Repository) DueRecoveries(
+	ctx context.Context,
+) ([]idempotency.Command, error) {
+	if err := r.checkOpen(); err != nil {
+		return nil, err
+	}
+	rows, err := r.db.pool.Query(ctx, `
+		SELECT e.run_id, e.call_id, e.identity_version, e.effect_id,
+		       e.idempotency_key, e.action, e.arguments_hash
+		FROM waybill.effects e
+		JOIN waybill.approval_effects ae
+		  ON ae.tenant_id = e.tenant_id AND ae.effect_id = e.effect_id
+		JOIN waybill.approvals a
+		  ON a.tenant_id = ae.tenant_id AND a.approval_id = ae.approval_id
+		WHERE e.tenant_id = $1
+		  AND a.status IN ('confirmed', 'reconciliation_required')
+		  AND (
+		      e.status = 'prepared'
+		      OR (
+		          e.status IN ('retryable_failed', 'unknown')
+		          AND (
+		              e.retry_after IS NULL
+		              OR e.retry_after <= clock_timestamp()
+		          )
+		      )
+		      OR (
+		          e.status IN ('dispatching', 'reconciling')
+		          AND (
+		              e.lease_deadline IS NULL
+		              OR e.lease_deadline <= clock_timestamp()
+		          )
+		      )
+		  )
+		ORDER BY COALESCE(e.retry_after, e.lease_deadline, e.updated_at), e.effect_id
+	`, r.tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list due PostgreSQL effect recoveries: %w", err)
+	}
+	defer rows.Close()
+
+	var commands []idempotency.Command
+	for rows.Next() {
+		var command idempotency.Command
+		var callID *string
+		if err := rows.Scan(
+			&command.RunID,
+			&callID,
+			&command.Identity.Version,
+			&command.Identity.EffectID,
+			&command.Identity.Key,
+			&command.Identity.Action,
+			&command.Identity.ArgumentsHash,
+		); err != nil {
+			return nil, fmt.Errorf("scan due PostgreSQL effect recovery: %w", err)
+		}
+		if callID != nil {
+			command.CallID = *callID
+		}
+		if err := validateEffectCommand(command); err != nil {
+			return nil, fmt.Errorf(
+				"validate due PostgreSQL effect %q: %w",
+				command.Identity.EffectID,
+				err,
+			)
+		}
+		commands = append(commands, command)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read due PostgreSQL effect recoveries: %w", err)
+	}
+	return commands, nil
+}
+
 func (r *Repository) acquireDispatch(
 	ctx context.Context,
 	effect idempotency.AuthorizedEffect,
@@ -1265,3 +1338,4 @@ func databaseEffectStateOrUnknown(status string) idempotency.State {
 }
 
 var _ idempotency.Executor = (*Repository)(nil)
+var _ idempotency.RecoverySource = (*Repository)(nil)
