@@ -145,7 +145,11 @@ func (a *Adapter) Dispatch(
 			ResponseDigest:    responseDigest,
 		}
 	}
-	if decoded && isConflictResponse(response.StatusCode, envelope) {
+	if decoded && isConflictResponse(
+		response.StatusCode,
+		envelope,
+		binding.ProviderRequestHash,
+	) {
 		return platform.DispatchResult{
 			Disposition:       platform.EffectPermanentFailed,
 			ExternalRequestID: requestID(response, envelope.RequestID),
@@ -342,14 +346,29 @@ func validateApplied(
 			envelope.Result.CarrierID != mutation.CarrierID) {
 		return nil, false
 	}
+	resultMutation := reassignMutation{
+		Action:    domain.ActionReassign,
+		WaybillID: envelope.Result.WaybillID,
+		CarrierID: envelope.Result.CarrierID,
+	}
+	payload, err := json.Marshal(resultMutation)
+	if err != nil || digest(payload) != requestHash {
+		return nil, false
+	}
 	result, err := json.Marshal(envelope.Result)
 	return result, err == nil
 }
 
-func isConflictResponse(statusCode int, envelope effectEnvelope) bool {
+func isConflictResponse(
+	statusCode int,
+	envelope effectEnvelope,
+	requestHash string,
+) bool {
 	return statusCode == http.StatusConflict &&
 		envelope.Status == statusConflict &&
 		envelope.Action == domain.ActionReassign &&
+		validDigest(envelope.RequestHash) &&
+		envelope.RequestHash != requestHash &&
 		envelope.ErrorCode == "idempotency_conflict"
 }
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -91,13 +92,41 @@ func TestDispatchClassifiesProviderResponses(t *testing.T) {
 				return effectEnvelope{
 					Status:      statusConflict,
 					Action:      domain.ActionReassign,
-					RequestHash: binding.ProviderRequestHash,
+					RequestHash: strings.Repeat("b", 64),
 					RequestID:   "request-conflict",
 					ErrorCode:   "idempotency_conflict",
 				}
 			},
 			disposition: platform.EffectPermanentFailed,
 			errorCode:   "idempotency_conflict",
+		},
+		{
+			name:   "conflict repeats current hash",
+			status: http.StatusConflict,
+			body: func(binding platform.EffectBinding) any {
+				return effectEnvelope{
+					Status:      statusConflict,
+					Action:      domain.ActionReassign,
+					RequestHash: binding.ProviderRequestHash,
+					ErrorCode:   "idempotency_conflict",
+				}
+			},
+			disposition: platform.EffectUnknown,
+			errorCode:   "provider_unknown",
+		},
+		{
+			name:   "conflict has invalid hash",
+			status: http.StatusConflict,
+			body: func(platform.EffectBinding) any {
+				return effectEnvelope{
+					Status:      statusConflict,
+					Action:      domain.ActionReassign,
+					RequestHash: "different",
+					ErrorCode:   "idempotency_conflict",
+				}
+			},
+			disposition: platform.EffectUnknown,
+			errorCode:   "provider_unknown",
 		},
 		{
 			name:   "explicit rejection",
@@ -314,6 +343,18 @@ func TestLookupUsesExplicitProviderEvidence(t *testing.T) {
 					Action:      domain.ActionReassign,
 					RequestHash: "different",
 				}
+			},
+			disposition: platform.LookupConflict,
+			errorCode:   "lookup_conflict",
+		},
+		{
+			name:   "applied result target conflict",
+			now:    testNow.Add(6 * time.Second),
+			status: http.StatusOK,
+			body: func(binding platform.EffectBinding) any {
+				envelope := appliedEnvelope(binding.ProviderRequestHash)
+				envelope.Result.CarrierID = "CARRIER-OTHER"
+				return envelope
 			},
 			disposition: platform.LookupConflict,
 			errorCode:   "lookup_conflict",
