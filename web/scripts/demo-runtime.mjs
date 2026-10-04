@@ -47,16 +47,31 @@ export function stopProcesses(processes) {
   }
 }
 
-export async function waitForHTTP(url, process, diagnostics = [process]) {
+export async function waitForHTTP(
+  url,
+  process,
+  diagnostics = [process],
+  readinessPattern,
+) {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     const failure = processFailure(process);
     if (failure !== null) {
       throw new Error(`${failure}\n${diagnosticOutput(diagnostics)}`);
     }
+    if (!readinessPattern.test(process.diagnosticOutput())) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+      continue;
+    }
     try {
       const response = await fetch(url);
       if (response.ok) {
+        const responseFailure = processFailure(process);
+        if (responseFailure !== null) {
+          throw new Error(
+            `${responseFailure}\n${diagnosticOutput(diagnostics)}`,
+          );
+        }
         return;
       }
     } catch {

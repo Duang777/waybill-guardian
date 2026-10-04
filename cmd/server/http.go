@@ -8,6 +8,9 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/netip"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -51,6 +54,17 @@ func newHandlerWithEvents(
 	eventStore events.Ingestor,
 	eventMetrics ingestObserver,
 ) http.Handler {
+	return newHandlerWithFrontend(service, access, eventStore, eventMetrics, nil, nil)
+}
+
+func newHandlerWithFrontend(
+	service *guardian.Service,
+	access *httpauth.Boundary,
+	eventStore events.Ingestor,
+	eventMetrics ingestObserver,
+	frontend http.Handler,
+	trustedLocalRemotes []netip.Addr,
+) http.Handler {
 	server := &api{
 		service:      service,
 		access:       access,
@@ -77,10 +91,40 @@ func newHandlerWithEvents(
 		eventMux.HandleFunc("POST /v1/events", server.ingestEvent)
 		root.Handle("/v1/events", authenticateAPI(access, eventMux))
 	}
+	if frontend != nil {
+		root.Handle("/", readOnlyFiles(frontend))
+	}
 	if access.Mode() == httpauth.ModeLocal {
-		return loopbackHostOnly(root)
+		return loopbackHostOnly(root, trustedLocalRemotes)
 	}
 	return root
+}
+
+func staticFileHandler(directory string) (http.Handler, error) {
+	directory = strings.TrimSpace(directory)
+	if directory == "" {
+		return nil, nil
+	}
+	indexPath := filepath.Join(directory, "index.html")
+	info, err := os.Stat(indexPath)
+	if err != nil {
+		return nil, fmt.Errorf("open WEB_STATIC_DIR index %q: %w", indexPath, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("WEB_STATIC_DIR index %q is not a regular file", indexPath)
+	}
+	return http.FileServer(http.Dir(directory)), nil
+}
+
+func readOnlyFiles(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (a *api) ingestEvent(w http.ResponseWriter, r *http.Request) {
@@ -208,14 +252,33 @@ func authenticateAPI(access *httpauth.Boundary, next http.Handler) http.Handler 
 	})
 }
 
-func loopbackHostOnly(next http.Handler) http.Handler {
+func loopbackHostOnly(next http.Handler, trustedRemotes []netip.Addr) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := validateRequestHost(r.Host); err != nil {
 			writeProblem(w, http.StatusForbidden, "invalid_host", "request host must be a loopback IP address")
 			return
 		}
+		if err := validateRequestRemote(r.RemoteAddr, trustedRemotes); err != nil {
+			writeProblem(w, http.StatusForbidden, "invalid_remote", "request source is not trusted")
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func validateRequestRemote(value string, trusted []netip.Addr) error {
+	if len(trusted) == 0 {
+		return nil
+	}
+	remote, err := netip.ParseAddrPort(value)
+	if err != nil {
+		return fmt.Errorf("request source must include an IP address and port")
+	}
+	address := remote.Addr().Unmap()
+	if address.IsLoopback() || slices.Contains(trusted, address) {
+		return nil
+	}
+	return fmt.Errorf("request source is not trusted")
 }
 
 func (a *api) health(w http.ResponseWriter, _ *http.Request) {

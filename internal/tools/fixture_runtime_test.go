@@ -48,6 +48,40 @@ func TestFixtureWriteRuntimeDispatchesAndLooksUpByStableKey(t *testing.T) {
 	}
 }
 
+func TestFixtureWriteRuntimeScopesRecoveryToSource(t *testing.T) {
+	reads, _, err := NewDemoRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := NewFixtureWriteRuntimeForSource(reads, "dataset-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewFixtureWriteRuntimeForSource(reads, "dataset-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := first.Bind(
+		platform.EffectRequest{
+			Action: domain.ActionReassign,
+			Arguments: json.RawMessage(
+				`{"carrier_id":"CARRIER-SW-42","waybill_id":"YD2026101001"}`,
+			),
+		},
+		"fixture-effect-key",
+		time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.SupportsRecovery(binding) {
+		t.Fatal("source runtime rejected its own binding")
+	}
+	if second.SupportsRecovery(binding) {
+		t.Fatal("another source runtime accepted the binding")
+	}
+}
+
 func TestFixtureWriteRuntimeTreatsBusinessRejectionAsPermanent(t *testing.T) {
 	_, runtime, err := NewDemoRuntime()
 	if err != nil {

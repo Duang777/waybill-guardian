@@ -77,7 +77,7 @@ func loadBytes(format string, raw []byte) (Loaded, error) {
 		Format:        format,
 		SchemaVersion: draft.SchemaVersion,
 		DatasetID:     draft.DatasetID,
-		DigestPrefix:  hex.EncodeToString(digest[:])[:12],
+		Digest:        hex.EncodeToString(digest[:]),
 	}
 	return Loaded{
 		Reads:  snapshot.readSet(),

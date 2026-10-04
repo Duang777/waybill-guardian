@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,7 +22,8 @@ const (
 )
 
 type FixtureWriteRuntime struct {
-	reads platform.ReadSet
+	reads       platform.ReadSet
+	scopeDigest string
 
 	mu            sync.Mutex
 	reassignments map[domain.IdempotencyKey]platform.ReassignOrder
@@ -31,11 +33,22 @@ type FixtureWriteRuntime struct {
 }
 
 func NewFixtureWriteRuntime(reads platform.ReadSet) (*FixtureWriteRuntime, error) {
+	return NewFixtureWriteRuntimeForSource(reads, FixtureRuntimeAdapterID)
+}
+
+func NewFixtureWriteRuntimeForSource(
+	reads platform.ReadSet,
+	sourceIdentity string,
+) (*FixtureWriteRuntime, error) {
 	if reads.TMS == nil || reads.Weather == nil || reads.Catalog == nil {
 		return nil, fmt.Errorf("fixture read set is incomplete")
 	}
+	if strings.TrimSpace(sourceIdentity) == "" {
+		return nil, fmt.Errorf("fixture source identity is required")
+	}
 	return &FixtureWriteRuntime{
 		reads:         reads,
+		scopeDigest:   fixtureDigest([]byte(sourceIdentity)),
 		reassignments: make(map[domain.IdempotencyKey]platform.ReassignOrder),
 		claims:        make(map[domain.IdempotencyKey]platform.ClaimOrder),
 		messages:      make(map[domain.IdempotencyKey]platform.SMSReceipt),
@@ -69,7 +82,7 @@ func (r *FixtureWriteRuntime) Bind(
 		AdapterID:               FixtureRuntimeAdapterID,
 		ContractVersion:         fixtureRuntimeContractVersion,
 		ProviderOperation:       string(request.Action),
-		ProviderScopeDigest:     fixtureDigest([]byte(FixtureRuntimeAdapterID)),
+		ProviderScopeDigest:     r.scopeDigest,
 		ProviderRequestHash:     fixtureDigest(request.Arguments),
 		KeyCreatedAt:            createdAt,
 		KeyExpiresAt:            createdAt.Add(fixtureRuntimeKeyRetention),
@@ -190,7 +203,7 @@ func (r *FixtureWriteRuntime) SupportsRecovery(binding platform.EffectBinding) b
 		binding.AdapterID == FixtureRuntimeAdapterID &&
 		binding.ContractVersion == fixtureRuntimeContractVersion &&
 		binding.ProviderOperation == string(binding.Action) &&
-		binding.ProviderScopeDigest == fixtureDigest([]byte(FixtureRuntimeAdapterID)) &&
+		binding.ProviderScopeDigest == r.scopeDigest &&
 		validFixtureDigest(binding.ProviderRequestHash) &&
 		!binding.KeyCreatedAt.IsZero() &&
 		binding.KeyExpiresAt.Equal(binding.KeyCreatedAt.Add(fixtureRuntimeKeyRetention)) &&

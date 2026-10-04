@@ -2,6 +2,7 @@ package guardian
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -78,8 +79,11 @@ type runStartedPayload struct {
 }
 
 var (
-	ErrServiceClosed             = errors.New("guardian service is closed")
-	ErrRecoverySourceUnavailable = errors.New("effect recovery source is unavailable")
+	ErrServiceClosed              = errors.New("guardian service is closed")
+	ErrRecoverySourceUnavailable  = errors.New("effect recovery source is unavailable")
+	ErrRecoveryReadSourceMismatch = errors.New(
+		"run recovery read source does not match the configured source",
+	)
 )
 
 type Service struct {
@@ -492,6 +496,9 @@ func (s *Service) Recover(ctx context.Context) error {
 		return err
 	}
 	defer s.wg.Done()
+	if err := s.validateRecoveryReadSources(ctx); err != nil {
+		return err
+	}
 
 	values := s.approvals.List()
 	latestPlan := make(map[domain.RunID]int)
@@ -544,6 +551,35 @@ func (s *Service) Recover(ctx context.Context) error {
 		lock.Lock()
 		s.recordFailure(run.RunID, errors.New("run stopped before a durable approval checkpoint"))
 		lock.Unlock()
+	}
+	return nil
+}
+
+func (s *Service) validateRecoveryReadSources(ctx context.Context) error {
+	for _, run := range s.runSnapshot() {
+		if isTerminal(run.Status) {
+			continue
+		}
+		events, err := s.journal.Replay(ctx, run.RunID, 0)
+		if err != nil {
+			return err
+		}
+		if len(events) == 0 || events[0].Type != audit.EventRunStarted {
+			return fmt.Errorf("run %q has no run_started prefix", run.RunID)
+		}
+		var payload runStartedPayload
+		if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+			return fmt.Errorf("decode run %q source: %w", run.RunID, err)
+		}
+		if payload.ReadSource != s.readSource {
+			return fmt.Errorf(
+				"%w: run %q uses %q, configured %q",
+				ErrRecoveryReadSourceMismatch,
+				run.RunID,
+				payload.ReadSource,
+				s.readSource,
+			)
+		}
 	}
 	return nil
 }

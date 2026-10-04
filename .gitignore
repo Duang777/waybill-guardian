@@ -12,6 +12,7 @@ web/artifacts/
 web/*.tsbuildinfo
 web/.env
 web/.env.local
+/.env
 
 # local data
 *.db
