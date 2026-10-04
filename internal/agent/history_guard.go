@@ -28,7 +28,6 @@ var (
 	licensePlatePattern     = regexp.MustCompile(`[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领][A-HJ-NP-Z][· -]?[A-HJ-NP-Z0-9]{5,6}`)
 	forbiddenJSONKeyPattern = regexp.MustCompile(`(?i)"(shipper_phone|phone|plate|license_plate|longitude|latitude|template_id|params)"[[:space:]]*:`)
 	opaqueIDPattern         = regexp.MustCompile(`^(?:(?:msg_|fc_|call_)[0-9a-f]{16}|(?:RA|CL|SMS)-[0-9a-f]{12})$`)
-	identifierPrefixPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
 	forbiddenHistoryKeys    = map[string]struct{}{
 		"phone":         {},
 		"shipper_phone": {},
@@ -267,16 +266,9 @@ func isOpaqueHistoryIdentifier(key string, value string) bool {
 	if isOpaqueUUID(value) || opaqueIDPattern.MatchString(value) {
 		return true
 	}
-	const uuidLength = 36
-	if len(value) <= uuidLength+1 {
-		return false
-	}
-	separator := len(value) - uuidLength - 1
-	if value[separator] != '-' && value[separator] != '_' {
-		return false
-	}
-	return identifierPrefixPattern.MatchString(value[:separator]) &&
-		isCanonicalUUID(value[separator+1:])
+	return key == "incident_id" &&
+		strings.HasPrefix(value, "delay-") &&
+		isCanonicalUUID(strings.TrimPrefix(value, "delay-"))
 }
 
 func isOpaqueUUID(value string) bool {

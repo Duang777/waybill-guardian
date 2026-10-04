@@ -19,6 +19,12 @@ func TestHistoryGuardRejectsProhibitedData(t *testing.T) {
 		{name: "mobile number", value: map[string]any{"text": "contact 13800138000"}},
 		{name: "hyphenated mobile number", value: map[string]any{"text": "contact 138-0013-8000"}},
 		{name: "spaced mobile number", value: map[string]any{"text": "contact 138 0013 8000"}},
+		{
+			name: "mobile number hidden in prefixed UUID",
+			value: map[string]any{
+				"customer_id": "customer-13800138-000a-4abc-8def-123456789abc",
+			},
+		},
 		{name: "license plate", value: map[string]any{"text": "vehicle 浙A12345"}},
 		{name: "dotted license plate", value: map[string]any{"text": "vehicle 浙A·12345"}},
 		{name: "hyphenated license plate", value: map[string]any{"text": "vehicle 浙A-12345"}},
