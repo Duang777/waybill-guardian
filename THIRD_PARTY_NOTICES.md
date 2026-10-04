@@ -30,6 +30,8 @@ provider fallback middleware，但当前实现没有配置 fallback。
 | npm 包 | 版本 | 许可证 | 用途 |
 |---|---|---|---|
 | `react`、`react-dom` | `19.3.0` | MIT | 页面和状态渲染 |
+| `three` | `0.186.1` | MIT | 全国公路港三维场景、合批几何和 WebGL 渲染 |
+| `@react-three/fiber` | `9.8.1` | MIT | Three.js 的 React renderer 和场景生命周期 |
 | `@amap/amap-jsapi-loader` | `1.0.1` | MIT | 按需加载高德 JS API |
 | `lucide-react` | `1.50.0` | ISC | 界面图标 |
 | `zod` | `4.6.5` | MIT | 浏览器端 API 边界校验 |
@@ -41,6 +43,7 @@ provider fallback middleware，但当前实现没有配置 fallback。
 | `@amap/amap-jsapi-types` | `0.0.15` | MIT |
 | `@types/node` | `24.10.0` | MIT |
 | `@types/react`、`@types/react-dom` | `19.3.0` | MIT |
+| `@types/three` | `0.186.0` | MIT |
 | `@vitejs/plugin-react` | `6.1.1` | MIT |
 | `vite` | `8.3.2` | MIT |
 | `vitest` | `5.0.3` | MIT |
@@ -83,5 +86,11 @@ provider fallback middleware，但当前实现没有配置 fallback。
   风险评分展示和 append-only audit。
 - [dominicfinn/open_tms](https://github.com/dominicfinn/open_tms)：
   shipment、carrier 和 operational issue 领域划分。
+- [WareTrack 概念视频](https://x.com/threejs/status/2106721710670238104)：
+  只借鉴“等轴测运营沙盘”和“对象即数据”的视觉语言。原作者未发布代码或许可证，
+  本仓库没有使用其代码、模型、纹理或其他素材。
+- [BoardUI](https://github.com/BoardUI/boardui)：
+  参考其 MIT 许可公开源码中的浅灰分组底、白色内部工作面板、轻量接触阴影和分段控件
+  层级。本仓库使用 CSS Modules 独立实现，没有复制 BoardUI 组件、模板或素材。
 
 若以后复制第三方文件或代码片段，必须在此登记项目、来源路径、目标路径、用途和许可证要求。

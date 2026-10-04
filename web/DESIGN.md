@@ -2,21 +2,30 @@
 
 ## 1. Visual theme and atmosphere
 
-The interface is a logistics control tower for dispatch operators. It uses a light, dense
-workspace with precise dividers, restrained elevation, and a single amber incident signal.
+The interface is a white logistics strategy table for dispatch operators. The nationwide
+network is the first-viewport signal: a bright isometric 3D field with graphite labels,
+desaturated teal infrastructure, and coral risk markers. Surrounding controls stay dense,
+quiet, and grouped into a pale instrument bay so the network remains the visual center.
 Green appears only after a write operation completes.
+
+BoardUI's public dashboard patterns inform the instrument-bay hierarchy, contact shadow,
+and segmented queue control. The implementation is original CSS Modules code and keeps this
+project's tighter 6 px and 8 px radius scale instead of importing BoardUI's Tailwind or React
+Aria components.
 
 ## 2. Color palette and roles
 
 | Token | Value | Role |
 |---|---|---|
-| Canvas | `oklch(0.965 0.006 95)` | Page background |
-| Surface | `oklch(0.992 0.003 95)` | Primary work surface |
+| Canvas | `oklch(0.985 0.004 210)` | Page background |
+| Surface | `oklch(1 0 0)` | Primary work surface |
 | Ink | `oklch(0.215 0.018 255)` | Primary text |
 | Muted ink | `oklch(0.49 0.018 255)` | Secondary text |
-| Divider | `oklch(0.875 0.012 95)` | Structural separators |
-| Signal | `oklch(0.69 0.145 67)` | Delay, anomaly, pending approval |
-| Signal wash | `oklch(0.94 0.045 75)` | Pending background |
+| Divider | `oklch(0.91 0.009 220)` | Structural separators |
+| Network | `oklch(0.56 0.085 183)` | Hubs, normal routes, active controls |
+| Network wash | `oklch(0.955 0.018 183)` | 3D field and selected network objects |
+| Signal | `oklch(0.62 0.18 29)` | Delay, anomaly, pending approval |
+| Signal wash | `oklch(0.96 0.035 29)` | Pending background |
 | Success | `oklch(0.55 0.11 155)` | Executed state |
 | Danger | `oklch(0.56 0.16 28)` | Rejection and destructive action |
 
@@ -30,35 +39,53 @@ Chinese. Numeric values use tabular figures. Letter spacing remains zero.
 ## 4. Component styling
 
 - Buttons use a 6 px radius, a 40 px minimum hit area, and `scale(0.96)` press feedback.
-- Operational panels are flush sections separated by 1 px dividers.
+- The 3D map and risk queue are 8 px tool panels on one pale instrument bay.
+- Segmented controls use a quiet neutral track, 6 px white selection, and contact shadow.
+- Other operational sections remain flush and use 1 px dividers.
 - The approval object is the only elevated card because it is the human decision boundary.
 - Inputs and range controls use the signal color for active state and a visible focus ring.
 - Icon-only buttons use Lucide icons, tooltips, and accessible labels.
 
 ## 5. Layout principles
 
-Use a 4 px base spacing scale. The CEO overview uses a compact header, a four-segment KPI
-strip, a nationwide network map, a risk queue, and a read-only brief. The waybill workbench
-uses one status strip and a two-column workspace. Its left column holds the map and timeline,
-and its right column holds the decision boundary.
+Use a 4 px base spacing scale. The CEO overview uses a compact white header, a four-segment
+KPI strip, a dominant nationwide 3D network, a narrow risk queue, and a read-only brief. The
+waybill workbench uses one status strip and a two-column workspace. Its left column holds the
+map and timeline, and its right column holds the decision boundary.
 
 On the CEO overview, KPI segments form one flush band with dividers. They are not separate
-cards. The risk queue stays beside the network map on desktop and moves below the map on
-mobile. A hub or queue link opens `/waybills/:id`.
+cards. The network and queue share one pale instrument bay, with white sibling tool panels
+instead of nested cards. The network must occupy at least two thirds of the desktop workspace
+width and retain a stable 16:9-like field. The risk queue stays beside it on desktop and
+moves below it on mobile. A risk hub or queue link opens `/waybills/:id`.
+
+The risk queue exposes three views: all anomalies, unassigned anomalies, and active Agent
+runs. Selection persists across views and the summary always reports both visible and selected
+counts.
+
+The 3D field uses an orthographic isometric camera, an abstract grid instead of a geographic
+border, instanced hub columns, merged route geometry, and instanced moving shipment markers.
+Do not use a dark skybox, bloom, glass panels, map tiles, or decorative gradients.
 
 ## 6. Depth and elevation
 
-Canvas, surface, and raised approval layers differ by lightness. Only the approval card uses
-`0 12px 32px oklch(0.22 0.02 255 / 0.10)`. No blur or glass effect is used.
+Canvas, instrument bay, inner tool panel, and raised approval layers differ by lightness.
+Tool panels use only a `0 1px 1px oklch(0.2 0.01 255 / 0.05)` contact shadow. The approval
+card uses `0 12px 32px oklch(0.22 0.02 255 / 0.10)`. No blur or glass effect is used.
 
 ## 7. Do and don't
 
 - Do keep evidence and proposed effects visible without opening another surface.
 - Do link the selected route point to its timestamp and speed.
-- Do use amber only for an unresolved incident or approval.
+- Do use coral only for an unresolved incident or approval.
 - Do keep event sequence numbers aligned and readable.
+- Do keep the 3D network useful as a static frame under reduced motion.
+- Do retain the SVG network as an automatic WebGL/error fallback.
+- Do use segmented views when a dense operational list has stable, mutually exclusive modes.
 - Don't place cards inside cards.
+- Don't turn the KPI strip or intelligence brief into rounded dashboard cards.
 - Don't use a marketing hero or decorative illustration.
+- Don't use a dark header or orange/brown page palette on the overview.
 - Use the KPI band only on the CEO overview. Do not add a generic KPI tile grid to the
   waybill workbench.
 - Don't animate layout properties.
@@ -73,9 +100,12 @@ horizontal scrolling.
 
 ## 9. Agent prompt guide
 
-- "Create a flush operations panel on `oklch(0.992 0.003 95)` with 1 px
-  `oklch(0.875 0.012 95)` dividers, 8 px radius, and no shadow."
-- "Create a pending approval card with a 6 px radius, `oklch(0.94 0.045 75)` header,
-  13 px body text, and a single `oklch(0.69 0.145 67)` primary action."
+- "Create a flush operations panel on `oklch(1 0 0)` with 1 px
+  `oklch(0.91 0.009 220)` dividers, 8 px radius, and no shadow."
+- "Create a pending approval card with a 6 px radius, `oklch(0.96 0.035 29)` header,
+  13 px body text, and a single `oklch(0.62 0.18 29)` primary action."
 - "Create a compact event row with a 48 px sequence column in monospace, 13 px event title,
   12 px metadata, and a 1 px divider."
+- "Create a three-option queue segment on `oklch(0.94 0.004 210)` with 3 px track padding,
+  6 px selected radius, white selected fill, 10 px labels, and a
+  `0 1px 1px oklch(0.2 0.01 255 / 0.05)` contact shadow."

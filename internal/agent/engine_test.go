@@ -476,7 +476,7 @@ func TestOnlineEngineAppliesConfiguredRequestBudget(t *testing.T) {
 		if got != 777 {
 			t.Fatalf("max output tokens = %d, want 777", got)
 		}
-	default:
+	case <-time.After(time.Second):
 		t.Fatal("provider did not receive a request")
 	}
 }

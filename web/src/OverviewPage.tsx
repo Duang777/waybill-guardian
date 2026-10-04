@@ -21,10 +21,11 @@ import {
   type KPIReport,
   type KPIMetric,
   type Overview,
+  type RunID,
   type RunStatus,
   type WaybillID,
 } from "./api";
-import { NetworkMap } from "./components/NetworkMap";
+import { HubNetwork } from "./components/HubNetwork";
 import styles from "./overview.module.css";
 
 type OverviewResource =
@@ -37,6 +38,13 @@ type BatchState =
   | { kind: "starting" }
   | { kind: "result"; message: string; failed: number };
 
+type QueueView = "all" | "unassigned" | "active";
+
+type RunProjection = {
+  runID: RunID;
+  status: RunStatus;
+};
+
 const primaryKPIKeys = [
   "time_recovered_hours",
   "cost_impact_cny",
@@ -44,13 +52,20 @@ const primaryKPIKeys = [
   "anomaly_closure_rate_pct",
 ] as const;
 
+const queueViews = [
+  { value: "all", label: "全部" },
+  { value: "unassigned", label: "待分派" },
+  { value: "active", label: "处置中" },
+] satisfies readonly { value: QueueView; label: string }[];
+
 export function OverviewPage() {
   const [resource, setResource] = useState<OverviewResource>({ kind: "loading" });
   const [selected, setSelected] = useState<ReadonlySet<WaybillID>>(new Set());
-  const [runStatuses, setRunStatuses] = useState<
-    ReadonlyMap<WaybillID, RunStatus>
+  const [runProjections, setRunProjections] = useState<
+    ReadonlyMap<WaybillID, RunProjection>
   >(new Map());
   const [batch, setBatch] = useState<BatchState>({ kind: "idle" });
+  const [queueView, setQueueView] = useState<QueueView>("all");
   const request = useRef<AbortController | null>(null);
   const streams = useRef<Map<WaybillID, () => void>>(new Map());
 
@@ -97,6 +112,47 @@ export function OverviewPage() {
       return metric === undefined ? [] : [metric];
     });
   }, [resource]);
+  const queueEntries = useMemo(
+    () =>
+      anomalies.map((item, index) => {
+        const projection = runProjections.get(item.waybill_id);
+        const projectionIsCurrent =
+          projection !== undefined &&
+          (item.run_id === undefined || item.run_id === projection.runID);
+        return {
+          item,
+          rank: index + 1,
+          status: projectionIsCurrent ? projection.status : item.run_status,
+        };
+      }),
+    [anomalies, runProjections],
+  );
+  const queueCounts = useMemo(
+    () => ({
+      all: queueEntries.length,
+      unassigned: queueEntries.filter((entry) => entry.status === undefined).length,
+      active: queueEntries.filter((entry) => isActive(entry.status)).length,
+    }),
+    [queueEntries],
+  );
+  const visibleQueueEntries = useMemo(
+    () =>
+      queueEntries.filter((entry) => {
+        switch (queueView) {
+          case "all":
+            return true;
+          case "unassigned":
+            return entry.status === undefined;
+          case "active":
+            return isActive(entry.status);
+          default: {
+            const exhaustive: never = queueView;
+            return exhaustive;
+          }
+        }
+      }),
+    [queueEntries, queueView],
+  );
 
   const toggleSelection = (waybillID: WaybillID) => {
     setSelected((current) => {
@@ -111,26 +167,53 @@ export function OverviewPage() {
   };
 
   const selectTopFive = () => {
-    setSelected(new Set(anomalies.slice(0, 5).map((item) => item.waybill_id)));
+    setSelected(
+      new Set(
+        visibleQueueEntries
+          .filter((entry) => !isActive(entry.status))
+          .slice(0, 5)
+          .map((entry) => entry.item.waybill_id),
+      ),
+    );
   };
 
   const startSelected = async () => {
     if (selected.size === 0 || batch.kind === "starting") {
       return;
     }
+    const activeWaybillIDs = new Set(
+      queueEntries
+        .filter((entry) => isActive(entry.status))
+        .map((entry) => entry.item.waybill_id),
+    );
+    const requestedWaybillIDs = [...selected].filter(
+      (waybillID) => !activeWaybillIDs.has(waybillID),
+    );
+    if (requestedWaybillIDs.length === 0) {
+      setSelected(new Set());
+      setBatch({
+        kind: "result",
+        failed: 0,
+        message: "所选运单已在处置中",
+      });
+      return;
+    }
     setBatch({ kind: "starting" });
     try {
-      const result = await startBatch([...selected]);
+      const result = await startBatch(requestedWaybillIDs);
       const accepted = result.results.filter(
         (
           item,
         ): item is typeof item & { run: NonNullable<typeof item.run> } =>
           item.run !== undefined,
       );
-      setRunStatuses((current) => {
+      setRunProjections((current) => {
         const next = new Map(current);
         for (const item of accepted) {
-          next.set(item.waybill_id, item.run.status);
+          next.set(item.waybill_id, {
+            runID: item.run.run_id,
+            status: item.run.status,
+          });
         }
         return next;
       });
@@ -141,9 +224,12 @@ export function OverviewPage() {
           onEvent: (event) => {
             const status = statusFromEvent(event);
             if (status !== null) {
-              setRunStatuses((current) => {
+              setRunProjections((current) => {
                 const next = new Map(current);
-                next.set(item.waybill_id, status);
+                next.set(item.waybill_id, {
+                  runID: item.run.run_id,
+                  status,
+                });
                 return next;
               });
             }
@@ -170,7 +256,7 @@ export function OverviewPage() {
     } catch (error) {
       setBatch({
         kind: "result",
-        failed: selected.size,
+        failed: requestedWaybillIDs.length,
         message: errorMessage(error),
       });
     }
@@ -280,7 +366,7 @@ export function OverviewPage() {
                       {resource.overview.routes.length} 条线路
                     </span>
                   </div>
-                  <NetworkMap
+                  <HubNetwork
                     hubs={resource.overview.hubs}
                     routes={resource.overview.routes}
                     anomalies={resource.overview.anomalies}
@@ -293,10 +379,36 @@ export function OverviewPage() {
                       <span className={styles.eyebrow}>Risk queue</span>
                       <h2 id="queue-heading">异常处置队列</h2>
                     </div>
+                    <span className={styles.sectionMeta}>{anomalies.length} 项</span>
+                  </div>
+                  <div className={styles.queueControls}>
+                    <fieldset className={styles.queueSegments}>
+                      <legend className={styles.srOnly}>筛选异常处置队列</legend>
+                      {queueViews.map((view) => (
+                        <label className={styles.queueSegment} key={view.value}>
+                          <input
+                            type="radio"
+                            name="risk-queue-view"
+                            value={view.value}
+                            aria-label={view.label}
+                            checked={queueView === view.value}
+                            onChange={() => setQueueView(view.value)}
+                          />
+                          <span>
+                            {view.label}
+                            <small aria-hidden="true">{queueCounts[view.value]}</small>
+                          </span>
+                        </label>
+                      ))}
+                    </fieldset>
                     <button
                       className={styles.selectButton}
                       type="button"
-                      disabled={anomalies.length === 0}
+                      disabled={
+                        !visibleQueueEntries.some(
+                          (entry) => !isActive(entry.status),
+                        )
+                      }
                       onClick={selectTopFive}
                     >
                       <CheckCheck aria-hidden="true" size={15} />
@@ -304,7 +416,10 @@ export function OverviewPage() {
                     </button>
                   </div>
                   <div className={styles.queueSummary}>
-                    <span>{selected.size} 项已选择</span>
+                    <span>
+                      显示 {visibleQueueEntries.length} / {anomalies.length}
+                      {selected.size > 0 ? ` · 已选 ${selected.size}` : ""}
+                    </span>
                     <button
                       className={styles.batchButton}
                       type="button"
@@ -326,20 +441,28 @@ export function OverviewPage() {
                     </div>
                   )}
                   <div className={styles.queueList}>
-                    {anomalies.map((item, index) => {
-                      const status = runStatuses.get(item.waybill_id) ?? item.run_status;
-                      return (
+                    {visibleQueueEntries.length === 0 ? (
+                      <div className={styles.queueEmpty} role="status">
+                        <Bot aria-hidden="true" size={18} />
+                        当前视图暂无任务
+                      </div>
+                    ) : (
+                      visibleQueueEntries.map(({ item, rank, status }) => (
                         <article className={styles.queueItem} key={item.waybill_id}>
                           <label className={styles.queueCheck}>
                             <input
                               type="checkbox"
                               checked={selected.has(item.waybill_id)}
-                              disabled={batch.kind === "starting"}
+                              disabled={
+                                batch.kind === "starting" || isActive(status)
+                              }
                               onChange={() => toggleSelection(item.waybill_id)}
                             />
                             <span className={styles.srOnly}>选择 {item.waybill_id}</span>
                           </label>
-                          <span className={styles.queueRank}>{String(index + 1).padStart(2, "0")}</span>
+                          <span className={styles.queueRank}>
+                            {String(rank).padStart(2, "0")}
+                          </span>
                           <div className={styles.queueBody}>
                             <div className={styles.queueTitle}>
                               <a href={`/waybills/${encodeURIComponent(item.waybill_id)}`}>
@@ -364,8 +487,8 @@ export function OverviewPage() {
                             <ChevronRight aria-hidden="true" size={17} />
                           </a>
                         </article>
-                      );
-                    })}
+                      ))
+                    )}
                   </div>
                 </section>
               </div>
@@ -490,6 +613,15 @@ function isTerminal(status: RunStatus): boolean {
     status === "rejected" ||
     status === "failed" ||
     status === "review_required"
+  );
+}
+
+function isActive(status: RunStatus | undefined): boolean {
+  return (
+    status === "started" ||
+    status === "investigating" ||
+    status === "awaiting_approval" ||
+    status === "executing"
   );
 }
 
