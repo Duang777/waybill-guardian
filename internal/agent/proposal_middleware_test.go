@@ -162,6 +162,47 @@ func TestAssistantResponseTextJoinsOutputBlocksInOrder(t *testing.T) {
 	}
 }
 
+func TestAssistantResponseTextRejectsOversizedOutputBeforeJoining(t *testing.T) {
+	response := &responses.Response{
+		Output: []responses.OutputMessageUnion{
+			assistantText(strings.Repeat("a", maxAssistantResponseBytes)),
+			assistantText(strings.Repeat("b", 4<<20)),
+		},
+	}
+
+	if _, err := assistantResponseText(response); err == nil ||
+		!strings.Contains(err.Error(), "exceeds 32768 bytes") {
+		t.Fatalf("assistantResponseText error = %v", err)
+	}
+}
+
+func TestProposalRepairRequestUsesBoundedUTF8Excerpt(t *testing.T) {
+	failedText := strings.Repeat("证", maxRepairExcerptBytes)
+	request, err := proposalRepairRequest(
+		&responses.Request{},
+		&responses.Response{
+			Output: []responses.OutputMessageUnion{assistantText(failedText)},
+		},
+		errors.New("invalid"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(request.Input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), strings.Repeat("证", maxRepairExcerptBytes/3)) {
+		t.Fatal("repair request does not contain the expected UTF-8 prefix")
+	}
+	if strings.Contains(string(raw), strings.Repeat("证", maxRepairExcerptBytes/3+1)) {
+		t.Fatal("repair request exceeded the excerpt byte limit")
+	}
+	if !json.Valid(raw) {
+		t.Fatal("repair request contains invalid JSON")
+	}
+}
+
 func TestProposalBoundaryRejectsSMSCarrierOutsidePreferredAlternative(t *testing.T) {
 	store, registry, _ := proposalBoundaryFixture(t, "run-sms-alignment")
 	boundary, err := NewProposalBoundary(

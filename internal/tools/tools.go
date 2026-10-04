@@ -5,6 +5,8 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/platform"
@@ -15,6 +17,14 @@ import (
 var demoData []byte
 
 var ErrWriteMiddlewareRequired = errors.New("write middleware required")
+
+const (
+	maxToolTextBytes         = 256
+	maxToolIdentifierBytes   = 128
+	maxCandidateCarrierItems = 16
+	maxTrackingItems         = 64
+	maxRoadWeatherItems      = 32
+)
 
 func NewDemoRuntime() (platform.ReadSet, *FixtureWriteRuntime, error) {
 	loaded, err := filestore.LoadEmbeddedJSON("demo.json", demoData)
@@ -141,23 +151,40 @@ func (h *Handlers) GetWaybill(ctx context.Context, in GetWaybillInput) (GetWaybi
 	if err != nil {
 		return GetWaybillOutput{}, err
 	}
-	carriers := make([]CarrierEvidence, 0, len(waybill.CandidateCarriers))
-	for _, carrier := range waybill.CandidateCarriers {
+	waybillID, err := boundedOutputIdentifier("waybill_id", string(waybill.ID))
+	if err != nil {
+		return GetWaybillOutput{}, err
+	}
+	carrierID, err := boundedOutputIdentifier("carrier_id", string(waybill.CarrierID))
+	if err != nil {
+		return GetWaybillOutput{}, err
+	}
+	driverID, err := boundedOutputIdentifier("driver_id", string(waybill.DriverID))
+	if err != nil {
+		return GetWaybillOutput{}, err
+	}
+	candidateCount := min(len(waybill.CandidateCarriers), maxCandidateCarrierItems)
+	carriers := make([]CarrierEvidence, 0, candidateCount)
+	for _, carrier := range waybill.CandidateCarriers[:candidateCount] {
+		id, identifierErr := boundedOutputIdentifier("candidate carrier_id", string(carrier.ID))
+		if identifierErr != nil {
+			return GetWaybillOutput{}, identifierErr
+		}
 		carriers = append(carriers, CarrierEvidence{
-			ID:             carrier.ID,
-			Name:           carrier.Name,
+			ID:             domain.CarrierID(id),
+			Name:           boundedToolText(carrier.Name),
 			ETAHours:       carrier.ETAHours,
 			ReliabilityPct: carrier.ReliabilityPct,
 		})
 	}
 	return GetWaybillOutput{
-		WaybillID:         waybill.ID,
-		Origin:            waybill.Origin,
-		Destination:       waybill.Destination,
-		Cargo:             waybill.Cargo,
-		CarrierID:         waybill.CarrierID,
-		DriverID:          waybill.DriverID,
-		Status:            waybill.Status,
+		WaybillID:         domain.WaybillID(waybillID),
+		Origin:            boundedToolText(waybill.Origin),
+		Destination:       boundedToolText(waybill.Destination),
+		Cargo:             boundedToolText(waybill.Cargo),
+		CarrierID:         domain.CarrierID(carrierID),
+		DriverID:          domain.DriverID(driverID),
+		Status:            boundedToolText(waybill.Status),
 		SLAHours:          waybill.SLAHours,
 		CandidateCarriers: carriers,
 	}, nil
@@ -173,11 +200,12 @@ func (h *Handlers) GetTracking(ctx context.Context, in GetTrackingInput) (GetTra
 	if err != nil {
 		return GetTrackingOutput{}, err
 	}
-	evidence := make([]TrackingEvidence, 0, len(points))
-	for _, point := range points {
+	pointCount := min(len(points), maxTrackingItems)
+	evidence := make([]TrackingEvidence, 0, pointCount)
+	for _, point := range points[:pointCount] {
 		evidence = append(evidence, TrackingEvidence{
-			Label:      point.Label,
-			RecordedAt: point.RecordedAt,
+			Label:      boundedToolText(point.Label),
+			RecordedAt: boundedToolText(point.RecordedAt),
 			SpeedKPH:   point.SpeedKPH,
 			StopHours:  point.StopHours,
 			Anomaly:    point.Anomaly,
@@ -196,8 +224,12 @@ func (h *Handlers) GetDriver(ctx context.Context, in GetDriverInput) (GetDriverO
 	if err != nil {
 		return GetDriverOutput{}, err
 	}
+	driverID, err := boundedOutputIdentifier("driver_id", string(driver.ID))
+	if err != nil {
+		return GetDriverOutput{}, err
+	}
 	return GetDriverOutput{
-		DriverID:           driver.ID,
+		DriverID:           domain.DriverID(driverID),
 		ContinuousDriveHrs: driver.ContinuousDriveHrs,
 		FatigueAlert:       driver.FatigueAlert,
 	}, nil
@@ -211,12 +243,13 @@ func (h *Handlers) GetRoadWeather(ctx context.Context, in GetRoadWeatherInput) (
 	if err != nil {
 		return GetRoadWeatherOutput{}, err
 	}
-	evidence := make([]RoadWeatherEvidence, 0, len(segments))
-	for _, segment := range segments {
+	segmentCount := min(len(segments), maxRoadWeatherItems)
+	evidence := make([]RoadWeatherEvidence, 0, segmentCount)
+	for _, segment := range segments[:segmentCount] {
 		evidence = append(evidence, RoadWeatherEvidence{
-			Segment:    segment.Segment,
-			Condition:  segment.Condition,
-			AlertLevel: segment.AlertLevel,
+			Segment:    boundedToolText(segment.Segment),
+			Condition:  boundedToolText(segment.Condition),
+			AlertLevel: boundedToolText(segment.AlertLevel),
 		})
 	}
 	return GetRoadWeatherOutput{Segments: evidence}, nil
@@ -269,4 +302,26 @@ func validateSendSMS(in SendSMSInput) error {
 
 func validateWaybillID(id string) error {
 	return domain.ValidateWaybillID(domain.WaybillID(id))
+}
+
+func boundedOutputIdentifier(field, value string) (string, error) {
+	if !utf8.ValidString(value) {
+		return "", fmt.Errorf("%s returned invalid UTF-8", field)
+	}
+	if len(value) > maxToolIdentifierBytes {
+		return "", fmt.Errorf("%s exceeds %d bytes", field, maxToolIdentifierBytes)
+	}
+	return value, nil
+}
+
+func boundedToolText(value string) string {
+	value = strings.ToValidUTF8(value, "\uFFFD")
+	if len(value) <= maxToolTextBytes {
+		return value
+	}
+	end := maxToolTextBytes
+	for end > 0 && !utf8.RuneStart(value[end]) {
+		end--
+	}
+	return value[:end]
 }

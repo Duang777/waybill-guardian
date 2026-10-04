@@ -80,9 +80,14 @@ hastekit 自己根据 `RequiresApproval` 在首次写调用前暂停。项目 mi
 - `LLM_API_KEY`：provider 密钥。
 - `LLM_MODEL`：模型名。
 - `LLM_API_STYLE`：`responses` 或 `chat_completions`，默认 `responses`。
+- `LLM_REQUEST_TIMEOUT`：一次逻辑模型调用的总时限，默认 45 秒，覆盖结构修复和 provider retry。
+- `LLM_MAX_OUTPUT_TOKENS`：单次 provider 请求的输出上限，默认 4096，最大 32768。
 
 在线模式安装 hastekit model retry，最多尝试三次。当前只配置一个 provider，因此不启用
-provider fallback。测试覆盖两个 API style、鉴权 header、模型名、配置校验和 503 重试。
+provider fallback。`ModelRequestBudget` 位于 `ProposalBoundary` 外层，首次请求、一次结构修复
+和各自的 provider retry 共用一个 deadline。提案文本最多 32 KiB，修复请求最多回灌 4 KiB
+失败文本。读工具限制文本和数组大小；system prompt 要求模型把工具文本视为不可信业务数据。
+测试覆盖两个 API style、鉴权 header、模型名、配置校验、503 重试和上述边界。
 协议级 fake provider 还会让三张不同异常运单完成四类证据读取，并停在三个写操作的审批前。
 该测试不等同于真实模型服务验收。
 

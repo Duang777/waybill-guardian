@@ -252,6 +252,8 @@ browser E2E suites and upload `web/artifacts/*.png`.
 | `LLM_BASE_URL` | empty | Required online. The model API root without a concrete endpoint |
 | `LLM_API_KEY` | empty | Required online. Read only from the process environment |
 | `LLM_MODEL` | empty | Required online. A current model ID from the provider |
+| `LLM_REQUEST_TIMEOUT` | `45s` | Total deadline for one logical model call, including repair and provider retries. Must be a positive Go duration |
+| `LLM_MAX_OUTPUT_TOKENS` | `4096` | Maximum output tokens per provider request, from 1 through 32768 |
 | `PLATFORM` | `mock` | `mock` uses the fixture. `file` loads `DATA_FILE`. `real` uses the reassign sandbox |
 | `DATA_FILE` | empty | Required for `PLATFORM=file`. One JSON or CSV v1 file |
 | `MAX_CONCURRENT_RUNS` | `8` | Maximum concurrent investigation runs, from 1 through 64 |
@@ -369,7 +371,7 @@ The following domestic providers expose compatible Chat Completions APIs. Model 
 | Kimi | `chat_completions` | `https://api.moonshot.cn/v1` | `kimi-k3` | [Setup](https://platform.kimi.com/docs/get-api-key) · [Pricing](https://platform.kimi.com/docs/pricing/chat) |
 | Zhipu GLM | `chat_completions` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.3` | [Setup](https://docs.bigmodel.cn/cn/guide/develop/openai/introduction) · [Pricing](https://docs.bigmodel.cn/cn/guide/start/pricing) |
 
-`LLM_API_STYLE` defaults to `responses`. `LLM_BASE_URL` must be the API root. It must not end in `/`, and it must not include `/responses` or `/chat/completions`. Online mode configures one provider and does not enable provider fallback. A model call is attempted at most three times, including the first try. The audit records token usage and latency for every model call, but the server does not enforce a spending limit.
+`LLM_API_STYLE` defaults to `responses`. `LLM_BASE_URL` must be the API root. It must not end in `/`, and it must not include `/responses` or `/chat/completions`. Online mode configures one provider and does not enable provider fallback. Each provider request can return at most 4096 tokens. One logical model call has a 45-second deadline; within it, the initial request and one structural repair can each make at most three attempts. The server also limits assistant proposal text to 32 KiB and includes at most 4 KiB of failed text in a repair request. Read tools return allowlisted fields with bounded text and collection sizes. The model must treat all text in those results as untrusted business data, not instructions. The audit records token usage and latency for every logical model call.
 
 Model calls incur provider charges and send redacted waybill evidence to the selected provider. Before a deployment calls a provider, the operator must review its current model IDs, prices, data rules, and service terms. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists the terms pages. The automated suite tests protocol compatibility, not a live provider.
 

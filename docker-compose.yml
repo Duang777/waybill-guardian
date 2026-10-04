@@ -20,7 +20,9 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_API_STYLE: ${LLM_API_STYLE:-responses}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MAX_OUTPUT_TOKENS: ${LLM_MAX_OUTPUT_TOKENS:-4096}
       LLM_MODEL: ${LLM_MODEL:-}
+      LLM_REQUEST_TIMEOUT: ${LLM_REQUEST_TIMEOUT:-45s}
       LOCAL_TRUSTED_REMOTE: container-gateway
       PLATFORM: ${PLATFORM:-mock}
       STORAGE: ${STORAGE:-jsonl}

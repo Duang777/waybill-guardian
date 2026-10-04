@@ -36,17 +36,23 @@ const (
 
 	APIStyleResponses       = "responses"
 	APIStyleChatCompletions = "chat_completions"
+
+	DefaultLLMRequestTimeout  = 45 * time.Second
+	DefaultLLMMaxOutputTokens = 4096
+	MaxLLMMaxOutputTokens     = 32768
 )
 
 //go:embed prompts/system.md
 var SystemPrompt string
 
 type ModelConfig struct {
-	Mode     string
-	APIStyle string
-	BaseURL  string
-	APIKey   string
-	Model    string
+	Mode            string
+	APIStyle        string
+	BaseURL         string
+	APIKey          string
+	Model           string
+	RequestTimeout  time.Duration
+	MaxOutputTokens int
 }
 
 type Interrupt struct {
@@ -208,18 +214,45 @@ func prepareModel(modelConfig ModelConfig) (InferenceDescriptor, llm.Provider, e
 		return InferenceDescriptor{}, nil, err
 	}
 	if mode == ModeOnline {
+		requestTimeout, maxOutputTokens, limitErr := normalizeModelLimits(modelConfig)
+		if limitErr != nil {
+			return InferenceDescriptor{}, nil, limitErr
+		}
 		onlineModel, modelErr := newOnlineModel(modelConfig)
 		apiStyle := strings.ToLower(strings.TrimSpace(modelConfig.APIStyle))
 		if apiStyle == "" {
 			apiStyle = APIStyleResponses
 		}
 		return InferenceDescriptor{
-			Mode:     mode,
-			APIStyle: apiStyle,
-			Model:    strings.TrimSpace(modelConfig.Model),
+			Mode:            mode,
+			APIStyle:        apiStyle,
+			Model:           strings.TrimSpace(modelConfig.Model),
+			RequestTimeout:  requestTimeout,
+			MaxOutputTokens: maxOutputTokens,
 		}, onlineModel, modelErr
 	}
 	return InferenceDescriptor{Mode: mode}, nil, nil
+}
+
+func normalizeModelLimits(config ModelConfig) (time.Duration, int, error) {
+	requestTimeout := config.RequestTimeout
+	if requestTimeout == 0 {
+		requestTimeout = DefaultLLMRequestTimeout
+	}
+	if requestTimeout < 0 {
+		return 0, 0, fmt.Errorf("LLM_REQUEST_TIMEOUT must be a positive duration")
+	}
+	maxOutputTokens := config.MaxOutputTokens
+	if maxOutputTokens == 0 {
+		maxOutputTokens = DefaultLLMMaxOutputTokens
+	}
+	if maxOutputTokens < 1 || maxOutputTokens > MaxLLMMaxOutputTokens {
+		return 0, 0, fmt.Errorf(
+			"LLM_MAX_OUTPUT_TOKENS must be between 1 and %d",
+			MaxLLMMaxOutputTokens,
+		)
+	}
+	return requestTimeout, maxOutputTokens, nil
 }
 
 func normalizeModelMode(value string) (string, error) {
@@ -253,6 +286,12 @@ func newEngine(
 		MaxLoops:    &maxLoops,
 	}
 	var sdkAgent *agents.Agent
+	if inference.Mode == ModeOnline {
+		middlewares = append(
+			middlewares,
+			NewModelRequestBudget(inference.RequestTimeout, inference.MaxOutputTokens),
+		)
+	}
 	if proposalBoundary != nil {
 		middlewares = append(middlewares, proposalBoundary)
 	}

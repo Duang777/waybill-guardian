@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
@@ -20,12 +21,17 @@ import (
 const (
 	modelCandidateInitial = "initial"
 	modelCandidateRepair  = "repair"
+
+	maxAssistantResponseBytes = 32 << 10
+	maxRepairExcerptBytes     = 4 << 10
 )
 
 type InferenceDescriptor struct {
-	Mode     string `json:"mode"`
-	APIStyle string `json:"api_style,omitempty"`
-	Model    string `json:"model,omitempty"`
+	Mode            string        `json:"mode"`
+	APIStyle        string        `json:"api_style,omitempty"`
+	Model           string        `json:"model,omitempty"`
+	RequestTimeout  time.Duration `json:"-"`
+	MaxOutputTokens int           `json:"-"`
 }
 
 type TokenUsage struct {
@@ -402,6 +408,8 @@ func proposalRepairRequest(
 	failedText, err := assistantResponseText(response)
 	if err != nil {
 		failedText = "<missing proposal JSON>"
+	} else {
+		failedText = utf8Prefix(failedText, maxRepairExcerptBytes)
 	}
 	repair := *request
 	messages := append(
@@ -435,6 +443,12 @@ func assistantResponseText(response *responses.Response) (string, error) {
 		}
 		for _, content := range *item.OfOutputMessage.Content {
 			if content.OfOutputText != nil {
+				if text.Len()+len(content.OfOutputText.Text) > maxAssistantResponseBytes {
+					return "", fmt.Errorf(
+						"assistant response exceeds %d bytes",
+						maxAssistantResponseBytes,
+					)
+				}
 				text.WriteString(content.OfOutputText.Text)
 				textBlocks++
 			}
@@ -444,6 +458,20 @@ func assistantResponseText(response *responses.Response) (string, error) {
 		return "", errors.New("write response must contain proposal text")
 	}
 	return text.String(), nil
+}
+
+func utf8Prefix(value string, maximumBytes int) string {
+	if maximumBytes <= 0 {
+		return ""
+	}
+	if len(value) <= maximumBytes {
+		return value
+	}
+	end := maximumBytes
+	for end > 0 && !utf8.RuneStart(value[end]) {
+		end--
+	}
+	return value[:end]
 }
 
 func modelRunID(call *agents.ModelCall) (domain.RunID, error) {

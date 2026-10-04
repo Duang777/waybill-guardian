@@ -253,6 +253,8 @@ GitHub Actions 会在 pull request 和 `main` 推送上运行 Go race、恢复�
 | `LLM_BASE_URL` | 空 | `online` 模式必填。模型 API 根路径，不能包含具体 endpoint |
 | `LLM_API_KEY` | 空 | `online` 模式必填。只从运行环境读取 |
 | `LLM_MODEL` | 空 | `online` 模式必填。提供商当前可用的模型 ID |
+| `LLM_REQUEST_TIMEOUT` | `45s` | 一次逻辑模型调用的总时限，覆盖首次请求、结构修复和 provider 重试，必须为正 Go duration |
+| `LLM_MAX_OUTPUT_TOKENS` | `4096` | 单次 provider 请求的最大输出 token，范围 1 到 32768 |
 | `PLATFORM` | `mock` | `mock` 使用内置样例。`file` 加载 `DATA_FILE`。`real` 使用改派沙箱，见下文 |
 | `DATA_FILE` | 空 | `PLATFORM=file` 时必填，指向一份 JSON 或 CSV v1 |
 | `MAX_CONCURRENT_RUNS` | `8` | 同时执行调查阶段的 run 数量，范围 1 到 64 |
@@ -364,7 +366,7 @@ LLM_MODEL=deepseek-v4-flash \
 | Kimi | `chat_completions` | `https://api.moonshot.cn/v1` | `kimi-k3` | [接入](https://platform.kimi.com/docs/get-api-key) · [计费](https://platform.kimi.com/docs/pricing/chat) |
 | 智谱 GLM | `chat_completions` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.3` | [接入](https://docs.bigmodel.cn/cn/guide/develop/openai/introduction) · [计费](https://docs.bigmodel.cn/cn/guide/start/pricing) |
 
-`LLM_API_STYLE` 默认是 `responses`。`LLM_BASE_URL` 必须是 API 根路径，不能以 `/` 结尾，也不能带上 `/responses` 或 `/chat/completions`。在线模式只配置一个 provider，没有 provider fallback。一次模型调用最多尝试三次，包含第一次。服务会把每次调用的 token 用量和时延写入审计事件，但不会设置消费限额。
+`LLM_API_STYLE` 默认是 `responses`。`LLM_BASE_URL` 必须是 API 根路径，不能以 `/` 结尾，也不能带上 `/responses` 或 `/chat/completions`。在线模式只配置一个 provider，没有 provider fallback。每次 provider 请求最多输出 4096 token；一次逻辑模型调用最多持续 45 秒，期间首次请求和一次结构修复各自最多尝试三次。服务还把 assistant 提案文本限制为 32 KiB，修复请求最多回灌 4 KiB 失败文本。读工具只返回白名单字段，并限制文本和数组大小；模型必须把其中的文字视为不可信业务数据，不能当作指令执行。服务会把每次逻辑调用的 token 用量和时延写入审计事件。
 
 调用模型会产生费用，并把脱敏后的运单证据发送给所选提供商。部署方必须在调用前核对当前模型名、价格、数据处理规则和服务条款。各家的条款入口登记在 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。仓库的自动测试只验证兼容协议，不替代真实服务验收。
 

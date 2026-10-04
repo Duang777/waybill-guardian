@@ -25,6 +25,8 @@ LLM_API_STYLE=chat_completions \
 LLM_BASE_URL=https://api.example.com/v1 \
 LLM_API_KEY="$LLM_API_KEY" \
 LLM_MODEL=model-name \
+LLM_REQUEST_TIMEOUT=45s \
+LLM_MAX_OUTPUT_TOKENS=4096 \
 ./scripts/demo.sh
 ```
 
@@ -129,27 +131,32 @@ middleware 顺序如下：
 
 ```text
 historyGuard
-  ProposalBoundary
-    Retry
-      CapabilityModelMiddleware
-        historyGuard
-          provider
+  ModelRequestBudget
+    ProposalBoundary
+      Retry
+        CapabilityModelMiddleware
+          historyGuard
+            provider
 ```
 
-`ProposalBoundary` 在 `Retry` 外层。结构修复不会被当成 provider 重试。第一次调用和修复调用
-各自拥有独立的 provider retry 预算。
+`ModelRequestBudget` 在 `ProposalBoundary` 外层。首次调用、一次结构修复和各自的 provider
+retry 共用默认 45 秒的 deadline。它复制请求并把每次 provider 输出限制为默认 4096 token。
+`ProposalBoundary` 在 `Retry` 外层，因此结构修复不会被当成 provider 重试。assistant 文本
+最多拼接 32 KiB，修复请求最多带入 4 KiB 失败文本。
 
 ## 证据账本
 
 `AuditMiddleware` 负责产生模型和业务共同使用的证据：
 
 1. 读工具返回类型化结果。
-2. middleware 应用现有脱敏规则并生成 canonical JSON。
-3. middleware 追加 `tool_result`。
-4. middleware 从已提交事件中取回 `result`。
-5. middleware 把相同 JSON 返回给模型。
+2. handler 限制文本字段和数组数量，拒绝超长外部 ID。
+3. middleware 应用现有脱敏规则并生成 canonical JSON。
+4. middleware 追加 `tool_result`。
+5. middleware 从已提交事件中取回 `result`。
+6. middleware 把相同 JSON 返回给模型。
 
 因此，模型看到的值和哈希链中的值来自同一份字节。
+system prompt 把所有工具文本定义为不可信业务数据，禁止模型执行字段中的命令或角色声明。
 
 `internal/proposal.Compiler` 只接受以下引用：
 
