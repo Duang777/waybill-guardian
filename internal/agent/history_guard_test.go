@@ -59,12 +59,16 @@ func TestHistoryGuardRejectsProhibitedData(t *testing.T) {
 func TestHistoryGuardAllowsOpaqueUUIDIdentifiers(t *testing.T) {
 	const phoneLikeUUID = "13800138-000a-4abc-8def-123456789abc"
 	safe := map[string]any{
-		"id":                phoneLikeUUID,
-		"message_id":        "msg_" + phoneLikeUUID,
-		"incident_id":       "delay-" + phoneLikeUUID,
-		"output_id":         "msg_13800138000a1234",
-		"queued_approvals":  []string{"call_13800138000a1234"},
-		"queued_rejections": []string{"call_13900139000b1234"},
+		"id":          phoneLikeUUID,
+		"message_id":  "msg_" + phoneLikeUUID,
+		"incident_id": "delay-" + phoneLikeUUID,
+		"output_id":   "msg_13800138000a1234",
+		"queued_approvals": []string{
+			"call_13800138000a1234",
+			"call_13800138000ABCDEF",
+			"call_1",
+		},
+		"queued_rejections": []string{"call_weather_13900139000"},
 		"tool_output":       `{"order_id":"RA-13800138000a","message_id":"SMS-13800138000a"}`,
 		"text":              "safe",
 	}

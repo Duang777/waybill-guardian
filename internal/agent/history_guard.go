@@ -262,7 +262,7 @@ func inspectHistoryField(value any, path, field string) error {
 func isOpaqueHistoryIdentifier(key string, value string) bool {
 	key = strings.ToLower(key)
 	if key == "queued_approvals" || key == "queued_rejections" {
-		return opaqueIDPattern.MatchString(value)
+		return isOpaqueCallIdentifier(value)
 	}
 	if key != "id" &&
 		key != "traceid" &&
@@ -275,6 +275,26 @@ func isOpaqueHistoryIdentifier(key string, value string) bool {
 	return key == "incident_id" &&
 		strings.HasPrefix(value, "delay-") &&
 		isCanonicalUUID(strings.TrimPrefix(value, "delay-"))
+}
+
+func isOpaqueCallIdentifier(value string) bool {
+	if len(value) == 0 || len(value) > 128 {
+		return false
+	}
+	hasLetter := false
+	for _, character := range []byte(value) {
+		switch {
+		case character >= 'a' && character <= 'z':
+			hasLetter = true
+		case character >= 'A' && character <= 'Z':
+			hasLetter = true
+		case character >= '0' && character <= '9':
+		case character == '_', character == '-':
+		default:
+			return false
+		}
+	}
+	return hasLetter
 }
 
 func isOpaqueUUID(value string) bool {

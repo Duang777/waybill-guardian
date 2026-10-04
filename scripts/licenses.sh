@@ -5,7 +5,7 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mode="${1:---check}"
 go_licenses_version="v2.0.1"
-web_checker_version="5.0.1"
+web_checker_version="4.4.2"
 
 case "$mode" in
   --check | --write) ;;

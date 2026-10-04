@@ -85,6 +85,14 @@ func run() error {
 	if err := validateHTTPAddr(httpAddr, authMode, allowNonLoopbackLocal); err != nil {
 		return err
 	}
+	trustedLocalRemotes, err := localTrustedRemotes(
+		httpAddr,
+		authMode,
+		allowNonLoopbackLocal,
+	)
+	if err != nil {
+		return err
+	}
 	frontend, err := staticFileHandler(os.Getenv("WEB_STATIC_DIR"))
 	if err != nil {
 		return err
@@ -285,8 +293,15 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	server := &http.Server{
-		Addr:              httpAddr,
-		Handler:           newHandlerWithFrontend(service, access, repository, recorder, frontend),
+		Addr: httpAddr,
+		Handler: newHandlerWithFrontend(
+			service,
+			access,
+			repository,
+			recorder,
+			frontend,
+			trustedLocalRemotes,
+		),
 		ReadHeaderTimeout: 5 * time.Second,
 		BaseContext: func(net.Listener) context.Context {
 			return ctx
@@ -597,6 +612,88 @@ func validateHTTPAddr(
 		)
 	}
 	return nil
+}
+
+func localTrustedRemotes(
+	httpAddr string,
+	authMode httpauth.Mode,
+	allowNonLoopbackLocal bool,
+) ([]netip.Addr, error) {
+	if authMode != httpauth.ModeLocal || !allowNonLoopbackLocal {
+		return nil, nil
+	}
+	listener, err := netip.ParseAddrPort(httpAddr)
+	if err != nil || listener.Addr().IsLoopback() {
+		return nil, nil
+	}
+	value := strings.TrimSpace(os.Getenv("LOCAL_TRUSTED_REMOTE"))
+	if value == "" {
+		return nil, fmt.Errorf(
+			"LOCAL_TRUSTED_REMOTE is required when local mode listens on a non-loopback IP",
+		)
+	}
+	if value == "container-gateway" {
+		address, gatewayErr := defaultIPv4Gateway()
+		if gatewayErr != nil {
+			return nil, gatewayErr
+		}
+		return []netip.Addr{address}, nil
+	}
+	if address, parseErr := netip.ParseAddr(value); parseErr == nil {
+		if address.IsUnspecified() {
+			return nil, fmt.Errorf("LOCAL_TRUSTED_REMOTE must resolve to a specific IP address")
+		}
+		return []netip.Addr{address.Unmap()}, nil
+	}
+	resolved, err := net.LookupIP(value)
+	if err != nil {
+		return nil, fmt.Errorf("resolve LOCAL_TRUSTED_REMOTE %q: %w", value, err)
+	}
+	addresses := make([]netip.Addr, 0, len(resolved))
+	for _, address := range resolved {
+		if parsed, ok := netip.AddrFromSlice(address); ok && !parsed.IsUnspecified() {
+			addresses = append(addresses, parsed.Unmap())
+		}
+	}
+	if len(addresses) == 0 {
+		return nil, fmt.Errorf(
+			"LOCAL_TRUSTED_REMOTE %q did not resolve to a specific IP address",
+			value,
+		)
+	}
+	return addresses, nil
+}
+
+func defaultIPv4Gateway() (netip.Addr, error) {
+	table, err := os.ReadFile("/proc/net/route")
+	if err != nil {
+		return netip.Addr{}, fmt.Errorf("read container default gateway: %w", err)
+	}
+	return parseDefaultIPv4Gateway(string(table))
+}
+
+func parseDefaultIPv4Gateway(table string) (netip.Addr, error) {
+	for _, line := range strings.Split(table, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 || fields[1] != "00000000" {
+			continue
+		}
+		flags, flagErr := strconv.ParseUint(fields[3], 16, 32)
+		if flagErr != nil || flags&0x2 == 0 {
+			continue
+		}
+		gateway, gatewayErr := strconv.ParseUint(fields[2], 16, 32)
+		if gatewayErr != nil || gateway == 0 {
+			continue
+		}
+		return netip.AddrFrom4([4]byte{
+			byte(gateway),
+			byte(gateway >> 8),
+			byte(gateway >> 16),
+			byte(gateway >> 24),
+		}), nil
+	}
+	return netip.Addr{}, fmt.Errorf("container default IPv4 gateway was not found")
 }
 
 func validateRequestHost(value string) error {

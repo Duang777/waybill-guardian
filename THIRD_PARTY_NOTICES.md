@@ -7,7 +7,8 @@
 [`docs/licenses/go.csv`](./docs/licenses/go.csv) 和
 [`docs/licenses/web.csv`](./docs/licenses/web.csv)。两份清单由
 [`scripts/licenses.sh`](./scripts/licenses.sh) 根据 `go.sum` 和
-`web/package-lock.json` 生成，不代替各依赖随包发布的许可证原文。
+`web/package-lock.json` 生成，不代替各依赖随包发布的许可证原文。容器镜像另在
+`/app/third_party_licenses` 保存实际打包依赖的许可证和 NOTICE 原文。
 
 ## Go 直接依赖
 

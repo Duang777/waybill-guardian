@@ -11,7 +11,7 @@ services:
       AUTH_MODE: local
       CHECKPOINT_ENCRYPTION_KEY: ${CHECKPOINT_ENCRYPTION_KEY:-}
       CHECKPOINT_KEY_ID: ${CHECKPOINT_KEY_ID:-local-v1}
-      DATABASE_URL: postgres://waybill:${POSTGRES_PASSWORD:-waybill}@postgres:5432/waybill?sslmode=disable
+      DATABASE_URL: ${DATABASE_URL:-}
       DATA_DIR: /data
       DEMO_STEP_DELAY: ${DEMO_STEP_DELAY:-220ms}
       HISTORY_RETENTION: ${HISTORY_RETENTION:-168h}
@@ -20,6 +20,7 @@ services:
       LLM_API_STYLE: ${LLM_API_STYLE:-responses}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_MODEL: ${LLM_MODEL:-}
+      LOCAL_TRUSTED_REMOTE: container-gateway
       PLATFORM: mock
       STORAGE: ${STORAGE:-jsonl}
       TENANT_ID: ${TENANT_ID:-local-demo}

@@ -41,11 +41,13 @@ docker compose up --build
 
 ```bash
 cp .env.example .env
-STORAGE=postgres docker compose --profile prod up --build
+docker compose up --build
 ```
 
-`.env.example` 中的数据库密码和 checkpoint key 只供本机演示。真实部署必须替换这些值，
-改用 `AUTH_MODE=jwt`，并在 HTTPS 入口后运行服务。
+复制后的 `.env` 会通过 `COMPOSE_PROFILES=prod` 持续启用 PostgreSQL，避免后续启动切回
+JSONL。示例中的数据库密码和 checkpoint key 只供本机演示。真实部署必须替换这些值，改用
+`AUTH_MODE=jwt`，并在 HTTPS 入口后运行服务。修改 PostgreSQL 密码时，还要把
+`DATABASE_URL` 中的密码改为对应的 URL 编码值。
 
 ### 本地工具链
 
@@ -81,6 +83,7 @@ STORAGE=postgres docker compose --profile prod up --build
 | `WEB_PORT` | `5173` | 前端端口 |
 | `WEB_STATIC_DIR` | 空 | 由 Go 服务托管的前端构建目录；容器内为 `/app/web` |
 | `ALLOW_NON_LOOPBACK_LOCAL` | `false` | 允许 local 模式监听非回环 IP；仅供端口绑定到宿主机回环地址的容器使用 |
+| `LOCAL_TRUSTED_REMOTE` | 空 | 开启上一选项时必填；请求的 TCP 对端必须匹配该 IP、主机名或 `container-gateway` |
 | `DATA_DIR` | `./data` | 审计日志和 hastekit history 目录 |
 | `APPROVAL_TTL` | `10m` | 审批有效期，使用 Go duration 格式 |
 | `HISTORY_RETENTION` | `168h` | 已结束 Agent history 的保留期，必须为正数 |
@@ -122,8 +125,8 @@ BACKEND_PORT=18080 WEB_PORT=15173 DATA_DIR=/tmp/waybill-demo ./scripts/demo.sh
 `go run ./cmd/server` 时，`HTTP_ADDR` 默认是 `127.0.0.1:8080`。local 模式拒绝空 host、
 主机名、通配地址、非 loopback 地址，以及 Host 不是 loopback IP 的请求。审批审计主体固定为
 `local-demo-reviewer`。容器通过 `ALLOW_NON_LOOPBACK_LOCAL=true` 允许进程监听
-`0.0.0.0:8080`，但 HTTP Host 校验仍要求 loopback IP。不要把 local 模式的容器端口发布到
-非回环地址。
+`0.0.0.0:8080`，同时把 `LOCAL_TRUSTED_REMOTE=container-gateway` 设为容器默认网关。
+服务会同时校验 TCP 对端与 HTTP Host。不要把 local 模式的容器端口发布到非回环地址。
 
 `AUTH_MODE=jwt` 验证 RS256 签名、issuer、audience、`iat`、`nbf` 和 `exp`。JWT 还必须包含
 `sub`、`tenant_id`、`roles`，以及 `waybill_all=true` 或非空 `waybill_ids`。可用角色为

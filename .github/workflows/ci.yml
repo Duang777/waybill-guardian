@@ -114,8 +114,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Check Dockerfile
-        run: docker build --check .
+      - name: Check container definitions
+        run: |
+          docker build --check .
+          docker compose config --quiet
+          docker compose --profile prod config --quiet
       - name: Build image
         run: docker build --tag waybill-guardian:ci .
       - name: Verify image contents and size
@@ -126,6 +129,8 @@ jobs:
           container="$(docker create waybill-guardian:ci)"
           trap 'docker rm --volumes "$container" >/dev/null' EXIT
           docker export "$container" | tar -tf - > image-files.txt
+          test "$(grep -Ec '^app/third_party_licenses/go/.+' image-files.txt)" -gt 0
+          test "$(grep -Ec '^app/third_party_licenses/web/.+' image-files.txt)" -gt 0
           if grep -Eq '\.(go|tsx?|env)$|(^|/)go\.(mod|sum)$|(^|/)package(-lock)?\.json$' image-files.txt; then
             echo "runtime image contains source or environment files" >&2
             exit 1
@@ -136,8 +141,6 @@ jobs:
           docker run --detach --rm \
             --name waybill-guardian-ci \
             --publish 127.0.0.1:18080:8080 \
-            --env HTTP_ADDR=0.0.0.0:8080 \
-            --env ALLOW_NON_LOOPBACK_LOCAL=true \
             waybill-guardian:ci
           trap 'docker rm --force waybill-guardian-ci >/dev/null 2>&1 || true' EXIT
           for attempt in $(seq 1 40); do
