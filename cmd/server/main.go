@@ -155,16 +155,26 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	maxConcurrentRuns, err := positiveIntEnv("MAX_CONCURRENT_RUNS", 8, 64)
+	if err != nil {
+		return err
+	}
+	evidenceStepMinutes, err := positiveFloatEnv("EVIDENCE_STEP_MINUTES", 8)
+	if err != nil {
+		return err
+	}
 	commonConfig := guardian.Config{
-		DataDir:          envOr("DATA_DIR", "data"),
-		Reads:            runtimeProfile.reads,
-		WriteRuntime:     runtimeProfile.writeRuntime,
-		ActiveActions:    runtimeProfile.activeActions,
-		PlatformProfile:  runtimeProfile.profileID,
-		ReadSource:       runtimeProfile.readSource,
-		ApprovalTTL:      durationEnv("APPROVAL_TTL", 10*time.Minute),
-		HistoryRetention: historyRetention,
-		StepDelay:        durationEnv("DEMO_STEP_DELAY", 220*time.Millisecond),
+		DataDir:             envOr("DATA_DIR", "data"),
+		Reads:               runtimeProfile.reads,
+		WriteRuntime:        runtimeProfile.writeRuntime,
+		ActiveActions:       runtimeProfile.activeActions,
+		PlatformProfile:     runtimeProfile.profileID,
+		ReadSource:          runtimeProfile.readSource,
+		ApprovalTTL:         durationEnv("APPROVAL_TTL", 10*time.Minute),
+		HistoryRetention:    historyRetention,
+		StepDelay:           durationEnv("DEMO_STEP_DELAY", 220*time.Millisecond),
+		MaxConcurrentRuns:   maxConcurrentRuns,
+		EvidenceStepMinutes: evidenceStepMinutes,
 		Model: agentkit.ModelConfig{
 			Mode:     envOr("AGENT_MODE", agentkit.ModeDemo),
 			APIStyle: envOr("LLM_API_STYLE", agentkit.APIStyleResponses),
@@ -549,6 +559,18 @@ func positiveIntEnv(name string, fallback, maximum int) (int, error) {
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < 1 || parsed > maximum {
 		return 0, fmt.Errorf("%s must be an integer between 1 and %d", name, maximum)
+	}
+	return parsed, nil
+}
+
+func positiveFloatEnv(name string, fallback float64) (float64, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("%s must be a positive number", name)
 	}
 	return parsed, nil
 }

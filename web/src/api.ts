@@ -59,6 +59,154 @@ const waybillCatalogItemSchema = z
 
 export type WaybillCatalogItem = z.infer<typeof waybillCatalogItemSchema>;
 
+const riskSchema = z
+  .object({
+    eta_delay: z.number().min(0).max(100),
+    road: z.number().min(0).max(100),
+    weather: z.number().min(0).max(100),
+  })
+  .strict();
+
+const hubOverviewSchema = z
+  .object({
+    hub_id: z.string().min(1),
+    name: z.string().min(1),
+    province: z.string().min(1),
+    city: z.string().min(1),
+    longitude: z.number(),
+    latitude: z.number(),
+    daily_capacity: z.number().int().nonnegative(),
+    waybills: z.number().int().nonnegative(),
+    in_flight: z.number().int().nonnegative(),
+    anomalies: z.number().int().nonnegative(),
+    handling: z.number().int().nonnegative(),
+    closed: z.number().int().nonnegative(),
+    focus_waybill_id: waybillIdSchema.optional(),
+  })
+  .strict();
+
+export type HubOverview = z.infer<typeof hubOverviewSchema>;
+
+const routeOverviewSchema = z
+  .object({
+    route_id: z.string().min(1),
+    origin_hub_id: z.string().min(1),
+    destination_hub_id: z.string().min(1),
+    distance_km: z.number().int().nonnegative(),
+    standard_hours: z.number().int().nonnegative(),
+    waybills: z.number().int().nonnegative(),
+    anomalies: z.number().int().nonnegative(),
+    delay_heat: z.number().int().min(0).max(100),
+    max_risk: z.number().int().min(0).max(100),
+  })
+  .strict();
+
+export type RouteOverview = z.infer<typeof routeOverviewSchema>;
+
+const anomalyOverviewSchema = z
+  .object({
+    waybill_id: waybillIdSchema,
+    origin: z.string().min(1),
+    destination: z.string().min(1),
+    origin_hub_id: z.string().min(1).optional(),
+    destination_hub_id: z.string().min(1).optional(),
+    route_id: z.string().min(1).optional(),
+    type: z.string().min(1),
+    label: z.string(),
+    last_recorded_at: z.string().min(1),
+    risk: riskSchema,
+    risk_score: z.number().int().min(0).max(100),
+    run_id: runIdSchema.optional(),
+    run_status: runStatusSchema.optional(),
+  })
+  .strict();
+
+export type AnomalyOverview = z.infer<typeof anomalyOverviewSchema>;
+
+const executiveBriefItemSchema = z
+  .object({
+    id: z.string().min(1),
+    headline: z.string().min(1),
+    body: z.string().min(1),
+    evidence: z
+      .array(
+        z
+          .object({
+            label: z.string().min(1),
+            value: z.string().min(1),
+            source: z.string().min(1),
+          })
+          .strict(),
+      )
+      .min(1),
+  })
+  .strict();
+
+export const overviewSchema = z
+  .object({
+    as_of: z.string().min(1),
+    data_mode: z.enum(["simulated", "fixture", "external"]),
+    network_available: z.boolean(),
+    totals: z
+      .object({
+        waybills: z.number().int().nonnegative(),
+        anomalies: z.number().int().nonnegative(),
+        in_flight: z.number().int().nonnegative(),
+        handling: z.number().int().nonnegative(),
+        closed: z.number().int().nonnegative(),
+      })
+      .strict(),
+    hubs: z.array(hubOverviewSchema),
+    routes: z.array(routeOverviewSchema),
+    anomalies: z.array(anomalyOverviewSchema),
+    anomaly_distribution: z.array(
+      z
+        .object({
+          type: z.string().min(1),
+          count: z.number().int().nonnegative(),
+        })
+        .strict(),
+    ),
+    brief: z
+      .object({
+        mode: z.literal("deterministic_read_only"),
+        items: z.array(executiveBriefItemSchema),
+      })
+      .strict(),
+  })
+  .strict();
+
+export type Overview = z.infer<typeof overviewSchema>;
+
+const kpiMetricSchema = z
+  .object({
+    key: z.string().min(1),
+    label: z.string().min(1),
+    value: z.number().nullable(),
+    unit: z.string(),
+    availability: z.enum(["available", "unavailable"]),
+    formula: z.string().min(1),
+    reason: z.string().min(1).optional(),
+  })
+  .strict();
+
+export type KPIMetric = z.infer<typeof kpiMetricSchema>;
+
+export const kpiReportSchema = z
+  .object({
+    window: z.string().min(1),
+    as_of: z.string().min(1),
+    assumptions: z
+      .object({
+        evidence_step_minutes: z.number().positive(),
+      })
+      .strict(),
+    metrics: z.array(kpiMetricSchema).min(4),
+  })
+  .strict();
+
+export type KPIReport = z.infer<typeof kpiReportSchema>;
+
 const carrierSchema = z
   .object({
     carrier_id: z.string().min(1),
@@ -118,14 +266,6 @@ const weatherSchema = z
     segment: z.string().min(1),
     condition: z.string().min(1),
     alert_level: z.string().min(1),
-  })
-  .strict();
-
-const riskSchema = z
-  .object({
-    eta_delay: z.number().min(0).max(100),
-    road: z.number().min(0).max(100),
-    weather: z.number().min(0).max(100),
   })
   .strict();
 
@@ -315,6 +455,35 @@ const waybillCatalogSchema = z
 const pendingApprovalsSchema = z
   .object({ approvals: z.array(pendingApprovalSummarySchema) })
   .strict();
+const batchRunResultSchema = z
+  .object({
+    waybill_id: waybillIdSchema,
+    run: runSchema.optional(),
+    error: z
+      .object({
+        code: z.string().min(1),
+        message: z.string().min(1),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .refine((value) => (value.run === undefined) !== (value.error === undefined), {
+    message: "batch item must contain exactly one of run or error",
+  });
+
+export const batchRunResponseSchema = z
+  .object({
+    requested: z.number().int().positive(),
+    accepted: z.number().int().nonnegative(),
+    results: z.array(batchRunResultSchema).min(1),
+  })
+  .strict()
+  .refine((value) => value.requested === value.results.length, {
+    message: "batch result count does not match requested count",
+  });
+
+export type BatchRunResponse = z.infer<typeof batchRunResponseSchema>;
 
 const problemSchema = z
   .object({
@@ -369,11 +538,35 @@ export async function listWaybills(signal?: AbortSignal): Promise<WaybillCatalog
   return response.waybills;
 }
 
+export function getOverview(signal?: AbortSignal): Promise<Overview> {
+  return request("/api/overview", overviewSchema, { signal });
+}
+
+export function getKPIs(
+  window = "24h",
+  signal?: AbortSignal,
+): Promise<KPIReport> {
+  const query = new URLSearchParams({ window });
+  return request(`/api/kpis?${query.toString()}`, kpiReportSchema, { signal });
+}
+
 export function startRun(waybillID: WaybillID, signal?: AbortSignal): Promise<Run> {
   return request("/api/runs", runSchema, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ waybill_id: waybillID }),
+    signal,
+  });
+}
+
+export function startBatch(
+  waybillIDs: readonly WaybillID[],
+  signal?: AbortSignal,
+): Promise<BatchRunResponse> {
+  return request("/api/runs:batch", batchRunResponseSchema, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ waybill_ids: waybillIDs }),
     signal,
   });
 }

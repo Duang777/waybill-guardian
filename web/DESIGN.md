@@ -37,9 +37,14 @@ Chinese. Numeric values use tabular figures. Letter spacing remains zero.
 
 ## 5. Layout principles
 
-Use a 4 px base spacing scale. Desktop has a compact header, one status strip, and a
-two-column workspace. The left column holds map and timeline; the right column holds the
-decision boundary. Mobile stacks the status strip, approval, map, and timeline in task order.
+Use a 4 px base spacing scale. The CEO overview uses a compact header, a four-segment KPI
+strip, a nationwide network map, a risk queue, and a read-only brief. The waybill workbench
+uses one status strip and a two-column workspace. Its left column holds the map and timeline,
+and its right column holds the decision boundary.
+
+On the CEO overview, KPI segments form one flush band with dividers. They are not separate
+cards. The risk queue stays beside the network map on desktop and moves below the map on
+mobile. A hub or queue link opens `/waybills/:id`.
 
 ## 6. Depth and elevation
 
@@ -53,14 +58,18 @@ Canvas, surface, and raised approval layers differ by lightness. Only the approv
 - Do use amber only for an unresolved incident or approval.
 - Do keep event sequence numbers aligned and readable.
 - Don't place cards inside cards.
-- Don't use a marketing hero, decorative illustration, or generic KPI tile grid.
+- Don't use a marketing hero or decorative illustration.
+- Use the KPI band only on the CEO overview. Do not add a generic KPI tile grid to the
+  waybill workbench.
 - Don't animate layout properties.
 
 ## 8. Responsive behavior
 
-At 960 px the workspace becomes one column and approval moves above the map. At 640 px the
-header wraps, route metadata becomes a two-column grid, and playback controls keep 40 px hit
-areas. The interface must remain usable at 375 px and must not scroll horizontally.
+At 1000 px the CEO map and risk queue become one column. At 720 px its KPI band becomes two
+columns. At 960 px the waybill workspace becomes one column and approval moves above the map.
+At 640 px the workbench header wraps, route metadata becomes a two-column grid, and playback
+controls keep 40 px hit areas. Both pages must remain usable at 375 px and 320 px without
+horizontal scrolling.
 
 ## 9. Agent prompt guide
 

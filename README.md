@@ -30,15 +30,15 @@
 
 调度员少做的是在几个系统之间来回查证据。人仍然决定是否改派、是否赔付、是否发通知。复核时按审计序号重放。
 
-仓库里没有时效挽回、成本或人力节省的测量数字。页面上的三项风险分由 [`internal/guardian/assessment.go`](internal/guardian/assessment.go) 的 `deriveAssessment` 计算，并限制在 0 到 100。运单状态的比较不区分大小写。状态不是 `delivered` 时，ETA 分先取 20，每个异常点再加 15，再加上停留小时乘以 8 后四舍五入。路况分是连续驾驶小时乘以 5 后四舍五入，疲劳预警再加 30。天气分取各段预警的最大值。`none`、`normal`、`green` 和空值为 0，`low`、`blue`、`yellow` 为 30，`medium`、`orange` 为 60，`high`、`red`、`critical` 为 90，其余为 20。内置样例因此显示 ETA 83、路况 75、天气 0。这是控制台展示分，仓库里没有对应的业务 KPI。
+经营总览按下文口径计算人力节省、异常闭环率、平均处置时长和审批通过率。数据文件还没有时效基线与成本字段，因此时效挽回和成本影响会明确显示为不可用，不会用仿真假设补值。单运单页面的三项风险分由 [`internal/guardian/assessment.go`](internal/guardian/assessment.go) 的 `deriveAssessment` 计算，并限制在 0 到 100。运单状态的比较不区分大小写。状态不是 `delivered` 时，ETA 分先取 20，每个异常点再加 15，再加上停留小时乘以 8 后四舍五入。路况分是连续驾驶小时乘以 5 后四舍五入，疲劳预警再加 30。天气分取各段预警的最大值。`none`、`normal`、`green` 和空值为 0，`low`、`blue`、`yellow` 为 30，`medium`、`orange` 为 60，`high`、`red`、`critical` 为 90，其余为 20。内置样例因此显示 ETA 83、路况 75、天气 0。
 
 **默认演示仍是脚本。** `AGENT_MODE=demo` 使用 [`internal/agent/scenario_model.go`](internal/agent/scenario_model.go) 里的 `ScenarioModel`。它按固定顺序调用四个只读工具，从工具结果读取司机、路线和候选承运商，再用固定句子模板写出归因。把演示改成真实模型推理，见仍开放的 [issue 59](https://github.com/Duang777/waybill-guardian/issues/59)。
 
 `AGENT_MODE=online` 可以调用 OpenAI Responses API，或 OpenAI 兼容的 Chat Completions API。这是已经接上的调用路径。issue 59 还要求默认演示走真实推理、结构化证据引用，以及国产模型验收。这些还没有做。
 
-默认 `PLATFORM=mock` 只加载内置运单 `YD2026101001`，数据在 [`internal/tools/testdata/demo.json`](internal/tools/testdata/demo.json)。`PLATFORM=file` 在启动时加载一份 JSON 或 CSV v1，页面可以选择文件中的运单并启动处置。这项能力随已关闭的 [issue 60](https://github.com/Duang777/waybill-guardian/issues/60) 合入。文件模式下的写操作仍走内存中的 fixture 写入运行时，短信不会真正发出。这里没有公路港、车辆和线路网络。
+默认 `PLATFORM=mock` 只加载内置运单 `YD2026101001`，数据在 [`internal/tools/testdata/demo.json`](internal/tools/testdata/demo.json)。`PLATFORM=file` 在启动时加载一份 JSON 或 CSV v1，支持可选的公路港、车辆和线路网络。页面可以选择文件中的运单并启动处置。文件模式下的写操作仍走内存中的 fixture 写入运行时，短信不会真正发出。
 
-页面是所选运单的工作台。没有全国公路港总览。见 [issue 61](https://github.com/Duang777/waybill-guardian/issues/61)。当前界面也还不是黑橙指挥中心，那是 [issue 77](https://github.com/Duang777/waybill-guardian/issues/77)。
+首页是全国公路港经营总览，显示网络、KPI、异常队列和带统计引用的经营简报，并支持一次启动 5 个独立 run。点击运单进入单运单工作台，每个 run 仍保留独立审批和 SSE 时间线。当前界面还不是黑橙指挥中心，那是 [issue 77](https://github.com/Duang777/waybill-guardian/issues/77)。
 
 <p align="center">
   <img alt="桌面宽度下，内置样例停在人工审批。运单选择器是杭州到成都的 YD2026101001，按钮是重新处置。方案是改派到川行快运，并通知货主和司机。地图是本地轨迹。展示分是 ETA 83、路况 75、天气 0。" src="docs/assets/console-approval.png" width="840">
@@ -105,7 +105,7 @@ flowchart TD
 | 改派 HTTP 沙箱 | 已交付 | 仅 `tms.reassign`。读仍是内置样例。不是生产 TMS。 |
 | 在线模型调用 | 进行中 | 可以配置 OpenAI 兼容 API。默认演示仍是脚本。验收标准见 [issue 59](https://github.com/Duang777/waybill-guardian/issues/59)。 |
 | 文件导入 | 已交付 | `PLATFORM=file` 在启动时加载 JSON 或 CSV v1，页面可以选择其中的运单。写操作留在内存 fixture 运行时。见已关闭的 [issue 60](https://github.com/Duang777/waybill-guardian/issues/60) 和 [`docs/file-data-source-design.md`](docs/file-data-source-design.md)。 |
-| 公路港总览 | 计划中 | [issue 61](https://github.com/Duang777/waybill-guardian/issues/61) |
+| 公路港总览 | 已交付 | 首页展示 72 港网络、KPI、异常队列和经营简报，并支持批量启动后逐单审批。见 [issue 61](https://github.com/Duang777/waybill-guardian/issues/61)。 |
 | Apache-2.0 与依赖许可清单 | 已交付 | 根目录含 `LICENSE`，传递依赖清单位于 [`docs/licenses/`](docs/licenses/)。 |
 | 非 GET 请求的 CSRF 检查 | 计划中 | [issue 64](https://github.com/Duang777/waybill-guardian/issues/64) |
 | Docker Compose | 已交付 | 单容器提供前端和 API，可选 PostgreSQL 17 profile。 |
@@ -120,7 +120,7 @@ flowchart TD
 ./scripts/demo.sh
 ```
 
-打开 <http://127.0.0.1:5173>。运单选择器里是杭州到成都的 `YD2026101001`，点击 **启动处置**。按钮会 `POST /api/runs`，请求体带上 `waybill_id`。`POST /api/demo/trigger` 仍会启动这张内置运单。
+打开 <http://127.0.0.1:5173> 查看经营总览。选择异常运单后点击 **交给 Agent**，或下钻到 `/waybills/:id` 处理单张运单。单运单工作台仍可点击 **启动处置**。`POST /api/demo/trigger` 会启动内置运单。
 
 1. Agent 查询杭州到成都运单 `YD2026101001`。
 2. 时间线记下运单、轨迹、司机和天气四次工具调用。
@@ -215,6 +215,7 @@ npm test
 npm run build
 npm run verify:e2e
 npm run verify:file-e2e
+npm run verify:overview
 ```
 
 GitHub Actions 会在 pull request 和 `main` 推送上运行 Go race、恢复稳定性、PostgreSQL
@@ -239,6 +240,8 @@ GitHub Actions 会在 pull request 和 `main` 推送上运行 Go race、恢复�
 | `AGENT_MODE` | `demo` | `demo` 使用 `ScenarioModel`。`online` 调用外部模型 |
 | `PLATFORM` | `mock` | `mock` 使用内置样例。`file` 加载 `DATA_FILE`。`real` 使用改派沙箱，见下文 |
 | `DATA_FILE` | 空 | `PLATFORM=file` 时必填，指向一份 JSON 或 CSV v1 |
+| `MAX_CONCURRENT_RUNS` | `8` | 同时执行调查阶段的 run 数量，范围 1 到 64 |
+| `EVIDENCE_STEP_MINUTES` | `8` | 人工完成一次证据采集的估算分钟数，必须为正数 |
 | `STORAGE` | `jsonl` | `jsonl` 或 `postgres` |
 | `AUTH_MODE` | `local` | `local` 或 `jwt` |
 | `APPROVAL_TTL` | `10m` | 审批有效期，Go duration。非法值会退回默认值 |
@@ -291,6 +294,30 @@ env -u GOROOT go run ./cmd/dataimport validate \
 `hubs`、`vehicles`、`routes` 以及运单上的港口、线路、车辆引用是 v1 的可选网络扩展。
 一旦文件提供任一网络实体，校验器会要求三类实体和全部引用同时完整，避免聚合视图读取到
 半套拓扑。仿真数据只用于产品演示和容量验证，不代表真实经营数据。
+
+### 经营总览和 KPI
+
+`GET /api/overview` 返回授权范围内的港口、线路、异常队列和三条经营简报。服务先按
+`waybill_id` 授权范围过滤，再计算所有总数和比例。简报只读取聚合结果，不调用写工具。
+
+`POST /api/runs:batch` 接受最多 20 个 `waybill_id`。服务为每个运单调用一次 `StartRun`，
+并返回逐项成功或失败结果。`MAX_CONCURRENT_RUNS` 限制同时执行的调查任务。每个已接受的
+run 使用独立的 `run_id`、审批记录和 SSE 时间线。
+
+`GET /api/kpis?window=24h` 使用以下口径。窗口结束时间取授权范围内最新异常运单的
+`last_recorded_at`。如果审计事件更新，则使用较新的审计时间。
+
+| KPI | 公式 | 数据不足时的结果 |
+|---|---|---|
+| 时效挽回 | `sum(不处置预测 ETA - 处置后 ETA)` | 缺少两个 ETA 字段时返回 `unavailable` |
+| 成本影响 | `sum(避免违约金 - 改派差价 - 处置成本)` | 缺少价格和成本字段时返回 `unavailable` |
+| 人力节省 | `成功自动证据采集步数 * EVIDENCE_STEP_MINUTES / 60` | 没有采集事件时返回 `0` 小时 |
+| 异常闭环率 | `已完成或已驳回处置的异常运单数 / 窗口内异常运单数 * 100%` | 没有异常运单时返回 `0%` |
+| 平均处置时长 | `sum(终态时间 - 启动时间) / 窗口内闭环 run 数` | 没有闭环 run 时返回 `unavailable` |
+| 人工审批通过率 | `人工确认数 / 人工决定数 * 100%` | 没有人工决定时返回 `unavailable` |
+
+时效挽回和成本影响不会用仿真假设补值。接入正式数据后，adapter 必须提供计算公式所需的
+基线、结果和成本字段。
 
 ### 在线模型
 
@@ -413,13 +440,13 @@ hastekit `agent-sdk-go` v0.0.24 以 Go module 引入，许可证是 Apache-2.0�
 | 议题 | 内容 |
 |---|---|
 | [59](https://github.com/Duang777/waybill-guardian/issues/59) | 演示改为真实模型推理，补结构化证据引用 |
-| [60](https://github.com/Duang777/waybill-guardian/issues/60) | 已关闭。启动时加载 JSON 或 CSV v1，并在页面上选择运单。范围不包括公路港网络 |
-| [61](https://github.com/Duang777/waybill-guardian/issues/61) | 多公路港总览和可核验的 KPI |
+| [60](https://github.com/Duang777/waybill-guardian/issues/60) | 已关闭。启动时加载 JSON 或 CSV v1，并在页面上选择运单 |
+| [61](https://github.com/Duang777/waybill-guardian/issues/61) | 已完成。多公路港总览、KPI、异常队列和批量启动 |
 | [62](https://github.com/Duang777/waybill-guardian/issues/62) | 已完成。Apache-2.0、传递依赖清单和 `.mailmap` |
 | [64](https://github.com/Duang777/waybill-guardian/issues/64) | 非 GET 请求的 CSRF 检查 |
 | [65](https://github.com/Duang777/waybill-guardian/issues/65) | 已完成。单容器镜像和 Docker Compose |
 | [67](https://github.com/Duang777/waybill-guardian/issues/67) | 已完成。GitHub Actions |
-| [68](https://github.com/Duang777/waybill-guardian/issues/68) | 仍开放。本页有架构图、边界、演示入口，以及文件格式和校验命令。量化指标和配音视频仍未完成 |
+| [68](https://github.com/Duang777/waybill-guardian/issues/68) | 仍开放。本页已有架构图、KPI 口径、演示入口和文件校验命令，正式配音视频仍未完成 |
 | [77](https://github.com/Duang777/waybill-guardian/issues/77) | 前端视觉，含 issue 69 到 76 |
 
 生产化处置链路见 [issue 44](https://github.com/Duang777/waybill-guardian/issues/44)。

@@ -30,15 +30,15 @@ After a delay, damage, or loss, waybill-guardian reads the waybill, tracking, dr
 
 The agent collects waybill, tracking, driver, and weather evidence before the person decides whether to reassign, open a claim, or send a notice. Reviewers replay the audit by sequence number.
 
-This repository has no measured numbers for time recovered, cost, or labor saved. The three scores on the page come from `deriveAssessment` in [`internal/guardian/assessment.go`](internal/guardian/assessment.go), clamped to 0 through 100. Status matching ignores case. When it is not `delivered`, the ETA score starts at 20, adds 15 for each anomaly point, then adds stop hours times 8, rounded. The road score is continuous driving hours times 5, rounded, plus 30 when the fatigue alert is set. The weather score is the highest segment alert. `none`, `normal`, `green`, and an empty value are 0. `low`, `blue`, and `yellow` are 30. `medium` and `orange` are 60. `high`, `red`, and `critical` are 90. Any other value is 20. The embedded fixture therefore shows ETA 83, road 75, and weather 0. These are console display scores. The repository has no business KPI for them.
+The overview calculates labor saved, anomaly closure rate, average handling time, and approval rate from the documented formulas below. The data file does not yet provide ETA baselines or cost fields, so time recovered and cost impact are explicitly unavailable instead of being filled with simulated assumptions. The three scores on the waybill page come from `deriveAssessment` in [`internal/guardian/assessment.go`](internal/guardian/assessment.go), clamped to 0 through 100. Status matching ignores case. When it is not `delivered`, the ETA score starts at 20, adds 15 for each anomaly point, then adds stop hours times 8, rounded. The road score is continuous driving hours times 5, rounded, plus 30 when the fatigue alert is set. The weather score is the highest segment alert. `none`, `normal`, `green`, and an empty value are 0. `low`, `blue`, and `yellow` are 30. `medium` and `orange` are 60. `high`, `red`, and `critical` are 90. Any other value is 20. The embedded fixture therefore shows ETA 83, road 75, and weather 0.
 
 **The default demo is still a script.** `AGENT_MODE=demo` uses `ScenarioModel` in [`internal/agent/scenario_model.go`](internal/agent/scenario_model.go). It calls the four read tools in a fixed order, reads the driver, route, and candidate carriers from the tool results, and fills a fixed sentence template. Replacing that demo with real model inference is still open in [issue 59](https://github.com/Duang777/waybill-guardian/issues/59).
 
 `AGENT_MODE=online` can call the OpenAI Responses API, or an OpenAI-compatible Chat Completions API. That wiring is in the tree. Issue 59 still asks for a real-model default demo, structured evidence references, and acceptance on a domestic model. Those items are still open.
 
-`PLATFORM=mock` loads only the embedded waybill `YD2026101001` from [`internal/tools/testdata/demo.json`](internal/tools/testdata/demo.json). `PLATFORM=file` loads one JSON or CSV v1 file at startup, and the page can select a waybill from that file and start a run. That landed with closed [issue 60](https://github.com/Duang777/waybill-guardian/issues/60). Writes in file mode stay on the in-memory fixture write runtime, and SMS is not actually sent. The file format has no highway-port, vehicle, or route network.
+`PLATFORM=mock` loads only the embedded waybill `YD2026101001` from [`internal/tools/testdata/demo.json`](internal/tools/testdata/demo.json). `PLATFORM=file` loads one JSON or CSV v1 file at startup and supports optional highway-port, vehicle, and route network entities. The page can select a waybill from that file and start a run. Writes in file mode stay on the in-memory fixture write runtime, and SMS is not actually sent.
 
-The page is a console for the selected waybill. A network view across highway ports is still open in [issue 61](https://github.com/Duang777/waybill-guardian/issues/61). The current UI is also not the black and orange command center in [issue 77](https://github.com/Duang777/waybill-guardian/issues/77).
+The home page is a nationwide highway-port overview with the network, KPIs, anomaly queue, and cited operating briefs. It can start five independent runs in one batch. Selecting a waybill opens its workbench; every run keeps its own approval and SSE timeline. The current UI is still not the black and orange command center in [issue 77](https://github.com/Duang777/waybill-guardian/issues/77).
 
 <p align="center">
   <img alt="Desktop width. The embedded fixture is waiting for approval. The waybill selector shows Hangzhou to Chengdu, YD2026101001, and the button reads 重新处置. The proposal reassigns to 川行快运 and notifies the shipper and driver. The map is the local track. Display scores are ETA 83, road 75, weather 0." src="docs/assets/console-approval.png" width="840">
@@ -105,7 +105,7 @@ The status describes the code in this repository.
 | Reassign HTTP sandbox | Shipped | `tms.reassign` only. Reads stay on the fixture. Not a production TMS. |
 | Online model calls | In progress | An OpenAI-compatible API can be configured. The default demo is still the script. See [issue 59](https://github.com/Duang777/waybill-guardian/issues/59). |
 | File import | Shipped | `PLATFORM=file` loads JSON or CSV v1 at startup, and the page can select a waybill from the file. Writes stay on the in-memory fixture runtime. See closed [issue 60](https://github.com/Duang777/waybill-guardian/issues/60) and [`docs/file-data-source-design.md`](docs/file-data-source-design.md). |
-| Highway-port overview | Planned | [Issue 61](https://github.com/Duang777/waybill-guardian/issues/61) |
+| Highway-port overview | Shipped | The home page shows the 72-port network, KPIs, anomaly queue, operating briefs, and batch start with per-run approval. See [issue 61](https://github.com/Duang777/waybill-guardian/issues/61). |
 | Apache-2.0 and dependency manifests | Shipped | The root has `LICENSE`. Transitive dependency manifests are in [`docs/licenses/`](docs/licenses/). |
 | CSRF checks on non-GET requests | Planned | [Issue 64](https://github.com/Duang777/waybill-guardian/issues/64) |
 | Docker Compose | Shipped | One container serves the frontend and API, with an optional PostgreSQL 17 profile. |
@@ -120,7 +120,7 @@ The script is [`docs/demo-script.md`](docs/demo-script.md). Start the stack:
 ./scripts/demo.sh
 ```
 
-Open <http://127.0.0.1:5173>. The waybill selector shows `YD2026101001`, Hangzhou to Chengdu. Click **启动处置**. The button sends `POST /api/runs` with `waybill_id` in the body. `POST /api/demo/trigger` still starts this embedded waybill.
+Open <http://127.0.0.1:5173> for the operating overview. Select anomalous waybills and click **交给 Agent**, or open `/waybills/:id` for one waybill. The workbench still offers **启动处置**. `POST /api/demo/trigger` starts the embedded waybill.
 
 1. The agent reads waybill `YD2026101001`, Hangzhou to Chengdu.
 2. The timeline records waybill, tracking, driver, and weather calls.
@@ -214,6 +214,7 @@ npm run build
 npm audit --omit=dev --audit-level=high
 npm run verify:e2e
 npm run verify:file-e2e
+npm run verify:overview
 ```
 
 GitHub Actions runs the Go race suite, recovery stability loop, PostgreSQL integration, Web,
@@ -238,6 +239,8 @@ browser E2E suites and upload `web/artifacts/*.png`.
 | `AGENT_MODE` | `demo` | `demo` uses `ScenarioModel`. `online` calls an external model |
 | `PLATFORM` | `mock` | `mock` uses the fixture. `file` loads `DATA_FILE`. `real` uses the reassign sandbox |
 | `DATA_FILE` | empty | Required for `PLATFORM=file`. One JSON or CSV v1 file |
+| `MAX_CONCURRENT_RUNS` | `8` | Maximum concurrent investigation runs, from 1 through 64 |
+| `EVIDENCE_STEP_MINUTES` | `8` | Estimated human minutes per evidence collection step. Must be positive |
 | `STORAGE` | `jsonl` | `jsonl` or `postgres` |
 | `AUTH_MODE` | `local` | `local` or `jwt` |
 | `APPROVAL_TTL` | `10m` | Approval lifetime, Go duration. An invalid value falls back to the default |
@@ -276,6 +279,47 @@ docker compose up --build
 ```
 
 `PLATFORM=file` also requires `STORAGE=jsonl` and `AUTH_MODE=local`. The server loads the whole file once at startup. A syntax, reference, coordinate, or time-order error fails before the process listens. It does not reload the file while running. Replacing the file requires a restart. Fields and checks are in [`docs/file-data-source-design.md`](docs/file-data-source-design.md). The waybill selector lists the waybills in the file.
+
+The repository also contains reproducible simulated data with 72 highway ports, 72 routes, 200
+vehicles, 200 waybills, and five anomaly types:
+
+```bash
+env -u GOROOT go run ./cmd/datagenerate \
+  --output ./data/simulated/waybills-v1.json \
+  --waybills 200
+
+env -u GOROOT go run ./cmd/dataimport validate \
+  --data ./data/simulated/waybills-v1.json
+```
+
+`hubs`, `vehicles`, `routes`, and the corresponding waybill references are optional v1 network
+extensions. If a file contains any network entity, the validator requires all three entity groups
+and every reference. The simulated data is for product demonstrations and capacity checks. It is
+not operational data.
+
+### Operating overview and KPIs
+
+`GET /api/overview` returns authorized highway ports, routes, the anomaly queue, and three cited
+operating briefs. The service filters the waybill scope before calculating totals and ratios. The
+brief reads aggregate data only and cannot invoke write tools.
+
+`POST /api/runs:batch` accepts up to 20 `waybill_id` values and returns an independent result for
+each one. `MAX_CONCURRENT_RUNS` limits concurrent investigations. Every accepted run has its own
+`run_id`, approval record, and SSE timeline.
+
+`GET /api/kpis?window=24h` uses these formulas:
+
+| KPI | Formula | Result when data is missing |
+|---|---|---|
+| Time recovered | `sum(baseline ETA without action - ETA after action)` | `unavailable` without both ETA fields |
+| Cost impact | `sum(avoided penalty - reassignment delta - handling cost)` | `unavailable` without cost fields |
+| Labor saved | `successful evidence steps * EVIDENCE_STEP_MINUTES / 60` | `0` hours without evidence events |
+| Anomaly closure rate | `completed or rejected anomaly runs / anomalous waybills * 100%` | `0%` without anomalous waybills |
+| Average handling time | `sum(terminal time - start time) / closed runs` | `unavailable` without closed runs |
+| Approval rate | `confirmed decisions / human decisions * 100%` | `unavailable` without decisions |
+
+The service does not invent values for time recovered or cost impact. A production adapter must
+provide the baseline, result, and cost fields required by those formulas.
 
 ### Online model
 
@@ -398,13 +442,13 @@ These three projects were used to compare interaction and domain splits. None of
 | Issue | Topic |
 |---|---|
 | [59](https://github.com/Duang777/waybill-guardian/issues/59) | Run the demo on a real model, with structured evidence references |
-| [60](https://github.com/Duang777/waybill-guardian/issues/60) | Closed. Load JSON or CSV v1 at startup and select a waybill on the page. No highway-port network |
-| [61](https://github.com/Duang777/waybill-guardian/issues/61) | Highway-port overview and KPIs that can be checked |
+| [60](https://github.com/Duang777/waybill-guardian/issues/60) | Closed. Load JSON or CSV v1 at startup and select a waybill on the page |
+| [61](https://github.com/Duang777/waybill-guardian/issues/61) | Complete. Highway-port overview, KPIs, anomaly queue, and batch start |
 | [62](https://github.com/Duang777/waybill-guardian/issues/62) | Complete. Apache-2.0, transitive dependency manifests, and `.mailmap` |
 | [64](https://github.com/Duang777/waybill-guardian/issues/64) | CSRF checks for non-GET requests |
 | [65](https://github.com/Duang777/waybill-guardian/issues/65) | Complete. Single-container image and Docker Compose |
 | [67](https://github.com/Duang777/waybill-guardian/issues/67) | Complete. GitHub Actions |
-| [68](https://github.com/Duang777/waybill-guardian/issues/68) | Still open. This page has the diagram, the boundaries, the demo entry, and the file-format checks. Measured KPIs and a dubbed video are still open |
+| [68](https://github.com/Duang777/waybill-guardian/issues/68) | Still open. This page has the diagram, KPI formulas, demo entry, and file checks. A dubbed video is still open |
 | [77](https://github.com/Duang777/waybill-guardian/issues/77) | Frontend visual work, including issues 69 through 76 |
 
 The production handling path is [issue 44](https://github.com/Duang777/waybill-guardian/issues/44).

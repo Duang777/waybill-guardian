@@ -91,7 +91,7 @@ try {
   });
   const page = await context.newPage();
   const video = page.video();
-  await page.goto(webURL, { waitUntil: "networkidle" });
+  await page.goto(`${webURL}/waybills/YD2026101001`, { waitUntil: "networkidle" });
   await page.getByText("精密电子元件", { exact: true }).waitFor();
   await installCaption(page);
 

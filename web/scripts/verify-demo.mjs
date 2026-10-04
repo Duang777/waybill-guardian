@@ -78,7 +78,7 @@ try {
       triggerRequests += 1;
     }
   });
-  await page.goto(webURL, { waitUntil: "networkidle" });
+  await page.goto(`${webURL}/waybills/YD2026101001`, { waitUntil: "networkidle" });
   await page.getByText("精密电子元件", { exact: true }).waitFor();
 
   const runs = [];
