@@ -17,6 +17,8 @@ const artifactDir = join(webDir, "artifacts");
 const outputPath = resolve(
   process.env.RECORD_OUTPUT ?? join(artifactDir, "waybill-guardian-demo.mp4"),
 );
+const agentMode = process.env.AGENT_MODE?.trim().toLowerCase() || "online";
+requireOnlineModelConfig(agentMode, process.env);
 const dataDir = await mkdtemp(join(tmpdir(), "waybill-guardian-recording-"));
 const rawVideoDir = join(dataDir, "video");
 const backendPort = await availablePort(process.env.RECORD_BACKEND_PORT);
@@ -42,6 +44,7 @@ try {
     cwd: repoDir,
     env: {
       ...goEnvironment,
+      AGENT_MODE: agentMode,
       DATA_DIR: dataDir,
       HTTP_ADDR: `127.0.0.1:${backendPort}`,
       DEMO_STEP_DELAY: "120ms",
@@ -114,7 +117,8 @@ try {
     "系统依次查询运单、轨迹、司机和天气，工具调用实时写入审计日志。",
   );
   await page.getByRole("button", { name: "启动处置", exact: true }).click();
-  await page.getByText("改派至川行快运", { exact: true }).waitFor();
+  const proposalHeading = page.getByRole("heading", { name: /^改派至/ });
+  await proposalHeading.waitFor();
   await page.getByText("待确认", { exact: true }).waitFor();
   await hold(page, 2_000);
 
@@ -160,14 +164,25 @@ try {
     "驳回必须填写原因，Agent 会读取决定并提交第二个候选运力。",
   );
   await page.getByRole("button", { name: "重新处置", exact: true }).click();
-  await page.getByText("改派至川行快运", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "驳回方案", exact: true }).waitFor();
+  await page.getByText("待确认", { exact: true }).waitFor();
+  const rejectedProposalTitle = await proposalHeading.textContent();
   await page.getByRole("button", { name: "驳回方案", exact: true }).click();
   await page
     .getByLabel("驳回原因")
     .fill("首选承运商当前无可用车辆");
   await hold(page, 1_500);
   await page.getByRole("button", { name: "确认驳回", exact: true }).click();
-  await page.getByText("改派至蜀道联运", { exact: true }).waitFor();
+  await page.waitForFunction(
+    (previousTitle) =>
+      [...document.querySelectorAll("h2")].some(
+        (heading) =>
+          heading.textContent?.startsWith("改派至") &&
+          heading.textContent !== previousTitle,
+      ),
+    rejectedProposalTitle,
+  );
+  await page.getByText("待确认", { exact: true }).waitFor();
   await hold(page, 4_000);
 
   await scene(
@@ -228,6 +243,23 @@ try {
   await browser?.close();
   stopProcesses(processes);
   await rm(dataDir, { recursive: true, force: true });
+}
+
+function requireOnlineModelConfig(mode, environment) {
+  if (mode !== "online") {
+    return;
+  }
+  const requiredVariables = ["LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"];
+  const missingVariables = requiredVariables.filter(
+    (name) => !environment[name]?.trim(),
+  );
+  if (missingVariables.length === 0) {
+    return;
+  }
+  throw new Error(
+    `AGENT_MODE=online requires: ${missingVariables.join(" ")}. ` +
+      "Set the model configuration, or run AGENT_MODE=offline npm run record:demo.",
+  );
 }
 
 async function installCaption(page) {

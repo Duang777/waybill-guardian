@@ -6,7 +6,7 @@ services:
         AMAP_BROWSER_CODE: ${VITE_AMAP_SECURITY_JS_CODE:-}
         AMAP_BROWSER_ID: ${VITE_AMAP_KEY:-}
     environment:
-      AGENT_MODE: ${AGENT_MODE:-demo}
+      AGENT_MODE: ${AGENT_MODE:-online}
       ALLOW_NON_LOOPBACK_LOCAL: "true"
       AUTH_MODE: local
       CHECKPOINT_ENCRYPTION_KEY: ${CHECKPOINT_ENCRYPTION_KEY:-}
@@ -20,7 +20,9 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_API_STYLE: ${LLM_API_STYLE:-responses}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MAX_OUTPUT_TOKENS: ${LLM_MAX_OUTPUT_TOKENS:-4096}
       LLM_MODEL: ${LLM_MODEL:-}
+      LLM_REQUEST_TIMEOUT: ${LLM_REQUEST_TIMEOUT:-45s}
       LOCAL_TRUSTED_REMOTE: container-gateway
       PLATFORM: ${PLATFORM:-mock}
       STORAGE: ${STORAGE:-jsonl}

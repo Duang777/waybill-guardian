@@ -81,12 +81,12 @@ type modelBriefItem struct {
 }
 
 func NewBriefGenerator(config ModelConfig) (BriefGenerator, error) {
-	mode := strings.ToLower(strings.TrimSpace(config.Mode))
-	if mode == "" || mode == ModeDemo {
-		return nil, nil
+	mode, err := normalizeModelMode(config.Mode)
+	if err != nil {
+		return nil, err
 	}
-	if mode != ModeOnline {
-		return nil, fmt.Errorf("AGENT_MODE must be demo or online")
+	if mode == ModeOffline {
+		return nil, nil
 	}
 	model, err := newOnlineModel(config)
 	if err != nil {

@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	agentkit "github.com/Duang777/waybill-guardian/internal/agent"
 	"github.com/Duang777/waybill-guardian/internal/approval"
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
@@ -1142,6 +1143,67 @@ func TestStrictDurationEnv(t *testing.T) {
 				t.Fatalf("HISTORY_RETENTION=%q was accepted", value)
 			}
 		})
+	}
+}
+
+func TestModelConfigFromEnv(t *testing.T) {
+	t.Setenv("AGENT_MODE", "online")
+	t.Setenv("LLM_API_STYLE", "chat_completions")
+	t.Setenv("LLM_BASE_URL", " https://example.com/v1 ")
+	t.Setenv("LLM_API_KEY", " secret ")
+	t.Setenv("LLM_MODEL", " model-1 ")
+	t.Setenv("LLM_REQUEST_TIMEOUT", "750ms")
+	t.Setenv("LLM_MAX_OUTPUT_TOKENS", "2048")
+
+	config, err := modelConfigFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Mode != "online" ||
+		config.APIStyle != "chat_completions" ||
+		config.BaseURL != "https://example.com/v1" ||
+		config.APIKey != "secret" ||
+		config.Model != "model-1" ||
+		config.RequestTimeout != 750*time.Millisecond ||
+		config.MaxOutputTokens != 2048 {
+		t.Fatalf("model config = %+v", config)
+	}
+}
+
+func TestModelConfigFromEnvRejectsInvalidLimits(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "timeout", key: "LLM_REQUEST_TIMEOUT", value: "0s"},
+		{name: "tokens", key: "LLM_MAX_OUTPUT_TOKENS", value: "32769"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("AGENT_MODE", "online")
+			t.Setenv("LLM_REQUEST_TIMEOUT", "")
+			t.Setenv("LLM_MAX_OUTPUT_TOKENS", "")
+			t.Setenv(test.key, test.value)
+			if _, err := modelConfigFromEnv(); err == nil {
+				t.Fatalf("%s=%q was accepted", test.key, test.value)
+			}
+		})
+	}
+}
+
+func TestModelConfigFromEnvIgnoresOnlineLimitsInOfflineMode(t *testing.T) {
+	t.Setenv("AGENT_MODE", "offline")
+	t.Setenv("LLM_REQUEST_TIMEOUT", "invalid")
+	t.Setenv("LLM_MAX_OUTPUT_TOKENS", "invalid")
+
+	config, err := modelConfigFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Mode != agentkit.ModeOffline ||
+		config.RequestTimeout != 0 ||
+		config.MaxOutputTokens != 0 {
+		t.Fatalf("offline model config = %+v", config)
 	}
 }
 

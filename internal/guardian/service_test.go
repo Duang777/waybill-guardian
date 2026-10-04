@@ -15,6 +15,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/idempotency"
 	"github.com/Duang777/waybill-guardian/internal/platform"
+	"github.com/Duang777/waybill-guardian/internal/proposal"
 	"github.com/Duang777/waybill-guardian/internal/tools"
 )
 
@@ -360,6 +361,48 @@ func TestRejectedReassignProducesAlternativePlan(t *testing.T) {
 	if params["carrier_id"] != "CARRIER-SW-19" {
 		t.Fatalf("alternative carrier = %v", params["carrier_id"])
 	}
+	events, err := service.Replay(t.Context(), run.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rejectedAt audit.Seq
+	for _, event := range events {
+		if event.Type != audit.EventApprovalDecided {
+			continue
+		}
+		var payload struct {
+			Status approval.Status `json:"status"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Status == approval.StatusRejected {
+			rejectedAt = event.Seq
+		}
+	}
+	freshReads := make(map[domain.Action]int)
+	for _, event := range events {
+		if event.Seq <= rejectedAt || event.Type != audit.EventToolResult {
+			continue
+		}
+		var payload struct {
+			Action domain.Action `json:"action"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		freshReads[payload.Action]++
+	}
+	for _, action := range []domain.Action{
+		domain.ActionGetWaybill,
+		domain.ActionGetTracking,
+		domain.ActionGetDriver,
+		domain.ActionGetRoadWeather,
+	} {
+		if freshReads[action] != 1 {
+			t.Fatalf("fresh %s results = %d, want 1", action, freshReads[action])
+		}
+	}
 	if runtime.WriteCount(domain.ActionReassign) != 0 {
 		t.Fatal("rejected plan executed a write")
 	}
@@ -545,6 +588,322 @@ func TestRecoverReplaysConfirmedApproval(t *testing.T) {
 	waitForRunStatus(t, reopened, run.RunID, domain.RunCompleted)
 	if runtime.WriteCount(domain.ActionReassign) != 1 || runtime.WriteCount(domain.ActionSendSMS) != 2 {
 		t.Fatalf("writes = reassign:%d sms:%d", runtime.WriteCount(domain.ActionReassign), runtime.WriteCount(domain.ActionSendSMS))
+	}
+}
+
+func TestRecoverUsesPreparedProposalWithoutCallingModelAgain(t *testing.T) {
+	clients, runtime, err := tools.NewDemoRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := Open(Config{
+		DataDir:      t.TempDir(),
+		Reads:        clients,
+		WriteRuntime: runtime,
+		StepDelay:    0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := source.StartRun(t.Context(), "YD2026101001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := waitForApproval(t, source, run.RunID)
+	events, err := source.Replay(t.Context(), run.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name              string
+		includeCheckpoint bool
+	}{
+		{name: "after checkpoint", includeCheckpoint: true},
+		{name: "before checkpoint", includeCheckpoint: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			now := replayEventPrefix(
+				t,
+				dataDir,
+				events,
+				audit.EventProposalPrepared,
+				test.includeCheckpoint,
+			)
+			reopened, err := Open(Config{
+				DataDir:      dataDir,
+				Reads:        clients,
+				WriteRuntime: runtime,
+				Clock:        func() time.Time { return now },
+				StepDelay:    0,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			before, err := reopened.Replay(t.Context(), run.RunID, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			modelCallsBefore := countEvents(before, audit.EventModelCallStarted)
+			if err := reopened.Recover(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			after, err := reopened.Replay(t.Context(), run.RunID, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := countEvents(after, audit.EventModelCallStarted); got != modelCallsBefore {
+				t.Fatalf("model call count = %d, want %d", got, modelCallsBefore)
+			}
+
+			if !test.includeCheckpoint {
+				recovered, err := reopened.GetRun(run.RunID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if recovered.Status != domain.RunReviewRequired {
+					t.Fatalf("run status = %q, want review_required", recovered.Status)
+				}
+				if _, err := reopened.CurrentApproval(run.RunID); !errors.Is(err, approval.ErrNotFound) {
+					t.Fatalf("CurrentApproval error = %v, want ErrNotFound", err)
+				}
+				active, err := reopened.ListActiveRuns(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(active) != 1 ||
+					active[0].RunID != run.RunID ||
+					active[0].Status != domain.RunReviewRequired {
+					t.Fatalf("active review-required runs = %+v", active)
+				}
+				return
+			}
+
+			recovered, err := reopened.CurrentApproval(run.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if recovered.ID != expected.ID ||
+				recovered.SDKRunID != expected.SDKRunID ||
+				!recovered.RequestedAt.Equal(expected.RequestedAt) ||
+				!recovered.ExpiresAt.Equal(expected.ExpiresAt) ||
+				recovered.ProposalRef == nil ||
+				recovered.ProposalRef.Digest != expected.ProposalRef.Digest ||
+				len(recovered.Items) != len(expected.Items) {
+				t.Fatalf("recovered approval = %+v, want checkpoint identity %+v", recovered, expected)
+			}
+		})
+	}
+}
+
+func TestRecoverSkipsPreparedProposalHeldByAnotherWorker(t *testing.T) {
+	clients, runtime, err := tools.NewDemoRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := Open(Config{
+		DataDir:      t.TempDir(),
+		Reads:        clients,
+		WriteRuntime: runtime,
+		StepDelay:    0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRun, err := source.StartRun(t.Context(), "YD2026101001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstApproval := waitForApproval(t, source, firstRun.RunID)
+	secondRun, err := source.StartRun(t.Context(), "YD2026101001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondApproval := waitForApproval(t, source, secondRun.RunID)
+	firstEvents, err := source.Replay(t.Context(), firstRun.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondEvents, err := source.Replay(t.Context(), secondRun.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dataDir := t.TempDir()
+	now := replayEventPrefix(
+		t,
+		dataDir,
+		firstEvents,
+		audit.EventProposalPrepared,
+		true,
+	)
+	replayEventPrefix(
+		t,
+		dataDir,
+		secondEvents,
+		audit.EventProposalPrepared,
+		true,
+	)
+	reopened, err := Open(Config{
+		DataDir:      dataDir,
+		Reads:        clients,
+		WriteRuntime: runtime,
+		Clock:        func() time.Time { return now },
+		StepDelay:    0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	reopened.coordinator = &selectiveUnavailableCoordinator{
+		blockedRun: firstRun.RunID,
+	}
+
+	if err := reopened.Recover(t.Context()); err != nil {
+		t.Fatalf("Recover stopped at another worker's run: %v", err)
+	}
+	if _, err := reopened.GetApproval(firstApproval.ID); !errors.Is(err, approval.ErrNotFound) {
+		t.Fatalf("blocked approval error = %v, want ErrNotFound", err)
+	}
+	recovered, err := reopened.GetApproval(secondApproval.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.ID != secondApproval.ID {
+		t.Fatalf("recovered approval = %q, want %q", recovered.ID, secondApproval.ID)
+	}
+}
+
+func TestRecordReviewRequiredReturnsAuditFailure(t *testing.T) {
+	clients, runtime, err := tools.NewDemoRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := Open(Config{
+		DataDir:      t.TempDir(),
+		Reads:        clients,
+		WriteRuntime: runtime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	runID := domain.RunID("run-review-audit-failure")
+	service.setRun(RunView{RunID: runID, Status: domain.RunInvestigating})
+	appendErr := errors.New("append review-required event")
+	service.journal = &failingEventJournal{
+		Journal:   service.journal,
+		eventType: audit.EventRunReviewRequired,
+		err:       appendErr,
+	}
+
+	err = service.recordReviewRequiredWithContext(
+		t.Context(),
+		runID,
+		errors.Join(proposal.ErrReviewRequired, errors.New("invalid proposal")),
+	)
+	if !errors.Is(err, appendErr) {
+		t.Fatalf("recordReviewRequiredWithContext error = %v, want append failure", err)
+	}
+	run, err := service.GetRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != domain.RunInvestigating {
+		t.Fatalf("run status = %q, want unchanged investigating", run.Status)
+	}
+}
+
+func TestRecoverMaterializesExpiredPreparedProposalWithOriginalWindow(t *testing.T) {
+	clients, runtime, err := tools.NewDemoRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := Open(Config{
+		DataDir:      t.TempDir(),
+		Reads:        clients,
+		WriteRuntime: runtime,
+		ApprovalTTL:  time.Hour,
+		StepDelay:    0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := source.StartRun(t.Context(), "YD2026101001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := waitForApproval(t, source, run.RunID)
+	events, err := source.Replay(t.Context(), run.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dataDir := t.TempDir()
+	replayEventPrefix(t, dataDir, events, audit.EventProposalPrepared, true)
+	now := expected.ExpiresAt.Add(time.Second)
+	reopened, err := Open(Config{
+		DataDir:      dataDir,
+		Reads:        clients,
+		WriteRuntime: runtime,
+		Clock:        func() time.Time { return now },
+		ApprovalTTL:  time.Hour,
+		StepDelay:    0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := reopened.Recover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, err := reopened.GetApproval(expected.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != approval.StatusExpired {
+		t.Fatalf("recovered approval status = %q, want expired", recovered.Status)
+	}
+	if !recovered.RequestedAt.Equal(expected.RequestedAt) ||
+		!recovered.ExpiresAt.Equal(expected.ExpiresAt) {
+		t.Fatalf(
+			"recovered approval window = %s..%s, want %s..%s",
+			recovered.RequestedAt,
+			recovered.ExpiresAt,
+			expected.RequestedAt,
+			expected.ExpiresAt,
+		)
+	}
+}
+
+func TestLatestPreparedProposalBackfillsLegacyRequestedAt(t *testing.T) {
+	eventTime := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	prepared, ok, err := latestPreparedProposal([]audit.Event{{
+		EventID: "legacy-proposal",
+		Type:    audit.EventProposalPrepared,
+		TS:      eventTime,
+		Payload: json.RawMessage(`{"plan_version":1}`),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("legacy proposal checkpoint was not found")
+	}
+	if !prepared.RequestedAt.Equal(eventTime) || !prepared.legacyID {
+		t.Fatalf("legacy proposal timing = %+v", prepared)
 	}
 }
 
@@ -1262,6 +1621,56 @@ func fixtureBindingForItem(
 	return binding
 }
 
+func replayEventPrefix(
+	t *testing.T,
+	dataDir string,
+	events []audit.Event,
+	stopType audit.EventType,
+	includeStop bool,
+) time.Time {
+	t.Helper()
+	now := events[0].TS
+	store, err := audit.Open(dataDir, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range events {
+		if source.Type == stopType && !includeStop {
+			break
+		}
+		now = source.TS
+		replayed, err := store.Append(t.Context(), source.RunID, audit.Draft{
+			EventID: source.EventID,
+			Actor:   source.Actor,
+			Type:    source.Type,
+			Payload: source.Payload,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if replayed.Hash != source.Hash {
+			t.Fatalf("replayed event %q hash = %q, want %q", source.EventID, replayed.Hash, source.Hash)
+		}
+		if source.Type == stopType {
+			break
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return now
+}
+
+func countEvents(events []audit.Event, eventType audit.EventType) int {
+	count := 0
+	for _, event := range events {
+		if event.Type == eventType {
+			count++
+		}
+	}
+	return count
+}
+
 type failingActionRuntime struct {
 	platform.WriteRuntime
 	action domain.Action
@@ -1318,6 +1727,43 @@ type fixedRecoveryExecutor struct {
 	idempotency.Executor
 	command idempotency.Command
 	outcome idempotency.RecoveryOutcome
+}
+
+var errRunUnavailable = errors.New("run unavailable")
+
+type selectiveUnavailableCoordinator struct {
+	blockedRun domain.RunID
+}
+
+func (c *selectiveUnavailableCoordinator) AcquireRun(
+	ctx context.Context,
+	runID domain.RunID,
+) (context.Context, func() error, error) {
+	if runID == c.blockedRun {
+		return nil, nil, errRunUnavailable
+	}
+	return ctx, func() error { return nil }, nil
+}
+
+func (*selectiveUnavailableCoordinator) IsRunUnavailable(err error) bool {
+	return errors.Is(err, errRunUnavailable)
+}
+
+type failingEventJournal struct {
+	audit.Journal
+	eventType audit.EventType
+	err       error
+}
+
+func (j *failingEventJournal) Append(
+	ctx context.Context,
+	runID domain.RunID,
+	draft audit.Draft,
+) (audit.Event, error) {
+	if draft.Type == j.eventType {
+		return audit.Event{}, j.err
+	}
+	return j.Journal.Append(ctx, runID, draft)
 }
 
 func (e *fixedRecoveryExecutor) DueRecoveries(

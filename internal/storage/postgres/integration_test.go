@@ -65,8 +65,8 @@ func TestMigrationsAgainstPostgreSQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if health.SchemaVersion != 6 {
-		t.Fatalf("schema version = %d, want 6", health.SchemaVersion)
+	if health.SchemaVersion != 7 {
+		t.Fatalf("schema version = %d, want 7", health.SchemaVersion)
 	}
 	var tableCount int
 	if err := db.pool.QueryRow(ctx, `
@@ -86,8 +86,8 @@ func TestMigrationsAgainstPostgreSQL(t *testing.T) {
 	).Scan(&migrationCount); err != nil {
 		t.Fatal(err)
 	}
-	if migrationCount != 6 {
-		t.Fatalf("migration rows = %d, want 6", migrationCount)
+	if migrationCount != 7 {
+		t.Fatalf("migration rows = %d, want 7", migrationCount)
 	}
 
 	insert := func() error {
@@ -2587,6 +2587,45 @@ func TestGuardianResumesPostgresHistoryAcrossInstances(t *testing.T) {
 	}
 	if pending.ID == "" {
 		t.Fatal("timed out waiting for PostgreSQL-backed approval")
+	}
+	if pending.ProposalRef == nil {
+		t.Fatal("PostgreSQL-backed approval has no proposal reference")
+	}
+	var (
+		acceptedDigest  string
+		projectedDigest string
+		evidenceCount   int
+		sourceCallID    string
+	)
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT proposal.accepted->>'digest',
+		       proposal.proposal_digest,
+		       jsonb_array_length(approval.evidence_refs),
+		       approval.evidence_refs->0->'source'->>'tool_call_id'
+		FROM waybill.proposals proposal
+		JOIN waybill.approvals approval
+		  ON approval.tenant_id = proposal.tenant_id
+		 AND approval.proposal_id = proposal.proposal_id
+		WHERE proposal.tenant_id = $1 AND proposal.proposal_id = $2
+	`, tenantID, pending.ProposalRef.ProposalID).Scan(
+		&acceptedDigest,
+		&projectedDigest,
+		&evidenceCount,
+		&sourceCallID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if acceptedDigest != pending.ProposalRef.Digest ||
+		projectedDigest != pending.ProposalRef.Digest ||
+		evidenceCount == 0 ||
+		sourceCallID == "" {
+		t.Fatalf(
+			"proposal projection = accepted:%q digest:%q evidence:%d source:%q",
+			acceptedDigest,
+			projectedDigest,
+			evidenceCount,
+			sourceCallID,
+		)
 	}
 	if err := first.Close(); err != nil {
 		t.Fatal(err)

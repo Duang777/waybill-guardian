@@ -405,7 +405,7 @@ func (p *ConversationPersistence) prune(ctx context.Context, cutoff time.Time) e
 		WHERE summary.tenant_id = $1
 		  AND run.tenant_id = summary.tenant_id
 		  AND run.run_id = summary.thread_id
-		  AND run.status IN ('completed', 'rejected', 'failed', 'manual_review')
+		  AND run.status IN ('completed', 'rejected', 'failed', 'review_required', 'manual_review')
 		  AND run.closed_at < $2
 	`, p.tenantID, cutoff); err != nil {
 		return fmt.Errorf("prune PostgreSQL history summaries: %w", err)
@@ -416,7 +416,7 @@ func (p *ConversationPersistence) prune(ctx context.Context, cutoff time.Time) e
 		WHERE checkpoint.tenant_id = $1
 		  AND run.tenant_id = checkpoint.tenant_id
 		  AND run.run_id = checkpoint.thread_id
-		  AND run.status IN ('completed', 'rejected', 'failed', 'manual_review')
+		  AND run.status IN ('completed', 'rejected', 'failed', 'review_required', 'manual_review')
 		  AND run.closed_at < $2
 	`, p.tenantID, cutoff); err != nil {
 		return fmt.Errorf("prune PostgreSQL history checkpoints: %w", err)
@@ -426,7 +426,7 @@ func (p *ConversationPersistence) prune(ctx context.Context, cutoff time.Time) e
 		SET sdk_run_id = NULL,
 		    checkpoint_version = 0
 		WHERE tenant_id = $1
-		  AND status IN ('completed', 'rejected', 'failed', 'manual_review')
+		  AND status IN ('completed', 'rejected', 'failed', 'review_required', 'manual_review')
 		  AND closed_at < $2
 	`, p.tenantID, cutoff); err != nil {
 		return fmt.Errorf("clear PostgreSQL history pointers: %w", err)

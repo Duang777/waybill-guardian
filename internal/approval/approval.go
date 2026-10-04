@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -49,8 +50,21 @@ const (
 )
 
 type Evidence struct {
-	Label string `json:"label"`
-	Value string `json:"value"`
+	Label  string          `json:"label"`
+	Value  string          `json:"value"`
+	Source *EvidenceSource `json:"source,omitempty"`
+}
+
+type EvidenceSource struct {
+	ToolCallID string    `json:"tool_call_id"`
+	FieldPath  string    `json:"field_path"`
+	SourceSeq  audit.Seq `json:"source_seq"`
+}
+
+type ProposalRef struct {
+	ProposalID string `json:"proposal_id"`
+	EventID    string `json:"event_id"`
+	Digest     string `json:"digest"`
 }
 
 type Item struct {
@@ -73,6 +87,7 @@ type Approval struct {
 	Items        []Item            `json:"items"`
 	Reason       string            `json:"reason"`
 	Evidence     []Evidence        `json:"evidence"`
+	ProposalRef  *ProposalRef      `json:"proposal_ref,omitempty"`
 	Status       Status            `json:"status"`
 	RequestedAt  time.Time         `json:"requested_at"`
 	ExpiresAt    time.Time         `json:"expires_at"`
@@ -216,11 +231,34 @@ func IDFor(runID domain.RunID, callIDs []string) domain.ApprovalID {
 	return domain.ApprovalID("APR-" + hex.EncodeToString(hash.Sum(nil)[:8]))
 }
 
+func IDForPlan(
+	runID domain.RunID,
+	planVersion int,
+	callIDs []string,
+) domain.ApprovalID {
+	sorted := append([]string(nil), callIDs...)
+	sort.Strings(sorted)
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("waybill-approval-v2"))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(runID))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(strconv.Itoa(planVersion)))
+	for _, callID := range sorted {
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(callID))
+	}
+	return domain.ApprovalID("APR-" + hex.EncodeToString(hash.Sum(nil)[:8]))
+}
+
 func (s *Store) Create(ctx context.Context, value Approval) (Approval, error) {
 	if value.ID == "" || value.RunID == "" || value.WaybillID == "" || len(value.Items) == 0 {
 		return Approval{}, fmt.Errorf("approval id, run id, waybill id, and items are required")
 	}
 	if err := validateItems(value.Items); err != nil {
+		return Approval{}, err
+	}
+	if err := validateProposal(value); err != nil {
 		return Approval{}, err
 	}
 	s.mu.Lock()
@@ -230,11 +268,18 @@ func (s *Store) Create(ctx context.Context, value Approval) (Approval, error) {
 	}
 	now := s.clock().UTC()
 	value.Status = StatusPending
-	value.RequestedAt = now
+	if value.RequestedAt.IsZero() {
+		value.RequestedAt = now
+	} else {
+		value.RequestedAt = value.RequestedAt.UTC()
+	}
 	if value.ExpiresAt.IsZero() {
-		value.ExpiresAt = now.Add(10 * time.Minute)
+		value.ExpiresAt = value.RequestedAt.Add(10 * time.Minute)
 	} else {
 		value.ExpiresAt = value.ExpiresAt.UTC()
+	}
+	if !value.ExpiresAt.After(value.RequestedAt) {
+		return Approval{}, errors.New("approval expires_at must be after requested_at")
 	}
 	event, err := s.journal.Append(ctx, value.RunID, audit.Draft{
 		EventID: "approval:" + string(value.ID) + ":requested",
@@ -514,6 +559,9 @@ func (s *Store) applyLocked(event audit.Event) error {
 		if err := validateItems(value.Items); err != nil {
 			return err
 		}
+		if err := validateProposal(value); err != nil {
+			return err
+		}
 		s.approvals[value.ID] = value
 	case audit.EventApprovalDecided:
 		var payload decisionPayload
@@ -678,6 +726,17 @@ func clone(value Approval) Approval {
 		value.Items[index] = cloneItem(value.Items[index])
 	}
 	value.Evidence = append([]Evidence(nil), value.Evidence...)
+	for index := range value.Evidence {
+		if value.Evidence[index].Source == nil {
+			continue
+		}
+		source := *value.Evidence[index].Source
+		value.Evidence[index].Source = &source
+	}
+	if value.ProposalRef != nil {
+		proposalRef := *value.ProposalRef
+		value.ProposalRef = &proposalRef
+	}
 	return value
 }
 
@@ -726,6 +785,31 @@ func validateItems(items []Item) error {
 			return ErrDuplicateEffect
 		}
 		effectIDs[item.EffectID] = struct{}{}
+	}
+	return nil
+}
+
+func validateProposal(value Approval) error {
+	if value.ProposalRef != nil {
+		if value.ProposalRef.ProposalID == "" ||
+			value.ProposalRef.EventID == "" ||
+			len(value.ProposalRef.Digest) != sha256.Size*2 {
+			return fmt.Errorf("approval proposal reference is incomplete")
+		}
+		if _, err := hex.DecodeString(value.ProposalRef.Digest); err != nil {
+			return fmt.Errorf("approval proposal digest is invalid")
+		}
+	}
+	for _, evidence := range value.Evidence {
+		if evidence.Source == nil {
+			continue
+		}
+		if value.ProposalRef == nil ||
+			evidence.Source.ToolCallID == "" ||
+			evidence.Source.FieldPath == "" ||
+			evidence.Source.SourceSeq == 0 {
+			return fmt.Errorf("approval evidence source is incomplete")
+		}
 	}
 	return nil
 }

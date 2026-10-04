@@ -17,6 +17,7 @@ const runStatusSchema = z.enum([
   "completed",
   "rejected",
   "failed",
+  "review_required",
   "manual_review",
 ]);
 
@@ -314,10 +315,32 @@ const approvalItemSchema = z.union([
     .strict(),
 ]);
 
-const evidenceSchema = z
+const legacyEvidenceSchema = z
   .object({
     label: z.string().min(1),
     value: z.string().min(1),
+  })
+  .strict();
+
+const sourcedEvidenceSchema = legacyEvidenceSchema
+  .extend({
+    source: z
+      .object({
+        tool_call_id: z.string().min(1),
+        field_path: z.string().min(1),
+        source_seq: z.number().int().positive(),
+      })
+      .strict(),
+  })
+  .strict();
+
+const evidenceSchema = z.union([legacyEvidenceSchema, sourcedEvidenceSchema]);
+
+const proposalRefSchema = z
+  .object({
+    proposal_id: z.string().min(1),
+    event_id: z.string().min(1),
+    digest: z.string().regex(/^[0-9a-f]{64}$/),
   })
   .strict();
 
@@ -331,6 +354,7 @@ export const approvalSchema = z
     items: z.array(approvalItemSchema).min(1),
     reason: z.string(),
     evidence: z.array(evidenceSchema),
+    proposal_ref: proposalRefSchema.optional(),
     status: approvalStatusSchema,
     requested_at: z.string().min(1),
     expires_at: z.string().min(1),
@@ -343,10 +367,102 @@ export const approvalSchema = z
 export type Approval = z.infer<typeof approvalSchema>;
 export type ApprovalStatus = z.infer<typeof approvalStatusSchema>;
 
+const proposalCitationSchema = z
+  .object({
+    tool_call_id: z.string().min(1),
+    field_path: z.string().min(1),
+    value: z.unknown(),
+    display_value: z.string(),
+    source_event_id: z.string().min(1),
+    source_seq: z.number().int().positive(),
+    source_hash: z.string().length(64),
+  })
+  .strict();
+
+const proposalImpactSchema = z
+  .object({
+    availability: z.literal("unavailable"),
+    reason: z.string().min(1),
+  })
+  .strict();
+
+export const proposalSchema = z
+  .object({
+    schema_version: z.literal("proposal.v1"),
+    summary: z.string().min(1),
+    confidence_bps: z.number().int().min(1).max(10_000),
+    attribution: z
+      .array(
+        z
+          .object({
+            factor: z.string().min(1),
+            confidence_bps: z.number().int().min(1).max(10_000),
+            evidence: z.array(proposalCitationSchema).min(1),
+          })
+          .strict(),
+      )
+      .min(1),
+    alternatives: z.array(
+      z
+        .object({
+          carrier_id: z.string().min(1),
+          reason: z.string().min(1),
+        })
+        .strict(),
+    ),
+    expected_impact: z
+      .object({
+        eta_saved_min: proposalImpactSchema,
+        cost_delta_cny: proposalImpactSchema,
+      })
+      .strict(),
+    digest: z.string().regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
+
+export type Proposal = z.infer<typeof proposalSchema>;
+
+export const preparedProposalSchema = z
+  .object({
+    proposal_id: z.string().min(1),
+    approval_id: approvalIdSchema,
+    sdk_run_id: z.string().min(1),
+    plan_version: z.number().int().positive(),
+    proposal: proposalSchema,
+    writes: z.array(approvalItemSchema).min(1),
+    writes_digest: z.string().regex(/^[0-9a-f]{64}$/),
+    requested_at: z.string().min(1).optional(),
+    expires_at: z.string().min(1),
+  })
+  .strict();
+
+export type PreparedProposal = z.infer<typeof preparedProposalSchema>;
+
+export const runStartedPayloadSchema = z
+  .object({
+    incident_id: z.string().min(1),
+    waybill_id: waybillIdSchema,
+    status: z.literal("started"),
+    platform_profile: z.string().optional(),
+    read_source: z.string().optional(),
+    inference: z
+      .object({
+        mode: z.enum(["offline", "online"]),
+        api_style: z.string().optional(),
+        model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
 export const auditEventTypeSchema = z.enum([
   "run_started",
+  "model_call_started",
+  "model_call_finished",
   "tool_call",
   "tool_result",
+  "proposal_prepared",
   "attribution",
   "approval_requested",
   "approval_decided",
@@ -363,6 +479,7 @@ export const auditEventTypeSchema = z.enum([
   "run_completed",
   "run_rejected",
   "run_failed",
+  "run_review_required",
   "note",
 ]);
 

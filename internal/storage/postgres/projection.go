@@ -13,6 +13,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/idempotency"
 	"github.com/Duang777/waybill-guardian/internal/platform"
+	"github.com/Duang777/waybill-guardian/internal/proposal"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -34,6 +35,16 @@ type approvalDecisionProjection struct {
 type approvalStatusProjection struct {
 	ApprovalID domain.ApprovalID `json:"approval_id"`
 	Status     approval.Status   `json:"status"`
+}
+
+type preparedProposalProjection struct {
+	ProposalID   string            `json:"proposal_id"`
+	ApprovalID   domain.ApprovalID `json:"approval_id"`
+	SDKRunID     string            `json:"sdk_run_id"`
+	PlanVersion  int               `json:"plan_version"`
+	Proposal     proposal.Accepted `json:"proposal"`
+	Writes       []approval.Item   `json:"writes"`
+	WritesDigest string            `json:"writes_digest"`
 }
 
 type writeProjection struct {
@@ -103,6 +114,8 @@ func (r *Repository) applyProjection(ctx context.Context, tx pgx.Tx, event audit
 		return nil
 	case audit.EventToolCall, audit.EventToolResult, audit.EventAttribution:
 		return r.setRunStatus(ctx, tx, event.RunID, domain.RunInvestigating, false, event)
+	case audit.EventProposalPrepared:
+		return r.projectProposalPrepared(ctx, tx, event)
 	case audit.EventApprovalRequested:
 		return r.projectApprovalRequested(ctx, tx, event)
 	case audit.EventApprovalDecided:
@@ -141,9 +154,63 @@ func (r *Repository) applyProjection(ctx context.Context, tx pgx.Tx, event audit
 		return r.setRunStatus(ctx, tx, event.RunID, domain.RunRejected, true, event)
 	case audit.EventRunFailed:
 		return r.setRunStatus(ctx, tx, event.RunID, domain.RunFailed, true, event)
+	case audit.EventRunReviewRequired:
+		return r.setRunStatus(ctx, tx, event.RunID, domain.RunReviewRequired, true, event)
 	default:
 		return nil
 	}
+}
+
+func (r *Repository) projectProposalPrepared(
+	ctx context.Context,
+	tx pgx.Tx,
+	event audit.Event,
+) error {
+	var value preparedProposalProjection
+	if err := json.Unmarshal(event.Payload, &value); err != nil {
+		return fmt.Errorf("decode prepared proposal projection: %w", err)
+	}
+	if value.ProposalID == "" ||
+		value.ApprovalID == "" ||
+		value.SDKRunID == "" ||
+		value.PlanVersion <= 0 ||
+		len(value.Writes) == 0 ||
+		len(value.WritesDigest) != sha256.Size*2 ||
+		len(value.Proposal.Digest) != sha256.Size*2 {
+		return fmt.Errorf("prepared proposal projection is incomplete")
+	}
+	items, err := json.Marshal(value.Writes)
+	if err != nil {
+		return fmt.Errorf("marshal prepared proposal writes: %w", err)
+	}
+	accepted, err := json.Marshal(value.Proposal)
+	if err != nil {
+		return fmt.Errorf("marshal prepared proposal: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO waybill.proposals (
+			tenant_id, proposal_id, run_id, proposal_version, status, items,
+			arguments_hash, model_version, prompt_version, tool_contract_version,
+			policy_version, reason, accepted, proposal_digest, created_at
+		) VALUES (
+			$1, $2, $3, $4, 'proposed', $5::jsonb,
+			$6, 'runtime', 'waybill-demo-v1', 'contract-v1',
+			'approval-v1', $7, $8::jsonb, $9, $10
+		)
+	`, r.tenantID, value.ProposalID, event.RunID, value.PlanVersion, items,
+		value.WritesDigest, value.Proposal.Summary, accepted, value.Proposal.Digest,
+		event.TS); err != nil {
+		return fmt.Errorf("insert PostgreSQL prepared proposal: %w", MapError(err))
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE waybill.runs
+		SET status = 'investigating', sdk_run_id = $3, plan_version = $4,
+		    closed_at = NULL
+		WHERE tenant_id = $1 AND run_id = $2
+	`, r.tenantID, event.RunID, value.SDKRunID, value.PlanVersion); err != nil {
+		return fmt.Errorf("update PostgreSQL proposal checkpoint: %w", err)
+	}
+	return r.setRunStatus(ctx, tx, event.RunID, domain.RunInvestigating, false, event)
 }
 
 func (r *Repository) projectApprovalRequested(
@@ -174,21 +241,36 @@ func (r *Repository) projectApprovalRequested(
 	if err != nil {
 		return fmt.Errorf("marshal approval evidence: %w", err)
 	}
-	itemsHash := sha256.Sum256(items)
 	proposalID := "proposal:" + string(value.ID)
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO waybill.proposals (
-			tenant_id, proposal_id, run_id, proposal_version, status, items,
-			arguments_hash, model_version, prompt_version, tool_contract_version,
-			policy_version, reason, created_at
-		) VALUES (
-			$1, $2, $3, $4, 'proposed', $5::jsonb,
-			$6, 'runtime', 'waybill-demo-v1', 'contract-v1',
-			'approval-v1', $7, $8
-		)
-	`, r.tenantID, proposalID, event.RunID, value.PlanVersion, items,
-		hex.EncodeToString(itemsHash[:]), value.Reason, event.TS); err != nil {
-		return fmt.Errorf("insert PostgreSQL proposal: %w", MapError(err))
+	if value.ProposalRef == nil {
+		itemsHash := sha256.Sum256(items)
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO waybill.proposals (
+				tenant_id, proposal_id, run_id, proposal_version, status, items,
+				arguments_hash, model_version, prompt_version, tool_contract_version,
+				policy_version, reason, created_at
+			) VALUES (
+				$1, $2, $3, $4, 'proposed', $5::jsonb,
+				$6, 'runtime', 'waybill-demo-v1', 'contract-v1',
+				'approval-v1', $7, $8
+			)
+		`, r.tenantID, proposalID, event.RunID, value.PlanVersion, items,
+			hex.EncodeToString(itemsHash[:]), value.Reason, event.TS); err != nil {
+			return fmt.Errorf("insert PostgreSQL proposal: %w", MapError(err))
+		}
+	} else {
+		proposalID = value.ProposalRef.ProposalID
+		var digest string
+		if err := tx.QueryRow(ctx, `
+			SELECT proposal_digest
+			FROM waybill.proposals
+			WHERE tenant_id = $1 AND proposal_id = $2 AND run_id = $3
+		`, r.tenantID, proposalID, event.RunID).Scan(&digest); err != nil {
+			return fmt.Errorf("read prepared PostgreSQL proposal: %w", err)
+		}
+		if digest != value.ProposalRef.Digest {
+			return fmt.Errorf("prepared PostgreSQL proposal digest does not match approval")
+		}
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO waybill.approvals (

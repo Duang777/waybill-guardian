@@ -10,7 +10,7 @@ WEB_HOST="${WEB_HOST:-127.0.0.1}"
 WEB_PORT="${WEB_PORT:-5173}"
 DATA_DIR="${DATA_DIR:-$ROOT_DIR/data}"
 DATA_FILE="${DATA_FILE:-$ROOT_DIR/data/simulated/waybills-v1.json}"
-AGENT_MODE="${AGENT_MODE:-demo}"
+AGENT_MODE="${AGENT_MODE:-online}"
 PLATFORM="${PLATFORM:-file}"
 API_URL="http://$BACKEND_HOST:$BACKEND_PORT"
 WEB_URL="http://$WEB_HOST:$WEB_PORT"
@@ -79,6 +79,20 @@ wait_for_http() {
 require_command go
 require_command npm
 require_command curl
+
+if [[ "$AGENT_MODE" == "online" ]]; then
+	missing_model_vars=()
+	for variable in LLM_BASE_URL LLM_API_KEY LLM_MODEL; do
+		if [[ -z "${!variable:-}" ]]; then
+			missing_model_vars+=("$variable")
+		fi
+	done
+	if ((${#missing_model_vars[@]} > 0)); then
+		printf 'AGENT_MODE=online requires: %s\n' "${missing_model_vars[*]}" >&2
+		printf 'Set the model configuration, or run AGENT_MODE=offline ./scripts/demo.sh.\n' >&2
+		exit 1
+	fi
+fi
 
 if [[ "$PLATFORM" == "file" && -z "$DATA_FILE" ]]; then
 	printf 'DATA_FILE is required when PLATFORM=file.\n' >&2

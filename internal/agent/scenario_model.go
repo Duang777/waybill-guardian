@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/proposal"
 	guardtools "github.com/Duang777/waybill-guardian/internal/tools"
 	"github.com/hastekit/agent-sdk-go/pkg/agents"
 	"github.com/hastekit/agent-sdk-go/pkg/gateway/llm/constants"
@@ -45,12 +46,17 @@ func (m *ScenarioModel) NewStreamingResponses(
 	if err != nil {
 		return nil, err
 	}
+	reassignWire, err := m.activeWireName(domain.ActionReassign)
+	if err != nil {
+		return nil, err
+	}
+	evidenceAfter := state.latestDeclinedIndex(reassignWire)
 
 	waybillWire, err := m.activeWireName(domain.ActionGetWaybill)
 	if err != nil {
 		return nil, err
 	}
-	if !state.hasResult(waybillWire) {
+	if !state.hasResultAfter(waybillWire, evidenceAfter) {
 		return toolCallResponse(
 			runContext,
 			waybillWire,
@@ -58,7 +64,7 @@ func (m *ScenarioModel) NewStreamingResponses(
 		), nil
 	}
 	var waybill guardtools.GetWaybillOutput
-	if err := state.latestResult(waybillWire, &waybill); err != nil {
+	if err := state.latestResultAfter(waybillWire, evidenceAfter, &waybill); err != nil {
 		return nil, err
 	}
 	if waybill.WaybillID != runContext.WaybillID {
@@ -69,7 +75,7 @@ func (m *ScenarioModel) NewStreamingResponses(
 	if err != nil {
 		return nil, err
 	}
-	if !state.hasResult(trackingWire) {
+	if !state.hasResultAfter(trackingWire, evidenceAfter) {
 		return toolCallResponse(
 			runContext,
 			trackingWire,
@@ -77,7 +83,7 @@ func (m *ScenarioModel) NewStreamingResponses(
 		), nil
 	}
 	var tracking guardtools.GetTrackingOutput
-	if err := state.latestResult(trackingWire, &tracking); err != nil {
+	if err := state.latestResultAfter(trackingWire, evidenceAfter, &tracking); err != nil {
 		return nil, err
 	}
 
@@ -85,7 +91,7 @@ func (m *ScenarioModel) NewStreamingResponses(
 	if err != nil {
 		return nil, err
 	}
-	if !state.hasResult(driverWire) {
+	if !state.hasResultAfter(driverWire, evidenceAfter) {
 		return toolCallResponse(
 			runContext,
 			driverWire,
@@ -93,7 +99,7 @@ func (m *ScenarioModel) NewStreamingResponses(
 		), nil
 	}
 	var driver guardtools.GetDriverOutput
-	if err := state.latestResult(driverWire, &driver); err != nil {
+	if err := state.latestResultAfter(driverWire, evidenceAfter, &driver); err != nil {
 		return nil, err
 	}
 	if driver.DriverID != waybill.DriverID {
@@ -105,7 +111,7 @@ func (m *ScenarioModel) NewStreamingResponses(
 		return nil, err
 	}
 	route := waybill.Origin + "-" + waybill.Destination
-	if !state.hasResult(weatherWire) {
+	if !state.hasResultAfter(weatherWire, evidenceAfter) {
 		return toolCallResponse(
 			runContext,
 			weatherWire,
@@ -113,17 +119,13 @@ func (m *ScenarioModel) NewStreamingResponses(
 		), nil
 	}
 	var weather guardtools.GetRoadWeatherOutput
-	if err := state.latestResult(weatherWire, &weather); err != nil {
+	if err := state.latestResultAfter(weatherWire, evidenceAfter, &weather); err != nil {
 		return nil, err
 	}
 	if len(waybill.CandidateCarriers) == 0 {
 		return nil, fmt.Errorf("waybill has no candidate carriers")
 	}
 
-	reassignWire, ok := m.registry.ActiveWireName(domain.ActionReassign)
-	if !ok {
-		return nil, fmt.Errorf("tool capability %q is unavailable", domain.ActionReassign)
-	}
 	smsWire, smsActive := m.registry.ActiveWireName(domain.ActionSendSMS)
 	reassignCalls := state.calls[reassignWire]
 	if reassignCalls == 0 {
@@ -131,9 +133,14 @@ func (m *ScenarioModel) NewStreamingResponses(
 		return m.proposal(
 			runContext,
 			runContext.PlanVersion,
-			string(carrier.ID),
+			carrier,
 			proposalSummary(carrier, tracking, driver, weather),
-		), nil
+			waybill,
+			tracking,
+			driver,
+			weather,
+			state,
+		)
 	}
 	if state.latestDeclined(reassignWire) {
 		if reassignCalls < len(waybill.CandidateCarriers) {
@@ -141,9 +148,14 @@ func (m *ScenarioModel) NewStreamingResponses(
 			return m.proposal(
 				runContext,
 				runContext.PlanVersion,
-				string(carrier.ID),
+				carrier,
 				fmt.Sprintf("上一改派方案已驳回，改用%s作为备选运力。", carrier.Name),
-			), nil
+				waybill,
+				tracking,
+				driver,
+				weather,
+				state,
+			)
 		}
 		return textResponse("候选改派方案均被驳回，本次处置结束并转人工跟进。"), nil
 	}
@@ -224,51 +236,217 @@ func formatNumber(value float64) string {
 func (m *ScenarioModel) proposal(
 	runContext domain.RunContext,
 	planVersion int,
-	carrierID string,
+	carrier guardtools.CarrierEvidence,
 	summary string,
-) *responses.Response {
+	waybill guardtools.GetWaybillOutput,
+	tracking guardtools.GetTrackingOutput,
+	driver guardtools.GetDriverOutput,
+	weather guardtools.GetRoadWeatherOutput,
+	state conversationState,
+) (*responses.Response, error) {
 	reassignWire, _ := m.registry.ActiveWireName(domain.ActionReassign)
 	reassign := guardtools.ReassignInput{
 		WaybillID: string(runContext.WaybillID),
-		CarrierID: carrierID,
+		CarrierID: string(carrier.ID),
+	}
+	draft, err := offlineProposal(
+		summary,
+		carrier,
+		waybill,
+		tracking,
+		driver,
+		weather,
+		state,
+		m.registry,
+	)
+	if err != nil {
+		return nil, err
+	}
+	rawProposal, err := json.Marshal(draft)
+	if err != nil {
+		return nil, fmt.Errorf("marshal offline proposal: %w", err)
 	}
 	output := []responses.OutputMessageUnion{
-		assistantText(summary),
+		assistantText(string(rawProposal)),
 		toolCall(runContext.RunID, reassignWire, planVersion, reassign),
 	}
 	smsWire, smsActive := m.registry.ActiveWireName(domain.ActionSendSMS)
 	if !smsActive {
-		return &responses.Response{Output: output}
+		return &responses.Response{Output: output}, nil
 	}
 	shipperSMS := guardtools.SendSMSInput{
 		WaybillID: string(runContext.WaybillID),
 		Recipient: guardtools.RecipientShipper,
-		CarrierID: carrierID,
+		CarrierID: string(carrier.ID),
 	}
 	driverSMS := guardtools.SendSMSInput{
 		WaybillID: string(runContext.WaybillID),
 		Recipient: guardtools.RecipientDriver,
-		CarrierID: carrierID,
+		CarrierID: string(carrier.ID),
 	}
 	output = append(output,
 		toolCall(runContext.RunID, smsWire, planVersion, shipperSMS),
 		toolCall(runContext.RunID, smsWire, planVersion, driverSMS),
 	)
-	return &responses.Response{Output: output}
+	return &responses.Response{Output: output}, nil
+}
+
+func offlineProposal(
+	summary string,
+	selected guardtools.CarrierEvidence,
+	waybill guardtools.GetWaybillOutput,
+	tracking guardtools.GetTrackingOutput,
+	driver guardtools.GetDriverOutput,
+	weather guardtools.GetRoadWeatherOutput,
+	state conversationState,
+	registry *guardtools.Registry,
+) (proposal.Draft, error) {
+	driverWire, _ := registry.ActiveWireName(domain.ActionGetDriver)
+	trackingWire, _ := registry.ActiveWireName(domain.ActionGetTracking)
+	weatherWire, _ := registry.ActiveWireName(domain.ActionGetRoadWeather)
+	waybillWire, _ := registry.ActiveWireName(domain.ActionGetWaybill)
+	attribution := make([]proposal.AttributionDraft, 0, 3)
+	if driver.ContinuousDriveHrs > 0 || driver.FatigueAlert {
+		attribution = append(attribution, proposal.AttributionDraft{
+			Factor:        fmt.Sprintf("司机连续驾驶%s小时", formatNumber(driver.ContinuousDriveHrs)),
+			ConfidenceBPS: 9100,
+			EvidenceRefs: []proposal.EvidenceRef{
+				evidenceRef(
+					state.latestCallID(driverWire),
+					"/continuous_drive_hours",
+					driver.ContinuousDriveHrs,
+				),
+				evidenceRef(state.latestCallID(driverWire), "/fatigue_alert", driver.FatigueAlert),
+			},
+		})
+	}
+	for index, point := range tracking.Points {
+		if !point.Anomaly {
+			continue
+		}
+		refs := []proposal.EvidenceRef{
+			evidenceRef(
+				state.latestCallID(trackingWire),
+				fmt.Sprintf("/points/%d/label", index),
+				point.Label,
+			),
+			evidenceRef(
+				state.latestCallID(trackingWire),
+				fmt.Sprintf("/points/%d/anomaly", index),
+				point.Anomaly,
+			),
+		}
+		if point.StopHours > 0 {
+			refs = append(refs, evidenceRef(
+				state.latestCallID(trackingWire),
+				fmt.Sprintf("/points/%d/stop_hours", index),
+				point.StopHours,
+			))
+		}
+		attribution = append(attribution, proposal.AttributionDraft{
+			Factor:        point.Label + "出现异常停留",
+			ConfidenceBPS: 8800,
+			EvidenceRefs:  refs,
+		})
+		break
+	}
+	for index, segment := range weather.Segments {
+		if strings.EqualFold(segment.AlertLevel, "none") {
+			continue
+		}
+		attribution = append(attribution, proposal.AttributionDraft{
+			Factor:        segment.Segment + "存在天气预警",
+			ConfidenceBPS: 7600,
+			EvidenceRefs: []proposal.EvidenceRef{
+				evidenceRef(
+					state.latestCallID(weatherWire),
+					fmt.Sprintf("/segments/%d/condition", index),
+					segment.Condition,
+				),
+				evidenceRef(
+					state.latestCallID(weatherWire),
+					fmt.Sprintf("/segments/%d/alert_level", index),
+					segment.AlertLevel,
+				),
+			},
+		})
+		break
+	}
+	if len(attribution) == 0 {
+		attribution = append(attribution, proposal.AttributionDraft{
+			Factor:        "运单当前仍处于运输状态",
+			ConfidenceBPS: 6000,
+			EvidenceRefs: []proposal.EvidenceRef{
+				evidenceRef(state.latestCallID(waybillWire), "/status", waybill.Status),
+			},
+		})
+	}
+
+	alternatives := make([]proposal.Alternative, 0, min(len(waybill.CandidateCarriers), 8))
+	alternatives = append(alternatives, carrierAlternative(selected))
+	for _, carrier := range waybill.CandidateCarriers {
+		if carrier.ID == selected.ID || len(alternatives) == 8 {
+			continue
+		}
+		alternatives = append(alternatives, carrierAlternative(carrier))
+	}
+	return proposal.Draft{
+		SchemaVersion: proposal.SchemaVersion,
+		Summary:       summary,
+		ConfidenceBPS: 8600,
+		Attribution:   attribution,
+		Alternatives:  alternatives,
+		ExpectedImpact: proposal.ExpectedImpactDraft{
+			ETASavedMin: proposal.ImpactMetricDraft{
+				Availability: proposal.AvailabilityUnavailable,
+				Reason:       "当前证据没有改派后的到达时间",
+			},
+			CostDeltaCNY: proposal.ImpactMetricDraft{
+				Availability: proposal.AvailabilityUnavailable,
+				Reason:       "当前证据没有成本字段",
+			},
+		},
+	}, nil
+}
+
+func evidenceRef(callID string, fieldPath string, value any) proposal.EvidenceRef {
+	raw, _ := json.Marshal(value)
+	return proposal.EvidenceRef{
+		ToolCallID: callID,
+		FieldPath:  proposal.JSONPointer(fieldPath),
+		Quoted:     raw,
+	}
+}
+
+func carrierAlternative(carrier guardtools.CarrierEvidence) proposal.Alternative {
+	return proposal.Alternative{
+		CarrierID: string(carrier.ID),
+		Reason: fmt.Sprintf(
+			"预计时效%d小时，历史履约率%s%%",
+			carrier.ETAHours,
+			formatNumber(carrier.ReliabilityPct),
+		),
+	}
+}
+
+type conversationResult struct {
+	callID string
+	output string
+	index  int
 }
 
 type conversationState struct {
 	calls   map[string]int
-	results map[string][]string
+	results map[string][]conversationResult
 }
 
 func inspectConversation(messages responses.InputMessageList) conversationState {
 	state := conversationState{
 		calls:   make(map[string]int),
-		results: make(map[string][]string),
+		results: make(map[string][]conversationResult),
 	}
 	callNames := make(map[string]string)
-	for _, message := range messages {
+	for index, message := range messages {
 		if message.OfFunctionCall != nil {
 			call := message.OfFunctionCall
 			callNames[call.CallID] = call.Name
@@ -280,30 +458,51 @@ func inspectConversation(messages responses.InputMessageList) conversationState 
 		}
 		output := message.OfFunctionCallOutput
 		if name := callNames[output.CallID]; name != "" {
-			state.results[name] = append(state.results[name], *output.Output.OfString)
+			state.results[name] = append(state.results[name], conversationResult{
+				callID: output.CallID,
+				output: *output.Output.OfString,
+				index:  index,
+			})
 		}
 	}
 	return state
 }
 
-func (s conversationState) hasResult(name string) bool {
-	return len(s.results[name]) > 0
+func (s conversationState) hasResultAfter(name string, index int) bool {
+	values := s.results[name]
+	return len(values) > 0 && values[len(values)-1].index > index
 }
 
-func (s conversationState) latestResult(name string, destination any) error {
+func (s conversationState) latestResultAfter(name string, index int, destination any) error {
 	values := s.results[name]
-	if len(values) == 0 {
-		return fmt.Errorf("tool %q has no result", name)
+	if len(values) == 0 || values[len(values)-1].index <= index {
+		return fmt.Errorf("tool %q has no current result", name)
 	}
-	if err := json.Unmarshal([]byte(values[len(values)-1]), destination); err != nil {
+	if err := json.Unmarshal([]byte(values[len(values)-1].output), destination); err != nil {
 		return fmt.Errorf("decode tool %q result: %w", name, err)
 	}
 	return nil
 }
 
+func (s conversationState) latestCallID(name string) string {
+	values := s.results[name]
+	if len(values) == 0 {
+		return ""
+	}
+	return values[len(values)-1].callID
+}
+
 func (s conversationState) latestDeclined(name string) bool {
 	values := s.results[name]
-	return len(values) > 0 && strings.Contains(values[len(values)-1], "declined")
+	return len(values) > 0 && strings.Contains(values[len(values)-1].output, "declined")
+}
+
+func (s conversationState) latestDeclinedIndex(name string) int {
+	values := s.results[name]
+	if len(values) == 0 || !strings.Contains(values[len(values)-1].output, "declined") {
+		return -1
+	}
+	return values[len(values)-1].index
 }
 
 func (s conversationState) hasSuccessfulResult(name string) bool {
@@ -311,14 +510,15 @@ func (s conversationState) hasSuccessfulResult(name string) bool {
 	if len(values) == 0 {
 		return false
 	}
-	latest := values[len(values)-1]
+	latest := values[len(values)-1].output
 	return !strings.Contains(latest, "declined") && !strings.Contains(latest, "failed")
 }
 
 func (s conversationState) successfulResultCount(name string) int {
 	count := 0
 	for _, result := range s.results[name] {
-		if !strings.Contains(result, "declined") && !strings.Contains(result, "failed") {
+		if !strings.Contains(result.output, "declined") &&
+			!strings.Contains(result.output, "failed") {
 			count++
 		}
 	}

@@ -3,26 +3,34 @@ import {
   CheckCircle2,
   Clock3,
   CornerDownRight,
+  Crosshair,
   RotateCcw,
   Send,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { Approval, WaybillView } from "../api";
+import type { Approval, Proposal, RunStatus, WaybillView } from "../api";
 import styles from "../app.module.css";
 
 type ApprovalPanelProps = {
   approval: Approval | null;
+  proposal: Proposal | null;
+  runStatus: RunStatus | null;
   view: WaybillView | null;
   busy: boolean;
+  onEvidenceSelect: (sourceSeq: number) => void;
   onConfirm: () => Promise<void>;
   onReject: (reason: string) => Promise<void>;
 };
 
 export function ApprovalPanel({
   approval,
+  proposal,
+  runStatus,
   view,
   busy,
+  onEvidenceSelect,
   onConfirm,
   onReject,
 }: ApprovalPanelProps) {
@@ -37,6 +45,19 @@ export function ApprovalPanel({
       approvalTitle.current?.focus();
     }
   }, [approval?.id]);
+
+  if (runStatus === "review_required") {
+    return (
+      <aside className={styles.approvalPanel} aria-labelledby="approval-title">
+        <PanelHeading status="review_required" />
+        <div className={styles.approvalIdle}>
+          <TriangleAlert aria-hidden="true" size={22} />
+          <strong id="approval-title">提案需要人工复核</strong>
+          <p>模型输出未通过证据校验，本次运行没有生成可执行审批。</p>
+        </div>
+      </aside>
+    );
+  }
 
   if (approval === null) {
     return (
@@ -93,12 +114,46 @@ export function ApprovalPanel({
                     : "正在执行方案"}
             </h2>
           </div>
-          <span className={`${styles.approvalStatus} ${styles[`approvalStatus${approval.status}`]}`}>
-            {approvalStatusLabel(approval.status)}
-          </span>
+          <div className={styles.approvalBadges}>
+            {proposal !== null && (
+              <span className={styles.confidenceBadge}>
+                置信度 {formatConfidence(proposal.confidence_bps)}
+              </span>
+            )}
+            <span className={`${styles.approvalStatus} ${styles[`approvalStatus${approval.status}`]}`}>
+              {approvalStatusLabel(approval.status)}
+            </span>
+          </div>
         </div>
 
         <p className={styles.approvalReason}>{approval.reason}</p>
+
+        {proposal !== null && (
+          <section className={styles.proposalSection} aria-labelledby="proposal-title">
+            <div className={styles.sectionLabel}>
+              <span id="proposal-title">候选方案</span>
+              <span>{proposal.alternatives.length} 个</span>
+            </div>
+            <div className={styles.alternativeList}>
+              {proposal.alternatives.map((alternative) => (
+                <div key={alternative.carrier_id}>
+                  <strong>{carrierDisplayName(alternative.carrier_id, view)}</strong>
+                  <span>{alternative.reason}</span>
+                </div>
+              ))}
+            </div>
+            <dl className={styles.impactList}>
+              <div>
+                <dt>预计时效挽回</dt>
+                <dd title={proposal.expected_impact.eta_saved_min.reason}>证据不足</dd>
+              </div>
+              <div>
+                <dt>预计成本变化</dt>
+                <dd title={proposal.expected_impact.cost_delta_cny.reason}>证据不足</dd>
+              </div>
+            </dl>
+          </section>
+        )}
 
         <section className={styles.effectSection} aria-labelledby="effects-title">
           <div className={styles.sectionLabel}>
@@ -134,9 +189,32 @@ export function ApprovalPanel({
           </div>
           <dl className={styles.evidenceList}>
             {approval.evidence.map((evidence) => (
-              <div key={evidence.label}>
+              <div
+                key={`${evidence.label}-${
+                  "source" in evidence
+                    ? `${evidence.source.source_seq}-${evidence.source.field_path}`
+                    : evidence.value
+                }`}
+              >
                 <dt>{evidence.label}</dt>
-                <dd>{evidence.value}</dd>
+                <dd>
+                  {"source" in evidence ? (
+                    <button
+                      className={styles.evidenceLink}
+                      type="button"
+                      title={`定位到审计事件 #${evidence.source.source_seq}`}
+                      onClick={() => onEvidenceSelect(evidence.source.source_seq)}
+                    >
+                      <span>{evidence.value}</span>
+                      <Crosshair aria-hidden="true" size={13} />
+                    </button>
+                  ) : (
+                    evidence.value
+                  )}
+                </dd>
+                {"source" in evidence && (
+                  <span className={styles.evidencePath}>{evidence.source.field_path}</span>
+                )}
               </div>
             ))}
           </dl>
@@ -214,7 +292,11 @@ export function ApprovalPanel({
   );
 }
 
-function PanelHeading({ status }: { status: Approval["status"] | "idle" }) {
+function PanelHeading({
+  status,
+}: {
+  status: Approval["status"] | "review_required" | "idle";
+}) {
   return (
     <div className={styles.panelHeading}>
       <div>
@@ -223,11 +305,27 @@ function PanelHeading({ status }: { status: Approval["status"] | "idle" }) {
       </div>
       {status === "executed" ? (
         <CheckCircle2 className={styles.successIcon} aria-hidden="true" size={20} />
+      ) : status === "review_required" ? (
+        <TriangleAlert className={styles.reviewIcon} aria-hidden="true" size={20} />
       ) : (
         <span className={styles.guardIndicator} aria-hidden="true" />
       )}
     </div>
   );
+}
+
+function carrierDisplayName(carrierID: string, view: WaybillView | null): string {
+  return (
+    view?.waybill.candidate_carriers.find(
+      (carrier) => carrier.carrier_id === carrierID,
+    )?.name ?? carrierID
+  );
+}
+
+function formatConfidence(value: number): string {
+  return `${new Intl.NumberFormat("zh-CN", {
+    maximumFractionDigits: 1,
+  }).format(value / 100)}%`;
 }
 
 function actionLabel(action: string): string {
