@@ -29,6 +29,10 @@ func TestHistoryGuardRejectsProhibitedData(t *testing.T) {
 			name:  "mobile number hidden in opaque-looking text",
 			value: map[string]any{"text": "SMS-13800138000a"},
 		},
+		{
+			name:  "mobile number under id-suffixed ordinary field",
+			value: map[string]any{"valid": "SMS-13800138000a"},
+		},
 		{name: "license plate", value: map[string]any{"text": "vehicle 浙A12345"}},
 		{name: "dotted license plate", value: map[string]any{"text": "vehicle 浙A·12345"}},
 		{name: "hyphenated license plate", value: map[string]any{"text": "vehicle 浙A-12345"}},

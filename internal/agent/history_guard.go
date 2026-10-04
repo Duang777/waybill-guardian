@@ -257,7 +257,9 @@ func inspectHistoryValue(value any, path string) error {
 
 func isOpaqueHistoryIdentifier(key string, value string) bool {
 	key = strings.ToLower(key)
-	if key != "id" && !strings.HasSuffix(key, "_id") && !strings.HasSuffix(key, "id") {
+	if key != "id" &&
+		key != "traceid" &&
+		!strings.HasSuffix(key, "_id") {
 		return false
 	}
 	if isOpaqueUUID(value) || opaqueIDPattern.MatchString(value) {
