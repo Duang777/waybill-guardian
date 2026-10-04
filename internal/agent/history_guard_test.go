@@ -38,6 +38,33 @@ func TestHistoryGuardRejectsProhibitedData(t *testing.T) {
 	}
 }
 
+func TestHistoryGuardAllowsOpaqueUUIDIdentifiers(t *testing.T) {
+	const phoneLikeUUID = "13800138-000a-4abc-8def-123456789abc"
+	safe := map[string]any{
+		"id":          phoneLikeUUID,
+		"message_id":  "msg_" + phoneLikeUUID,
+		"incident_id": "delay-" + phoneLikeUUID,
+		"output_id":   "msg_13800138000a1234",
+		"tool_output": `{"order_id":"RA-13800138000a","message_id":"SMS-13800138000a"}`,
+		"text":        "safe",
+	}
+	if err := validateHistoryValue("test value", safe); err != nil {
+		t.Fatalf("opaque identifiers were rejected: %v", err)
+	}
+	if err := validateHistoryValue(
+		"test value",
+		map[string]any{"id": "13800138000"},
+	); !errors.Is(err, ErrUnsafeHistory) {
+		t.Fatalf("phone-valued identifier error = %v, want ErrUnsafeHistory", err)
+	}
+	if err := validateHistoryValue(
+		"test value",
+		map[string]any{"text": "contact msg_13800138000a1234"},
+	); !errors.Is(err, ErrUnsafeHistory) {
+		t.Fatalf("phone-like text error = %v, want ErrUnsafeHistory", err)
+	}
+}
+
 func TestHistoryGuardChecksModelRequestAndResponse(t *testing.T) {
 	guard := historyGuard{}
 	called := false

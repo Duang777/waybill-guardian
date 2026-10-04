@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/hastekit/agent-sdk-go/pkg/agents"
 	"github.com/hastekit/agent-sdk-go/pkg/agents/history"
 	"github.com/hastekit/agent-sdk-go/pkg/gateway/llm/responses"
@@ -26,6 +27,8 @@ var (
 	mobileNumberPattern     = regexp.MustCompile(`(^|[^0-9])1[3-9]([ -]?[0-9]){9}([^0-9]|$)`)
 	licensePlatePattern     = regexp.MustCompile(`[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领][A-HJ-NP-Z][· -]?[A-HJ-NP-Z0-9]{5,6}`)
 	forbiddenJSONKeyPattern = regexp.MustCompile(`(?i)"(shipper_phone|phone|plate|license_plate|longitude|latitude|template_id|params)"[[:space:]]*:`)
+	opaqueIDPattern         = regexp.MustCompile(`^(?:(?:msg_|fc_|call_)[0-9a-f]{16}|(?:RA|CL|SMS)-[0-9a-f]{12})$`)
+	identifierPrefixPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
 	forbiddenHistoryKeys    = map[string]struct{}{
 		"phone":         {},
 		"shipper_phone": {},
@@ -219,6 +222,9 @@ func inspectHistoryValue(value any, path string) error {
 			if _, prohibited := forbiddenHistoryKeys[strings.ToLower(key)]; prohibited {
 				return fmt.Errorf("%w: prohibited field at %s.%s", ErrUnsafeHistory, path, key)
 			}
+			if text, ok := child.(string); ok && isOpaqueHistoryIdentifier(key, text) {
+				continue
+			}
 			if err := inspectHistoryValue(child, path+"."+key); err != nil {
 				return err
 			}
@@ -230,6 +236,16 @@ func inspectHistoryValue(value any, path string) error {
 			}
 		}
 	case string:
+		if candidate, ok := nestedJSONCandidate(current); ok {
+			nested, err := decodeHistoryJSON([]byte(candidate))
+			if err != nil {
+				return fmt.Errorf("%w: malformed nested JSON at %s", ErrUnsafeHistory, path)
+			}
+			return inspectHistoryValue(nested, path+"<json>")
+		}
+		if isOpaqueUUID(current) || opaqueIDPattern.MatchString(current) {
+			return nil
+		}
 		if mobileNumberPattern.MatchString(current) {
 			return fmt.Errorf("%w: mobile number at %s", ErrUnsafeHistory, path)
 		}
@@ -239,17 +255,46 @@ func inspectHistoryValue(value any, path string) error {
 		if forbiddenJSONKeyPattern.MatchString(current) {
 			return fmt.Errorf("%w: prohibited JSON field at %s", ErrUnsafeHistory, path)
 		}
-		if candidate, ok := nestedJSONCandidate(current); ok {
-			nested, err := decodeHistoryJSON([]byte(candidate))
-			if err != nil {
-				return fmt.Errorf("%w: malformed nested JSON at %s", ErrUnsafeHistory, path)
-			}
-			if err := inspectHistoryValue(nested, path+"<json>"); err != nil {
-				return err
-			}
-		}
 	}
 	return nil
+}
+
+func isOpaqueHistoryIdentifier(key string, value string) bool {
+	key = strings.ToLower(key)
+	if key != "id" && !strings.HasSuffix(key, "_id") && !strings.HasSuffix(key, "id") {
+		return false
+	}
+	if isOpaqueUUID(value) || opaqueIDPattern.MatchString(value) {
+		return true
+	}
+	const uuidLength = 36
+	if len(value) <= uuidLength+1 {
+		return false
+	}
+	separator := len(value) - uuidLength - 1
+	if value[separator] != '-' && value[separator] != '_' {
+		return false
+	}
+	return identifierPrefixPattern.MatchString(value[:separator]) &&
+		isCanonicalUUID(value[separator+1:])
+}
+
+func isOpaqueUUID(value string) bool {
+	candidate := value
+	if separator := strings.IndexByte(value, '_'); separator >= 0 {
+		switch value[:separator] {
+		case "msg", "fc", "rs", "ws", "resp":
+			candidate = value[separator+1:]
+		default:
+			return false
+		}
+	}
+	return isCanonicalUUID(candidate)
+}
+
+func isCanonicalUUID(candidate string) bool {
+	parsed, err := uuid.Parse(candidate)
+	return err == nil && parsed.String() == strings.ToLower(candidate)
 }
 
 func nestedJSONCandidate(value string) (string, bool) {
