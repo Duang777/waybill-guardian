@@ -30,6 +30,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hastekit/agent-sdk-go/pkg/agents/history"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestMigrationsAgainstPostgreSQL(t *testing.T) {
@@ -1676,6 +1677,107 @@ func TestRepositoryValidatesRecoveryCoverage(t *testing.T) {
 		ErrRecoveryCoverageMissing,
 	) {
 		t.Fatalf("unsupported recovery coverage error = %v", err)
+	}
+}
+
+func TestEffectBindingSchemaRejectsMissingV1Fields(t *testing.T) {
+	db := openIntegrationDB(t)
+	tenantID := "tenant-" + uuid.NewString()
+	clients, _, err := guardtools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := guardtools.NewFixtureWriteRuntime(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := newIntegrationRepository(t, db, tenantID, "worker-binding-schema", runtime)
+	defer repository.Close()
+
+	runID := domain.RunID(uuid.NewString())
+	_, command, effect := prepareApprovedReassignEffect(
+		t,
+		repository,
+		runID,
+		"CARRIER-SW-42",
+	)
+	binding, err := runtime.Bind(
+		effect.Request(),
+		command.Identity.Key,
+		time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.pool.Exec(t.Context(), `
+		UPDATE waybill.effects
+		SET binding_schema_version = $3,
+		    adapter_id = $4,
+		    provider_contract_version = $5,
+		    provider_operation = $6,
+		    provider_scope_digest = $7,
+		    provider_request_hash = $8,
+		    key_created_at = $9,
+		    key_expires_at = $10,
+		    lookup_consistency_window_ms = $11,
+		    dispatch_started_at = clock_timestamp()
+		WHERE tenant_id = $1 AND effect_id = $2
+	`, tenantID, command.Identity.EffectID, binding.SchemaVersion,
+		binding.AdapterID, binding.ContractVersion, binding.ProviderOperation,
+		binding.ProviderScopeDigest, binding.ProviderRequestHash,
+		binding.KeyCreatedAt, binding.KeyExpiresAt,
+		binding.LookupConsistencyWindow.Milliseconds()); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{
+			name: "provider scope digest",
+			query: `
+				UPDATE waybill.effects SET provider_scope_digest = NULL
+				WHERE tenant_id = $1 AND effect_id = $2
+			`,
+		},
+		{
+			name: "provider request hash",
+			query: `
+				UPDATE waybill.effects SET provider_request_hash = NULL
+				WHERE tenant_id = $1 AND effect_id = $2
+			`,
+		},
+		{
+			name: "key expiration",
+			query: `
+				UPDATE waybill.effects SET key_expires_at = NULL
+				WHERE tenant_id = $1 AND effect_id = $2
+			`,
+		},
+		{
+			name: "lookup consistency window",
+			query: `
+				UPDATE waybill.effects SET lookup_consistency_window_ms = NULL
+				WHERE tenant_id = $1 AND effect_id = $2
+			`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := db.pool.Exec(
+				t.Context(),
+				test.query,
+				tenantID,
+				command.Identity.EffectID,
+			)
+			var pgError *pgconn.PgError
+			if !errors.As(err, &pgError) ||
+				pgError.Code != "23514" ||
+				pgError.ConstraintName != "effects_binding_shape_ck" {
+				t.Fatalf("incomplete v1 binding error = %v", err)
+			}
+		})
 	}
 }
 

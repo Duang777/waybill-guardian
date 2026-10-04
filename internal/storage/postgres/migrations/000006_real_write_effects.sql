@@ -35,10 +35,14 @@ ALTER TABLE waybill.effects
                 AND adapter_id IS NOT NULL
                 AND provider_contract_version IS NOT NULL
                 AND provider_operation IS NOT NULL
+                AND provider_scope_digest IS NOT NULL
                 AND provider_scope_digest ~ '^[0-9a-f]{64}$'
+                AND provider_request_hash IS NOT NULL
                 AND provider_request_hash ~ '^[0-9a-f]{64}$'
                 AND key_created_at IS NOT NULL
+                AND key_expires_at IS NOT NULL
                 AND key_expires_at > key_created_at
+                AND lookup_consistency_window_ms IS NOT NULL
                 AND lookup_consistency_window_ms >= 0
                 AND dispatch_started_at IS NOT NULL
             )
