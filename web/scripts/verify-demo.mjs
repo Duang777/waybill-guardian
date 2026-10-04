@@ -37,7 +37,12 @@ try {
     });
   let backendProcess = startBackend();
   processes.push(backendProcess);
-  await waitForHTTP(`${backendURL}/healthz`, backendProcess, processes);
+  await waitForHTTP(
+    `${backendURL}/healthz`,
+    backendProcess,
+    processes,
+    /waybill guardian listening/,
+  );
 
   const webProcess = startProcess(
     "npm",
@@ -60,7 +65,7 @@ try {
     },
   );
   processes.push(webProcess);
-  await waitForHTTP(webURL, webProcess, processes);
+  await waitForHTTP(webURL, webProcess, processes, /Local:/);
 
   browser = await chromium.launch({
     executablePath: await findChrome(),
@@ -98,7 +103,12 @@ try {
       await stopProcess(backendProcess);
       backendProcess = startBackend();
       processes.push(backendProcess);
-      await waitForHTTP(`${backendURL}/healthz`, backendProcess, processes);
+      await waitForHTTP(
+        `${backendURL}/healthz`,
+        backendProcess,
+        processes,
+        /waybill guardian listening/,
+      );
       await page.reload({ waitUntil: "networkidle" });
       await page.getByText("改派至川行快运", { exact: true }).waitFor();
       await page.getByText("待确认", { exact: true }).waitFor();
