@@ -1,0 +1,88 @@
+{
+  "schema_version": "v1",
+  "dataset_id": "template-v1",
+  "waybills": [
+    {
+      "waybill_id": "YD2026101001",
+      "origin": "杭州",
+      "destination": "成都",
+      "cargo": "精密电子元件",
+      "current_carrier_id": "CARRIER-EAST-17",
+      "driver_id": "DRV-0286",
+      "status": "delayed",
+      "sla_hours": 72,
+      "shipper_phone": "13800001234"
+    }
+  ],
+  "drivers": [
+    {
+      "driver_id": "DRV-0286",
+      "name": "周师傅",
+      "phone": "13961234567",
+      "plate": "川A8X6Q2",
+      "continuous_drive_hours": 9,
+      "fatigue_alert": true
+    }
+  ],
+  "waybill_candidates": [
+    {
+      "waybill_id": "YD2026101001",
+      "priority": 1,
+      "carrier_id": "CARRIER-SW-42",
+      "name": "川行快运",
+      "eta_hours": 11,
+      "reliability_pct": 97.6
+    },
+    {
+      "waybill_id": "YD2026101001",
+      "priority": 2,
+      "carrier_id": "CARRIER-SW-19",
+      "name": "蜀道联运",
+      "eta_hours": 14,
+      "reliability_pct": 95.8
+    }
+  ],
+  "tracking": [
+    {
+      "waybill_id": "YD2026101001",
+      "sequence": 1,
+      "label": "杭州转运中心",
+      "recorded_at": "2026-10-10T01:15:00Z",
+      "longitude": 120.1551,
+      "latitude": 30.2741,
+      "speed_kph": 0,
+      "anomaly": false
+    },
+    {
+      "waybill_id": "YD2026101001",
+      "sequence": 2,
+      "label": "绵阳北服务区",
+      "recorded_at": "2026-10-11T04:21:00Z",
+      "longitude": 104.6796,
+      "latitude": 31.4675,
+      "speed_kph": 0,
+      "stop_hours": 6,
+      "anomaly": true
+    },
+    {
+      "waybill_id": "YD2026101001",
+      "sequence": 3,
+      "label": "成都分拨中心",
+      "recorded_at": "2026-10-11T13:06:00Z",
+      "longitude": 104.0665,
+      "latitude": 30.5723,
+      "speed_kph": 0,
+      "anomaly": false
+    }
+  ],
+  "weather": [
+    {
+      "origin": "杭州",
+      "destination": "成都",
+      "sequence": 1,
+      "segment": "成绵高速",
+      "condition": "晴",
+      "alert_level": "none"
+    }
+  ]
+}

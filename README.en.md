@@ -29,25 +29,25 @@ After a delay, damage, or loss, waybill-guardian reads the waybill, tracking, dr
 
 The agent collects waybill, tracking, driver, and weather evidence before the person decides whether to reassign, open a claim, or send a notice. Reviewers replay the audit by sequence number.
 
-This repository has no measured numbers for time recovered, cost, or labor saved. The three risk scores on the page are constants in [`internal/guardian/service.go`](internal/guardian/service.go): ETA delay 86, road 34, weather 8. They are not calculated metrics.
+This repository has no measured numbers for time recovered, cost, or labor saved. The three scores on the page come from `deriveAssessment` in [`internal/guardian/assessment.go`](internal/guardian/assessment.go), clamped to 0 through 100. Status matching ignores case. When it is not `delivered`, the ETA score starts at 20, adds 15 for each anomaly point, then adds stop hours times 8, rounded. The road score is continuous driving hours times 5, rounded, plus 30 when the fatigue alert is set. The weather score is the highest segment alert. `none`, `normal`, `green`, and an empty value are 0. `low`, `blue`, and `yellow` are 30. `medium` and `orange` are 60. `high`, `red`, and `critical` are 90. Any other value is 20. The embedded fixture therefore shows ETA 83, road 75, and weather 0. These are console display scores. The repository has no business KPI for them.
 
-**The default demo is not online inference.** `AGENT_MODE=demo` uses `ScenarioModel` in [`internal/agent/scenario_model.go`](internal/agent/scenario_model.go). It calls tools in a fixed order. The driver id, route, carriers, and attribution sentence are written in code. [Issue 59](https://github.com/Duang777/waybill-guardian/issues/59) tracks replacing that demo with real model inference.
+**The default demo is still a script.** `AGENT_MODE=demo` uses `ScenarioModel` in [`internal/agent/scenario_model.go`](internal/agent/scenario_model.go). It calls the four read tools in a fixed order, reads the driver, route, and candidate carriers from the tool results, and fills a fixed sentence template. Replacing that demo with real model inference is still open in [issue 59](https://github.com/Duang777/waybill-guardian/issues/59).
 
-`AGENT_MODE=online` can call the OpenAI Responses API, or an OpenAI-compatible Chat Completions API. That wiring is in the tree. Issue 59 still asks for a real-model default demo, structured evidence references, and acceptance on a domestic model. Those are not done.
+`AGENT_MODE=online` can call the OpenAI Responses API, or an OpenAI-compatible Chat Completions API. That wiring is in the tree. Issue 59 still asks for a real-model default demo, structured evidence references, and acceptance on a domestic model. Those items are still open.
 
-The only waybill is `YD2026101001`, embedded in [`internal/tools/testdata/demo.json`](internal/tools/testdata/demo.json). There is no file import, and there is no way to start an arbitrary waybill. See [issue 60](https://github.com/Duang777/waybill-guardian/issues/60).
+`PLATFORM=mock` loads only the embedded waybill `YD2026101001` from [`internal/tools/testdata/demo.json`](internal/tools/testdata/demo.json). `PLATFORM=file` loads one JSON or CSV v1 file at startup, and the page can select a waybill from that file and start a run. That landed with closed [issue 60](https://github.com/Duang777/waybill-guardian/issues/60). Writes in file mode stay on the in-memory fixture write runtime, and SMS is not actually sent. The file format has no highway-port, vehicle, or route network.
 
-The page is a console for that one waybill. There is no network view across highway ports. See [issue 61](https://github.com/Duang777/waybill-guardian/issues/61). The current UI is also not the black and orange command center in [issue 77](https://github.com/Duang777/waybill-guardian/issues/77).
+The page is a console for the selected waybill. A network view across highway ports is still open in [issue 61](https://github.com/Duang777/waybill-guardian/issues/61). The current UI is also not the black and orange command center in [issue 77](https://github.com/Duang777/waybill-guardian/issues/77).
 
 <p align="center">
-  <img alt="Desktop width. The scripted demo is waiting for approval to reassign to Chuanxing Express and notify the shipper and driver. The map is the local track." src="docs/assets/console-approval.png" width="840">
+  <img alt="Desktop width. The embedded fixture is waiting for approval. The waybill selector shows Hangzhou to Chengdu, YD2026101001, and the button reads 重新处置. The proposal reassigns to 川行快运 and notifies the shipper and driver. The map is the local track. Display scores are ETA 83, road 75, weather 0." src="docs/assets/console-approval.png" width="840">
 </p>
 
 <p align="center">
-  <img alt="Phone width. The same scripted demo shows completed after confirmation." src="docs/assets/console-completed-mobile.png" width="280">
+  <img alt="Phone width. The same scripted demo shows 处置完成 after confirmation, and the button reads 重新处置." src="docs/assets/console-completed-mobile.png" width="280">
 </p>
 
-Both screenshots come from `npm run verify:e2e` with no Amap key, so the map is the local track. The attribution sentence on the approval card comes from `ScenarioModel`, not from a live model call.
+Both screenshots come from `npm run verify:e2e` after merging current `main`, with no Amap key, so the map is the local track. `ScenarioModel` fills the approval sentence from tool results with a fixed template.
 
 ## Architecture
 
@@ -56,15 +56,15 @@ flowchart TD
   incident["Abnormal waybill"]
   agent["hastekit Agent"]
   readtools["Four read tools"]
-  fixture["Embedded demo.json"]
+  datasource["Fixture or data file"]
   approval["Human approval"]
   writetools["Write tools"]
-  platformbox["Mock or reassign sandbox"]
+  platformbox["Memory write or reassign sandbox"]
   auditlog["Audit log"]
 
   incident --> agent
   agent --> readtools
-  readtools --> fixture
+  readtools --> datasource
   readtools --> agent
   agent --> approval
   approval --> writetools
@@ -77,7 +77,7 @@ flowchart TD
 
 The four read tools are `tms.get_waybill`, `tms.get_tracking`, `tms.get_driver`, and `ext.get_road_weather`. They run automatically. The three write tools are `tms.reassign`, `tms.create_claim`, and `notify.send_sms`. They pause until a person decides. The contract is [`contract.yaml`](contract.yaml).
 
-With `PLATFORM=mock`, reads and writes use the embedded fixture. SMS is not actually sent. `PLATFORM=real` starts only with PostgreSQL and JWT. Reads stay on `fixture-v1`. The only write is `tms.reassign`, sent to the HTTP sandbox `tms-reassign-sandbox-v1`. That profile does not register claims or SMS. It exercises a network write and reconciliation. It is not a production TMS, and it is not an official data import.
+With `PLATFORM=mock`, reads and writes use the embedded fixture. SMS is not actually sent. `PLATFORM=file` requires `STORAGE=jsonl`, `AUTH_MODE=local`, and `DATA_FILE`. Before it listens, the server loads the whole file with `filestore.Load`. Reads use that file. Writes use the in-memory fixture write runtime over the same read data. The process does not reload the file while it runs. Replacing the file requires a restart. `PLATFORM=real` starts only with PostgreSQL and JWT. Reads stay on the embedded fixture `fixture-v1`. The only write is `tms.reassign`, sent to the HTTP sandbox `tms-reassign-sandbox-v1`. That profile does not register claims or SMS. It exercises a network write and reconciliation. It is not a production TMS.
 
 The default audit is one append-only JSONL file per run, with `seq`, `prev_hash`, and `hash`. With `STORAGE=postgres`, the business projection, audit, and outbox commit in one transaction. The timeline is SSE. Clients resume with `Last-Event-ID`.
 
@@ -85,7 +85,7 @@ Approval starts at `pending`. Confirm moves it to `confirmed`, reject to `reject
 
 ## Features
 
-The status describes code on the current `main` branch.
+The status describes the code in this repository.
 
 | Status | Meaning |
 |---|---|
@@ -103,7 +103,7 @@ The status describes code on the current `main` branch.
 | Amap or a local track | Shipped | With no key, or if the SDK fails to load, the page draws local coordinates. |
 | Reassign HTTP sandbox | Shipped | `tms.reassign` only. Reads stay on the fixture. Not a production TMS. |
 | Online model calls | In progress | An OpenAI-compatible API can be configured. The default demo is still the script. See [issue 59](https://github.com/Duang777/waybill-guardian/issues/59). |
-| File import and arbitrary waybills | Planned | [Issue 60](https://github.com/Duang777/waybill-guardian/issues/60) |
+| File import | Shipped | `PLATFORM=file` loads JSON or CSV v1 at startup, and the page can select a waybill from the file. Writes stay on the in-memory fixture runtime. See closed [issue 60](https://github.com/Duang777/waybill-guardian/issues/60) and [`docs/file-data-source-design.md`](docs/file-data-source-design.md). |
 | Highway-port overview | Planned | [Issue 61](https://github.com/Duang777/waybill-guardian/issues/61) |
 | LICENSE file | Planned | [Issue 62](https://github.com/Duang777/waybill-guardian/issues/62) |
 | CSRF checks on non-GET requests | Planned | [Issue 64](https://github.com/Duang777/waybill-guardian/issues/64) |
@@ -119,11 +119,11 @@ The script is [`docs/demo-script.md`](docs/demo-script.md). Start the stack:
 ./scripts/demo.sh
 ```
 
-Open <http://127.0.0.1:5173> and click **启动演示**.
+Open <http://127.0.0.1:5173>. The waybill selector shows `YD2026101001`, Hangzhou to Chengdu. Click **启动处置**. The button sends `POST /api/runs` with `waybill_id` in the body. `POST /api/demo/trigger` still starts this embedded waybill.
 
 1. The agent reads waybill `YD2026101001`, Hangzhou to Chengdu.
 2. The timeline records waybill, tracking, driver, and weather calls.
-3. The script attributes the delay to 9 hours of continuous driving and a 6 hour stop at 绵阳北服务区, with clear weather. It pauses on an approval card: reassign to 川行快运, then notify the shipper and the driver. Those writes have not run yet.
+3. The script fills a fixed sentence from the tool results. In the embedded fixture the driver has driven 9 hours with a fatigue alert, 绵阳北服务区 is a 6 hour stop, and the weather alert is `none`, so the card proposes reassignment to 川行快运 and notices to the shipper and the driver. Those writes have not run yet.
 4. Click **确认并执行**. The timeline shows the platform writes, and the waybill status becomes completed.
 5. Use the replay control to watch from the first audit event, then click **实时** to return to the live end.
 6. If the first carrier is rejected, the script proposes 蜀道联运. `npm run verify:e2e` covers three confirmations and one rejection.
@@ -162,6 +162,7 @@ go test ./...
 go test -race ./...
 go vet ./...
 go build ./...
+./scripts/check-production-fixture-literals.sh
 ./scripts/check-history-governance.sh
 ```
 
@@ -173,6 +174,7 @@ npm ci
 npm test
 npm run build
 npm run verify:e2e
+npm run verify:file-e2e
 ```
 
 ## Configuration
@@ -188,7 +190,8 @@ npm run verify:e2e
 | `HTTP_ADDR` | `127.0.0.1:8080` | Server listen address. Local mode requires a loopback IP |
 | `DATA_DIR` | `data` | JSONL audit and hastekit history directory |
 | `AGENT_MODE` | `demo` | `demo` uses `ScenarioModel`. `online` calls an external model |
-| `PLATFORM` | `mock` | `mock` uses the fixture. `real` uses the reassign sandbox |
+| `PLATFORM` | `mock` | `mock` uses the fixture. `file` loads `DATA_FILE`. `real` uses the reassign sandbox |
+| `DATA_FILE` | empty | Required for `PLATFORM=file`. One JSON or CSV v1 file |
 | `STORAGE` | `jsonl` | `jsonl` or `postgres` |
 | `AUTH_MODE` | `local` | `local` or `jwt` |
 | `APPROVAL_TTL` | `10m` | Approval lifetime, Go duration. An invalid value falls back to the default |
@@ -196,6 +199,28 @@ npm run verify:e2e
 | `DEMO_STEP_DELAY` | `220ms` | Pause between scripted model steps |
 | `TENANT_ID` | `local-demo` | Required explicitly in JWT mode |
 | `INSTANCE_ID` | random UUID | Worker identity on PostgreSQL leases |
+
+### File data
+
+The v1 templates in the repository are [`data/templates/waybills-v1.json`](data/templates/waybills-v1.json) and [`data/templates/waybills-v1.csv`](data/templates/waybills-v1.csv). Validate them with the same loader the server uses:
+
+```bash
+go run ./cmd/dataimport validate --data ./data/templates/waybills-v1.csv
+go run ./cmd/dataimport validate --data ./data/templates/waybills-v1.json
+```
+
+The commands print `valid dataset=template-v1 format=csv waybills=1 anomalies=1` and `valid dataset=template-v1 format=json waybills=1 anomalies=1`. Replace the path with your own v1 file. This repository does not contain `official-v1.csv`.
+
+Start file mode after validation:
+
+```bash
+PLATFORM=file \
+DATA_FILE=./data/templates/waybills-v1.csv \
+DATA_DIR=/tmp/waybill-file-demo \
+./scripts/demo.sh
+```
+
+`PLATFORM=file` also requires `STORAGE=jsonl` and `AUTH_MODE=local`. The server loads the whole file once at startup. A syntax, reference, coordinate, or time-order error fails before the process listens. It does not reload the file while running. Replacing the file requires a restart. Fields and checks are in [`docs/file-data-source-design.md`](docs/file-data-source-design.md). The waybill selector lists the waybills in the file.
 
 ### Online model
 
@@ -314,13 +339,13 @@ These three projects were used to compare interaction and domain splits. None of
 | Issue | Topic |
 |---|---|
 | [59](https://github.com/Duang777/waybill-guardian/issues/59) | Run the demo on a real model, with structured evidence references |
-| [60](https://github.com/Duang777/waybill-guardian/issues/60) | File import, and start any waybill |
+| [60](https://github.com/Duang777/waybill-guardian/issues/60) | Closed. Load JSON or CSV v1 at startup and select a waybill on the page. No highway-port network |
 | [61](https://github.com/Duang777/waybill-guardian/issues/61) | Highway-port overview and KPIs that can be checked |
 | [62](https://github.com/Duang777/waybill-guardian/issues/62) | Choose and add a LICENSE |
 | [64](https://github.com/Duang777/waybill-guardian/issues/64) | CSRF checks for non-GET requests |
 | [65](https://github.com/Duang777/waybill-guardian/issues/65) | Docker Compose |
 | [67](https://github.com/Duang777/waybill-guardian/issues/67) | GitHub Actions |
-| [68](https://github.com/Duang777/waybill-guardian/issues/68) | Judge-facing README. This page adds the diagram, the boundaries, and the demo entry. Measured KPIs, official-data steps, and a dubbed video are still open |
+| [68](https://github.com/Duang777/waybill-guardian/issues/68) | Still open. This page has the diagram, the boundaries, the demo entry, and the file-format checks. Measured KPIs and a dubbed video are still open |
 | [77](https://github.com/Duang777/waybill-guardian/issues/77) | Frontend visual work, including issues 69 through 76 |
 
 The production handling path is [issue 44](https://github.com/Duang777/waybill-guardian/issues/44).
@@ -338,5 +363,6 @@ Third-party component licenses are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOT
 - Architecture and recovery: [docs/RFC-001.md](docs/RFC-001.md)
 - Real platform adapter: [docs/RFC-002.md](docs/RFC-002.md)
 - Reassign sandbox: [docs/real-write-adapter-design.md](docs/real-write-adapter-design.md)
+- File data source: [docs/file-data-source-design.md](docs/file-data-source-design.md)
 - Agent history: [docs/history-governance.md](docs/history-governance.md)
 - Module index: [AGENTS.md](AGENTS.md)

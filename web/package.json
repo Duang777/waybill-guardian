@@ -9,6 +9,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "verify:e2e": "node scripts/verify-demo.mjs",
+    "verify:file-e2e": "node scripts/verify-file-data.mjs",
     "record:demo": "node scripts/record-demo.mjs"
   },
   "dependencies": {

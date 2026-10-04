@@ -3,17 +3,19 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import styles from "./app.module.css";
 import {
   APIError,
-  DEFAULT_WAYBILL_ID,
   confirmApproval,
   getRunSnapshot,
   getWaybill,
   listActiveRuns,
   listPendingApprovals,
+  listWaybills,
   openTimeline,
   rejectApproval,
-  triggerDemo,
+  startRun,
   type RunID,
   type RunSummary,
+  type WaybillCatalogItem,
+  type WaybillID,
   type WaybillView,
 } from "./api";
 import { ApprovalPanel } from "./components/ApprovalPanel";
@@ -21,87 +23,250 @@ import { RouteMap } from "./components/RouteMap";
 import { SummaryStrip } from "./components/SummaryStrip";
 import { PlaybackControls, TimelinePanel } from "./components/TimelinePanel";
 import {
+  decideRecovery,
+  type RecoverySource,
+} from "./recovery";
+import {
   initialTimelineState,
   latestApproval,
   runStatus,
   timelineReducer,
   visibleEvents,
 } from "./timeline";
+import type { WaybillResource } from "./waybill-resource";
 
-type Resource<T> =
+type CatalogResource =
   | { kind: "loading" }
-  | { kind: "ready"; data: T }
+  | { kind: "empty" }
+  | { kind: "ready"; data: readonly WaybillCatalogItem[] }
   | { kind: "error"; message: string };
+
+type SelectionTarget =
+  | { kind: "waybill"; waybillID: WaybillID }
+  | { kind: "run"; runID: RunID }
+  | { kind: "known_run"; runID: RunID; waybillID: WaybillID };
+
+type WaybillSelection =
+  | { kind: "empty" }
+  | { kind: "loading"; target: SelectionTarget }
+  | { kind: "ready"; waybillID: WaybillID; data: WaybillView }
+  | { kind: "error"; target: SelectionTarget; message: string };
 
 type PendingAction = "bootstrap" | "trigger" | "confirm" | "reject" | null;
 
+type SelectionRequest = {
+  generation: number;
+  controller: AbortController;
+};
+
 export default function App() {
-  const [waybill, setWaybill] = useState<Resource<WaybillView>>({ kind: "loading" });
+  const [catalog, setCatalog] = useState<CatalogResource>({ kind: "loading" });
+  const [selection, setSelection] = useState<WaybillSelection>({ kind: "empty" });
   const [run, setRun] = useState<RunSummary | null>(null);
   const [timelineAfter, setTimelineAfter] = useState<number | null>(null);
   const [timeline, dispatch] = useReducer(timelineReducer, initialTimelineState);
   const [connected, setConnected] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction>("bootstrap");
   const [message, setMessage] = useState<string | null>(null);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const selectionGeneration = useRef(0);
+  const selectionRequest = useRef<AbortController | null>(null);
+  const catalogRequest = useRef<AbortController | null>(null);
+  const bootstrapRequest = useRef<AbortController | null>(null);
+  const catalogGeneration = useRef(0);
   const closeTimeline = useRef<(() => void) | null>(null);
 
-  const selectRun = useCallback(async (runID: RunID, signal?: AbortSignal) => {
+  const beginSelection = useCallback((): SelectionRequest => {
+    selectionRequest.current?.abort();
     closeTimeline.current?.();
     closeTimeline.current = null;
+    const controller = new AbortController();
     const generation = selectionGeneration.current + 1;
     selectionGeneration.current = generation;
+    selectionRequest.current = controller;
     setConnected(false);
     setTimelineAfter(null);
     dispatch({ type: "reset" });
+    return { generation, controller };
+  }, []);
 
-    const snapshot = await getRunSnapshot(runID, signal);
-    if (selectionGeneration.current !== generation) {
-      return;
-    }
-    setRun(snapshot.run);
-    dispatch({ type: "hydrate", events: snapshot.events });
-    setTimelineAfter(snapshot.run.last_seq);
-
-    const data = await getWaybill(snapshot.run.waybill_id);
-    if (selectionGeneration.current === generation) {
-      setWaybill({ kind: "ready", data });
+  const loadCatalog = useCallback(async (): Promise<
+    readonly WaybillCatalogItem[] | null
+  > => {
+    catalogRequest.current?.abort();
+    const controller = new AbortController();
+    const generation = catalogGeneration.current + 1;
+    catalogGeneration.current = generation;
+    catalogRequest.current = controller;
+    setCatalog({ kind: "loading" });
+    try {
+      const waybills = await listWaybills(controller.signal);
+      if (catalogGeneration.current !== generation) {
+        return null;
+      }
+      setCatalog(
+        waybills.length === 0
+          ? { kind: "empty" }
+          : { kind: "ready", data: waybills },
+      );
+      return waybills;
+    } catch (error) {
+      if (isAbortError(error) || catalogGeneration.current !== generation) {
+        return null;
+      }
+      setCatalog({ kind: "error", message: errorMessage(error) });
+      return null;
     }
   }, []);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    void Promise.all([
-      listActiveRuns(controller.signal),
-      listPendingApprovals(controller.signal),
-    ])
-      .then(async ([runs, approvals]) => {
-        const selectedRunID = approvals[0]?.run_id ?? runs[0]?.run_id;
-        if (selectedRunID !== undefined) {
-          await selectRun(selectedRunID, controller.signal);
+  const hydrateRun = useCallback(
+    async (
+      runID: RunID,
+      request: SelectionRequest,
+      expectedWaybillID?: WaybillID,
+    ): Promise<void> => {
+      let target: SelectionTarget =
+        expectedWaybillID === undefined
+          ? { kind: "run", runID }
+          : { kind: "known_run", runID, waybillID: expectedWaybillID };
+      try {
+        const snapshot = await getRunSnapshot(runID, request.controller.signal);
+        if (selectionGeneration.current !== request.generation) {
           return;
         }
-        const data = await getWaybill(DEFAULT_WAYBILL_ID);
-        if (!controller.signal.aborted) {
-          setWaybill({ kind: "ready", data });
+        if (
+          expectedWaybillID !== undefined &&
+          snapshot.run.waybill_id !== expectedWaybillID
+        ) {
+          throw new Error("启动响应与运行快照的运单不一致");
         }
-      })
-      .catch((error: unknown) => {
-        if (!isAbortError(error)) {
-          setMessage(errorMessage(error));
-          setWaybill({ kind: "error", message: errorMessage(error) });
+        const waybillID = expectedWaybillID ?? snapshot.run.waybill_id;
+        target = { kind: "known_run", runID, waybillID };
+        setRun(snapshot.run);
+        setSelection({ kind: "loading", target });
+        dispatch({ type: "hydrate", events: snapshot.events });
+        setTimelineAfter(snapshot.run.last_seq);
+
+        const data = await getWaybill(waybillID, request.controller.signal);
+        if (selectionGeneration.current === request.generation) {
+          setSelection({ kind: "ready", waybillID, data });
         }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setPendingAction(null);
+      } catch (error) {
+        if (
+          isAbortError(error) ||
+          selectionGeneration.current !== request.generation
+        ) {
+          return;
         }
+        const detail = errorMessage(error);
+        setSelection({ kind: "error", target, message: detail });
+      }
+    },
+    [],
+  );
+
+  const selectRun = useCallback(
+    async ({
+      runID,
+      expectedWaybillID,
+    }: {
+      runID: RunID;
+      expectedWaybillID?: WaybillID;
+    }): Promise<void> => {
+      const request = beginSelection();
+      setRun(null);
+      setMessage(null);
+      setSelection({
+        kind: "loading",
+        target:
+          expectedWaybillID === undefined
+            ? { kind: "run", runID }
+            : { kind: "known_run", runID, waybillID: expectedWaybillID },
       });
+      await hydrateRun(runID, request, expectedWaybillID);
+    },
+    [beginSelection, hydrateRun],
+  );
+
+  const loadWaybill = useCallback(
+    async (waybillID: WaybillID): Promise<void> => {
+      const request = beginSelection();
+      setRun(null);
+      const target: SelectionTarget = { kind: "waybill", waybillID };
+      setSelection({ kind: "loading", target });
+      setMessage(null);
+      try {
+        const data = await getWaybill(waybillID, request.controller.signal);
+        if (selectionGeneration.current === request.generation) {
+          setSelection({ kind: "ready", waybillID, data });
+        }
+      } catch (error) {
+        if (
+          isAbortError(error) ||
+          selectionGeneration.current !== request.generation
+        ) {
+          return;
+        }
+        setSelection({
+          kind: "error",
+          target,
+          message: errorMessage(error),
+        });
+      }
+    },
+    [beginSelection],
+  );
+
+  const bootstrap = useCallback(async (): Promise<void> => {
+    bootstrapRequest.current?.abort();
+    const controller = new AbortController();
+    bootstrapRequest.current = controller;
+    setPendingAction("bootstrap");
+    setRecoveryError(null);
+    setMessage(null);
+    const catalogPromise = loadCatalog();
+    try {
+      const [activeRuns, pendingApprovals] = await Promise.allSettled([
+        listActiveRuns(controller.signal),
+        listPendingApprovals(controller.signal),
+      ]);
+      if (controller.signal.aborted) {
+        return;
+      }
+      const decision = decideRecovery({
+        activeRuns: recoverySource(activeRuns),
+        pendingApprovals: recoverySource(pendingApprovals),
+      });
+      if (decision.kind === "recover") {
+        await selectRun({ runID: decision.runID });
+        return;
+      }
+      if (decision.kind === "blocked") {
+        setRecoveryError(decision.message);
+        return;
+      }
+      const waybills = await catalogPromise;
+      const firstWaybill = waybills?.[0];
+      if (!controller.signal.aborted && firstWaybill !== undefined) {
+        await loadWaybill(firstWaybill.waybill_id);
+      }
+    } finally {
+      if (bootstrapRequest.current === controller && !controller.signal.aborted) {
+        setPendingAction(null);
+      }
+    }
+  }, [loadCatalog, loadWaybill, selectRun]);
+
+  useEffect(() => {
+    void bootstrap();
     return () => {
-      controller.abort();
+      bootstrapRequest.current?.abort();
+      catalogRequest.current?.abort();
+      selectionRequest.current?.abort();
+      catalogGeneration.current += 1;
       selectionGeneration.current += 1;
     };
-  }, [selectRun]);
+  }, [bootstrap]);
 
   useEffect(() => {
     if (run === null || timelineAfter === null || run.status === "manual_review") {
@@ -148,25 +313,106 @@ export default function App() {
   const currentStatus =
     runStatus(projectedEvents) ??
     (timeline.playback.kind === "live" ? (run?.status ?? null) : null);
-  const view = waybill.kind === "ready" ? waybill.data : null;
+  const view = selection.kind === "ready" ? selection.data : null;
+  const waybillResource = toWaybillResource(selection);
+  const selectedWaybillID =
+    waybillResource.kind === "empty" ? null : waybillResource.waybillID;
+  const anomaly = view?.tracking.find((point) => point.anomaly) ?? null;
+  const resourceError =
+    recoveryError ??
+    (selection.kind === "error"
+      ? selection.message
+      : catalog.kind === "error"
+        ? catalog.message
+        : null);
+  const displayedError = message ?? resourceError;
 
-  const startDemo = async () => {
-    closeTimeline.current?.();
-    closeTimeline.current = null;
-    selectionGeneration.current += 1;
+  const startSelectedRun = async () => {
+    if (selection.kind !== "ready") {
+      return;
+    }
+    const currentSelection = selection;
+    const request = beginSelection();
     setRun(null);
-    setTimelineAfter(null);
-    setConnected(false);
-    dispatch({ type: "reset" });
     setPendingAction("trigger");
     setMessage(null);
     try {
-      const started = await triggerDemo();
-      await selectRun(started.run_id);
+      const started = await startRun(
+        currentSelection.waybillID,
+        request.controller.signal,
+      );
+      if (selectionGeneration.current !== request.generation) {
+        return;
+      }
+      setSelection({
+        kind: "loading",
+        target: {
+          kind: "known_run",
+          runID: started.run_id,
+          waybillID: started.waybill_id,
+        },
+      });
+      await hydrateRun(
+        started.run_id,
+        request,
+        started.waybill_id,
+      );
     } catch (error) {
-      setMessage(errorMessage(error));
+      if (
+        !isAbortError(error) &&
+        selectionGeneration.current === request.generation
+      ) {
+        setSelection(currentSelection);
+        setMessage(errorMessage(error));
+      }
     } finally {
-      setPendingAction(null);
+      if (selectionGeneration.current === request.generation) {
+        setPendingAction(null);
+      }
+    }
+  };
+
+  const retryResource = async () => {
+    setMessage(null);
+    if (recoveryError !== null) {
+      await bootstrap();
+      return;
+    }
+    if (selection.kind === "error") {
+      switch (selection.target.kind) {
+        case "waybill":
+          await loadWaybill(selection.target.waybillID);
+          return;
+        case "run":
+          await selectRun({ runID: selection.target.runID });
+          return;
+        case "known_run":
+          await selectRun({
+            runID: selection.target.runID,
+            expectedWaybillID: selection.target.waybillID,
+          });
+          return;
+        default: {
+          const exhaustive: never = selection.target;
+          return exhaustive;
+        }
+      }
+    }
+    if (catalog.kind === "error") {
+      const waybills = await loadCatalog();
+      if (selection.kind === "empty" && waybills?.[0] !== undefined) {
+        await loadWaybill(waybills[0].waybill_id);
+      }
+    }
+  };
+
+  const selectWaybill = (value: string) => {
+    if (catalog.kind !== "ready") {
+      return;
+    }
+    const item = catalog.data.find((candidate) => candidate.waybill_id === value);
+    if (item !== undefined && item.waybill_id !== selectedWaybillID) {
+      void loadWaybill(item.waybill_id);
     }
   };
 
@@ -217,6 +463,29 @@ export default function App() {
               <span>异常运单处置控制台</span>
             </div>
           </div>
+          <label className={styles.waybillPicker}>
+            <span>WAYBILL</span>
+            <select
+              value={selectedWaybillID ?? ""}
+              disabled={
+                catalog.kind !== "ready" ||
+                pendingAction !== null ||
+                recoveryError !== null
+              }
+              aria-label="选择异常运单"
+              onChange={(event) => selectWaybill(event.currentTarget.value)}
+            >
+              {catalog.kind === "loading" && <option value="">正在读取运单目录</option>}
+              {catalog.kind === "empty" && <option value="">暂无可处置运单</option>}
+              {catalog.kind === "error" && <option value="">运单目录不可用</option>}
+              {catalog.kind === "ready" &&
+                catalog.data.map((item) => (
+                  <option value={item.waybill_id} key={item.waybill_id}>
+                    {item.origin} → {item.destination} · {item.waybill_id}
+                  </option>
+                ))}
+            </select>
+          </label>
           <div className={styles.runContext}>
             <span className={styles.runLabel}>ACTIVE RUN</span>
             <span className={styles.mono}>
@@ -226,8 +495,12 @@ export default function App() {
           <button
             className={styles.triggerButton}
             type="button"
-            disabled={pendingAction !== null}
-            onClick={() => void startDemo()}
+            disabled={
+              pendingAction !== null ||
+              recoveryError !== null ||
+              selection.kind !== "ready"
+            }
+            onClick={() => void startSelectedRun()}
           >
             {run === null ? (
               <Play aria-hidden="true" size={17} />
@@ -239,26 +512,45 @@ export default function App() {
               : pendingAction === "bootstrap"
                 ? "正在恢复"
               : run === null
-                ? "启动演示"
-                : "重新演示"}
+                ? "启动处置"
+                : "重新处置"}
           </button>
         </header>
 
         <main id="main-content" className={styles.main}>
-          <SummaryStrip view={view} status={currentStatus} connected={connected} />
+          <SummaryStrip
+            resource={waybillResource}
+            status={currentStatus}
+            connected={connected}
+          />
 
-          {message !== null && (
+          {displayedError !== null && (
             <div className={styles.errorBanner} role="alert">
               <AlertOctagon aria-hidden="true" size={17} />
-              <span>{message}</span>
-              <button
-                type="button"
-                aria-label="关闭错误提示"
-                title="关闭"
-                onClick={() => setMessage(null)}
-              >
-                <X aria-hidden="true" size={16} />
-              </button>
+              <span>{displayedError}</span>
+              <div className={styles.errorActions}>
+                {resourceError !== null && message === null && (
+                  <button
+                    className={styles.retryButton}
+                    type="button"
+                    onClick={() => void retryResource()}
+                  >
+                    <RotateCw aria-hidden="true" size={15} />
+                    重试
+                  </button>
+                )}
+                {message !== null && (
+                  <button
+                    className={styles.dismissButton}
+                    type="button"
+                    aria-label="关闭错误提示"
+                    title="关闭"
+                    onClick={() => setMessage(null)}
+                  >
+                    <X aria-hidden="true" size={16} />
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
@@ -272,10 +564,25 @@ export default function App() {
                   </div>
                   <span className={styles.anomalyLegend}>
                     <span aria-hidden="true" />
-                    绵阳停留 6 小时
+                    {anomaly === null
+                      ? selection.kind === "error"
+                        ? "异常轨迹加载失败"
+                        : selectedWaybillID === null
+                        ? "暂无异常轨迹"
+                        : selection.kind === "loading"
+                          ? "等待异常轨迹"
+                          : "未发现异常轨迹"
+                      : anomaly.stop_hours === undefined
+                        ? anomaly.label
+                        : `${anomaly.label}停留 ${formatHours(anomaly.stop_hours)} 小时`}
                   </span>
                 </div>
-                <RouteMap points={view?.tracking ?? []} />
+                <RouteMap
+                  points={view?.tracking ?? []}
+                  origin={view?.waybill.origin ?? null}
+                  destination={view?.waybill.destination ?? null}
+                  resourceKind={waybillResource.kind}
+                />
               </section>
 
               <div className={styles.playbackBand}>
@@ -313,10 +620,65 @@ function errorMessage(error: unknown): string {
   return "请求未完成，请检查服务状态";
 }
 
+function recoverySource<T>(
+  result: PromiseSettledResult<T[]>,
+): RecoverySource<T> {
+  return result.status === "fulfilled"
+    ? { kind: "ready", data: result.value }
+    : { kind: "error", message: errorMessage(result.reason) };
+}
+
+function toWaybillResource(selection: WaybillSelection): WaybillResource {
+  switch (selection.kind) {
+    case "empty":
+      return selection;
+    case "loading":
+      return {
+        kind: "loading",
+        waybillID: targetWaybillID(selection.target),
+      };
+    case "error":
+      return {
+        kind: "error",
+        waybillID: targetWaybillID(selection.target),
+      };
+    case "ready":
+      return {
+        kind: "ready",
+        waybillID: selection.waybillID,
+        view: selection.data,
+      };
+    default: {
+      const exhaustive: never = selection;
+      return exhaustive;
+    }
+  }
+}
+
+function targetWaybillID(target: SelectionTarget): WaybillID | null {
+  switch (target.kind) {
+    case "waybill":
+    case "known_run":
+      return target.waybillID;
+    case "run":
+      return null;
+    default: {
+      const exhaustive: never = target;
+      return exhaustive;
+    }
+  }
+}
+
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
 function compactID(value: string): string {
   return value.length > 18 ? `${value.slice(0, 8)}...${value.slice(-6)}` : value;
+}
+
+function formatHours(value: number): string {
+  return new Intl.NumberFormat("zh-CN", {
+    maximumFractionDigits: 1,
+  }).format(value);
 }

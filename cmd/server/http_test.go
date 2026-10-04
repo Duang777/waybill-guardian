@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,13 +27,13 @@ import (
 )
 
 func TestHTTPDemoFlowAndSSECursor(t *testing.T) {
-	clients, _, err := tools.NewDemoClients()
+	clients, _, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
 	service, err := guardian.Open(guardian.Config{
 		DataDir:   t.TempDir(),
-		Clients:   clients,
+		Reads:     clients,
 		StepDelay: 0,
 	})
 	if err != nil {
@@ -142,21 +143,101 @@ func TestHTTPDemoFlowAndSSECursor(t *testing.T) {
 	}
 }
 
+func TestWaybillCatalogAndExplicitRunAPI(t *testing.T) {
+	reads, writes, err := tools.NewDemoRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := guardian.Open(guardian.Config{
+		DataDir:      t.TempDir(),
+		Reads:        reads,
+		WriteRuntime: writes,
+		StepDelay:    0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	server := httptest.NewServer(newHandler(service, newLocalAccess(t)))
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/api/waybills")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("catalog status = %d", response.StatusCode)
+	}
+	var catalog struct {
+		Waybills []guardian.WaybillCatalogItem `json:"waybills"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&catalog); err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if len(catalog.Waybills) != 1 ||
+		catalog.Waybills[0].WaybillID != "YD2026101001" ||
+		!catalog.Waybills[0].HasAnomaly {
+		t.Fatalf("catalog = %+v", catalog.Waybills)
+	}
+
+	response, err = http.Post(
+		server.URL+"/api/runs",
+		"text/plain",
+		strings.NewReader(`{"waybill_id":"YD2026101001"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertProblem(t, response, http.StatusUnsupportedMediaType, "invalid_content_type")
+
+	response, err = http.Post(
+		server.URL+"/api/runs",
+		"application/json",
+		strings.NewReader(`{"waybill_id":"YD2026101001"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("start status = %d body=%s", response.StatusCode, body)
+	}
+	var run guardian.RunView
+	if err := json.NewDecoder(response.Body).Decode(&run); err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if run.WaybillID != "YD2026101001" {
+		t.Fatalf("run = %+v", run)
+	}
+
+	response, err = http.Post(
+		server.URL+"/api/runs",
+		"application/json",
+		strings.NewReader(`{"waybill_id":"YD2026101099"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertProblem(t, response, http.StatusNotFound, "not_found")
+}
+
 func TestTimelineStopsWritingToSlowClientAfterDeadline(t *testing.T) {
-	clients, _, err := tools.NewDemoClients()
+	clients, _, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
 	service, err := guardian.Open(guardian.Config{
 		DataDir:   t.TempDir(),
-		Clients:   clients,
+		Reads:     clients,
 		StepDelay: 0,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	run, err := service.StartDemo(context.Background())
+	run, err := service.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,20 +275,20 @@ func TestTimelineStopsWritingToSlowClientAfterDeadline(t *testing.T) {
 }
 
 func TestTimelineDoesNotWriteBufferedEventsAfterRequestCancellation(t *testing.T) {
-	clients, _, err := tools.NewDemoClients()
+	clients, _, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
 	service, err := guardian.Open(guardian.Config{
 		DataDir:   t.TempDir(),
-		Clients:   clients,
+		Reads:     clients,
 		StepDelay: 0,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	run, err := service.StartDemo(context.Background())
+	run, err := service.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,20 +334,20 @@ func TestSSEWriteDeadlineUsesEarlierRequestDeadline(t *testing.T) {
 }
 
 func TestTimelineRejectsWhenSubscriptionLimitIsReached(t *testing.T) {
-	clients, _, err := tools.NewDemoClients()
+	clients, _, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
 	service, err := guardian.Open(guardian.Config{
 		DataDir:   t.TempDir(),
-		Clients:   clients,
+		Reads:     clients,
 		StepDelay: 0,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	run, err := service.StartDemo(context.Background())
+	run, err := service.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,11 +379,11 @@ func TestTimelineRejectsWhenSubscriptionLimitIsReached(t *testing.T) {
 }
 
 func TestRejectValidationAndUnknownFields(t *testing.T) {
-	clients, _, err := tools.NewDemoClients()
+	clients, _, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := guardian.Open(guardian.Config{DataDir: t.TempDir(), Clients: clients})
+	service, err := guardian.Open(guardian.Config{DataDir: t.TempDir(), Reads: clients})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,11 +408,11 @@ func TestRejectValidationAndUnknownFields(t *testing.T) {
 }
 
 func TestWaybillErrorContract(t *testing.T) {
-	clients, _, err := tools.NewDemoClients()
+	clients, _, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := guardian.Open(guardian.Config{DataDir: t.TempDir(), Clients: clients})
+	service, err := guardian.Open(guardian.Config{DataDir: t.TempDir(), Reads: clients})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,13 +462,13 @@ func TestWaybillErrorContract(t *testing.T) {
 }
 
 func TestHTTPRecoveryQueries(t *testing.T) {
-	clients, _, err := tools.NewDemoClients()
+	clients, _, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
 	service, err := guardian.Open(guardian.Config{
 		DataDir:   t.TempDir(),
-		Clients:   clients,
+		Reads:     clients,
 		StepDelay: 0,
 	})
 	if err != nil {
@@ -397,7 +478,7 @@ func TestHTTPRecoveryQueries(t *testing.T) {
 	server := httptest.NewServer(newHandler(service, newLocalAccess(t)))
 	defer server.Close()
 
-	run, err := service.StartDemo(context.Background())
+	run, err := service.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,11 +516,11 @@ func TestHTTPRecoveryQueries(t *testing.T) {
 }
 
 func TestHTTPRecoveryQueriesReturnEmptyArrays(t *testing.T) {
-	clients, _, err := tools.NewDemoClients()
+	clients, _, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := guardian.Open(guardian.Config{DataDir: t.TempDir(), Clients: clients})
+	service, err := guardian.Open(guardian.Config{DataDir: t.TempDir(), Reads: clients})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -521,9 +602,9 @@ func TestOpenRealPlatformRuntime(t *testing.T) {
 	}
 	if runtime.profileID != tmssandbox.ProfileID ||
 		runtime.readSource != fixtureReadSource ||
-		runtime.clients.TMS == nil ||
-		runtime.clients.Weather == nil ||
-		runtime.clients.Notification == nil {
+		runtime.reads.TMS == nil ||
+		runtime.reads.Weather == nil ||
+		runtime.reads.Catalog == nil {
 		t.Fatalf("real platform runtime = %+v", runtime)
 	}
 	if _, ok := runtime.writeRuntime.(*tmssandbox.Adapter); !ok {
@@ -637,6 +718,15 @@ func TestRuntimeStorageConfiguration(t *testing.T) {
 	if err := validateRuntimeModes("mock", "postgres", httpauth.ModeJWT); err != nil {
 		t.Fatal(err)
 	}
+	if err := validateRuntimeModes("file", "jsonl", httpauth.ModeLocal); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRuntimeModes("file", "postgres", httpauth.ModeLocal); err == nil {
+		t.Fatal("file platform accepted PostgreSQL storage")
+	}
+	if err := validateRuntimeModes("file", "jsonl", httpauth.ModeJWT); err == nil {
+		t.Fatal("file platform accepted JWT authentication")
+	}
 	if err := validateRuntimeModes("real", "jsonl", httpauth.ModeJWT); err == nil {
 		t.Fatal("real platform accepted JSONL storage")
 	}
@@ -645,6 +735,38 @@ func TestRuntimeStorageConfiguration(t *testing.T) {
 	}
 	if err := validateRuntimeModes("unknown", "jsonl", httpauth.ModeLocal); err == nil {
 		t.Fatal("unknown platform mode was accepted")
+	}
+}
+
+func TestOpenFilePlatformRuntime(t *testing.T) {
+	t.Setenv(
+		"DATA_FILE",
+		filepath.Join("..", "..", "data", "templates", "waybills-v1.csv"),
+	)
+	runtime, err := openPlatformRuntime(t.Context(), "file", "local-demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.profileID != tools.FixtureRuntimeAdapterID ||
+		!strings.HasPrefix(runtime.readSource, "file:csv:v1:template-v1:") ||
+		runtime.reads.TMS == nil ||
+		runtime.reads.Weather == nil ||
+		runtime.reads.Catalog == nil {
+		t.Fatalf("file runtime = %+v", runtime)
+	}
+	catalog, err := runtime.reads.Catalog.ListWaybills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog) != 1 || catalog[0].WaybillID != "YD2026101001" {
+		t.Fatalf("catalog = %+v", catalog)
+	}
+}
+
+func TestOpenFilePlatformRuntimeRequiresDataFile(t *testing.T) {
+	t.Setenv("DATA_FILE", "")
+	if _, err := openPlatformRuntime(t.Context(), "file", "local-demo"); err == nil {
+		t.Fatal("file platform accepted an empty DATA_FILE")
 	}
 }
 

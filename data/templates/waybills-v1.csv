@@ -1,0 +1,10 @@
+schema_version,dataset_id,record_type,waybill_id,origin,destination,cargo,current_carrier_id,driver_id,status,sla_hours,shipper_phone,priority,carrier_id,carrier_name,eta_hours,reliability_pct,tracking_sequence,label,recorded_at,longitude,latitude,speed_kph,stop_hours,anomaly,driver_name,driver_phone,driver_plate,continuous_drive_hours,fatigue_alert,weather_sequence,segment,condition,alert_level
+v1,template-v1,dataset,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,waybill,YD2026101001,杭州,成都,精密电子元件,CARRIER-EAST-17,DRV-0286,delayed,72,13800001234,,,,,,,,,,,,,,,,,,,,,,
+,,driver,,,,,,DRV-0286,,,,,,,,,,,,,,,,,周师傅,13961234567,川A8X6Q2,9,true,,,,
+,,candidate,YD2026101001,,,,,,,,,1,CARRIER-SW-42,川行快运,11,97.6,,,,,,,,,,,,,,,,,
+,,candidate,YD2026101001,,,,,,,,,2,CARRIER-SW-19,蜀道联运,14,95.8,,,,,,,,,,,,,,,,,
+,,tracking,YD2026101001,,,,,,,,,,,,,,1,杭州转运中心,2026-10-10T01:15:00Z,120.1551,30.2741,0,,false,,,,,,,,,
+,,tracking,YD2026101001,,,,,,,,,,,,,,2,绵阳北服务区,2026-10-11T04:21:00Z,104.6796,31.4675,0,6,true,,,,,,,,,
+,,tracking,YD2026101001,,,,,,,,,,,,,,3,成都分拨中心,2026-10-11T13:06:00Z,104.0665,30.5723,0,,false,,,,,,,,,
+,,weather,,杭州,成都,,,,,,,,,,,,,,,,,,,,,,,,,1,成绵高速,晴,none

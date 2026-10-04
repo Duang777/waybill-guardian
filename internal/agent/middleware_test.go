@@ -25,14 +25,11 @@ func TestWriteEffectMiddlewareSeparatesSameActionEffects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clients, mock, err := guardtools.NewDemoClients()
+	clients, mock, err := guardtools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeRuntime, err := guardtools.NewFixtureWriteRuntime(clients)
-	if err != nil {
-		t.Fatal(err)
-	}
+	writeRuntime := mock
 	effects, err := idempotency.NewStore(journal, idempotency.StoreConfig{
 		Runtime: writeRuntime,
 	})
@@ -151,14 +148,11 @@ func TestWriteEffectMiddlewareExecutesConfirmedLegacyApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clients, mock, err := guardtools.NewDemoClients()
+	clients, mock, err := guardtools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeRuntime, err := guardtools.NewFixtureWriteRuntime(clients)
-	if err != nil {
-		t.Fatal(err)
-	}
+	writeRuntime := mock
 	effects, err := idempotency.NewStore(journal, idempotency.StoreConfig{
 		Runtime: writeRuntime,
 	})

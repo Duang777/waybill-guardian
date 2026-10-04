@@ -19,17 +19,17 @@ import (
 )
 
 func TestDemoConfirmCompletesExactlyOnce(t *testing.T) {
-	clients, mock, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := Open(Config{DataDir: t.TempDir(), Clients: clients, StepDelay: 0})
+	service, err := Open(Config{DataDir: t.TempDir(), Reads: clients, WriteRuntime: runtime, StepDelay: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer service.Close()
 
-	run, err := service.StartDemo(context.Background())
+	run, err := service.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,8 +65,8 @@ func TestDemoConfirmCompletesExactlyOnce(t *testing.T) {
 	if completed.Status != domain.RunCompleted {
 		t.Fatalf("run status = %q", completed.Status)
 	}
-	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 2 {
-		t.Fatalf("writes = reassign:%d sms:%d", mock.WriteCount(domain.ActionReassign), mock.WriteCount(domain.ActionSendSMS))
+	if runtime.WriteCount(domain.ActionReassign) != 1 || runtime.WriteCount(domain.ActionSendSMS) != 2 {
+		t.Fatalf("writes = reassign:%d sms:%d", runtime.WriteCount(domain.ActionReassign), runtime.WriteCount(domain.ActionSendSMS))
 	}
 
 	repeated, err := service.Decide(context.Background(), pending.ID, DecisionRequest{
@@ -79,19 +79,20 @@ func TestDemoConfirmCompletesExactlyOnce(t *testing.T) {
 	if repeated.Status != approval.StatusExecuted {
 		t.Fatalf("repeated status = %q", repeated.Status)
 	}
-	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 2 {
+	if runtime.WriteCount(domain.ActionReassign) != 1 || runtime.WriteCount(domain.ActionSendSMS) != 2 {
 		t.Fatal("repeated confirmation executed writes again")
 	}
 }
 
 func TestRunStartedAuditRecordsPlatformSources(t *testing.T) {
-	clients, _, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
 	service, err := Open(Config{
 		DataDir:         t.TempDir(),
-		Clients:         clients,
+		Reads:           clients,
+		WriteRuntime:    runtime,
 		PlatformProfile: "tms-reassign-sandbox-v1",
 		ReadSource:      "fixture-v1",
 		StepDelay:       0,
@@ -101,7 +102,7 @@ func TestRunStartedAuditRecordsPlatformSources(t *testing.T) {
 	}
 	defer service.Close()
 
-	run, err := service.StartDemo(context.Background())
+	run, err := service.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,17 +124,17 @@ func TestRunStartedAuditRecordsPlatformSources(t *testing.T) {
 }
 
 func TestDiscoveryAndSnapshotUseDurableEventPrefix(t *testing.T) {
-	clients, _, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := Open(Config{DataDir: t.TempDir(), Clients: clients, StepDelay: 0})
+	service, err := Open(Config{DataDir: t.TempDir(), Reads: clients, WriteRuntime: runtime, StepDelay: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer service.Close()
 
-	run, err := service.StartDemo(context.Background())
+	run, err := service.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,18 +191,26 @@ func TestDiscoveryAndSnapshotUseDurableEventPrefix(t *testing.T) {
 }
 
 func TestPartialWriteFailureDoesNotCompleteApprovalOrRun(t *testing.T) {
-	clients, mock, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	clients.Notification = failingNotificationClient{}
-	service, err := Open(Config{DataDir: t.TempDir(), Clients: clients, StepDelay: 0})
+	failingRuntime := &failingActionRuntime{
+		WriteRuntime: runtime,
+		action:       domain.ActionSendSMS,
+	}
+	service, err := Open(Config{
+		DataDir:      t.TempDir(),
+		Reads:        clients,
+		WriteRuntime: failingRuntime,
+		StepDelay:    0,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer service.Close()
 
-	run, err := service.StartDemo(context.Background())
+	run, err := service.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,11 +232,11 @@ func TestPartialWriteFailureDoesNotCompleteApprovalOrRun(t *testing.T) {
 	if failed.Status != domain.RunFailed {
 		t.Fatalf("run status = %q, want failed", failed.Status)
 	}
-	if mock.WriteCount(domain.ActionReassign) != 1 {
-		t.Fatalf("reassign writes = %d, want 1", mock.WriteCount(domain.ActionReassign))
+	if runtime.WriteCount(domain.ActionReassign) != 1 {
+		t.Fatalf("reassign writes = %d, want 1", runtime.WriteCount(domain.ActionReassign))
 	}
-	if mock.WriteCount(domain.ActionSendSMS) != 0 {
-		t.Fatalf("sms writes = %d, want 0", mock.WriteCount(domain.ActionSendSMS))
+	if runtime.WriteCount(domain.ActionSendSMS) != 0 {
+		t.Fatalf("sms writes = %d, want 0", runtime.WriteCount(domain.ActionSendSMS))
 	}
 	events, err := service.Replay(context.Background(), run.RunID, 0)
 	if err != nil {
@@ -268,17 +277,17 @@ func TestPartialWriteFailureDoesNotCompleteApprovalOrRun(t *testing.T) {
 }
 
 func TestConcurrentConfirmResumesRunOnce(t *testing.T) {
-	clients, mock, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := Open(Config{DataDir: t.TempDir(), Clients: clients, StepDelay: 0})
+	service, err := Open(Config{DataDir: t.TempDir(), Reads: clients, WriteRuntime: runtime, StepDelay: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer service.Close()
 
-	run, err := service.StartDemo(context.Background())
+	run, err := service.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,23 +318,23 @@ func TestConcurrentConfirmResumesRunOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 2 {
-		t.Fatalf("writes = reassign:%d sms:%d", mock.WriteCount(domain.ActionReassign), mock.WriteCount(domain.ActionSendSMS))
+	if runtime.WriteCount(domain.ActionReassign) != 1 || runtime.WriteCount(domain.ActionSendSMS) != 2 {
+		t.Fatalf("writes = reassign:%d sms:%d", runtime.WriteCount(domain.ActionReassign), runtime.WriteCount(domain.ActionSendSMS))
 	}
 }
 
 func TestRejectedReassignProducesAlternativePlan(t *testing.T) {
-	clients, mock, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := Open(Config{DataDir: t.TempDir(), Clients: clients, StepDelay: 0})
+	service, err := Open(Config{DataDir: t.TempDir(), Reads: clients, WriteRuntime: runtime, StepDelay: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer service.Close()
 
-	run, err := service.StartDemo(context.Background())
+	run, err := service.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +360,7 @@ func TestRejectedReassignProducesAlternativePlan(t *testing.T) {
 	if params["carrier_id"] != "CARRIER-SW-19" {
 		t.Fatalf("alternative carrier = %v", params["carrier_id"])
 	}
-	if mock.WriteCount(domain.ActionReassign) != 0 {
+	if runtime.WriteCount(domain.ActionReassign) != 0 {
 		t.Fatal("rejected plan executed a write")
 	}
 	if _, err := service.Decide(context.Background(), second.ID, DecisionRequest{
@@ -371,16 +380,16 @@ func TestRejectedReassignProducesAlternativePlan(t *testing.T) {
 }
 
 func TestDecisionConflict(t *testing.T) {
-	clients, _, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := Open(Config{DataDir: t.TempDir(), Clients: clients})
+	service, err := Open(Config{DataDir: t.TempDir(), Reads: clients, WriteRuntime: runtime})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	run, err := service.StartDemo(context.Background())
+	run, err := service.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,22 +410,23 @@ func TestDecisionConflict(t *testing.T) {
 }
 
 func TestApprovalExpiresAndResumesWithoutManualRecovery(t *testing.T) {
-	clients, mock, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
 	service, err := Open(Config{
-		DataDir:     t.TempDir(),
-		Clients:     clients,
-		ApprovalTTL: 40 * time.Millisecond,
-		StepDelay:   0,
+		DataDir:      t.TempDir(),
+		Reads:        clients,
+		WriteRuntime: runtime,
+		ApprovalTTL:  40 * time.Millisecond,
+		StepDelay:    0,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer service.Close()
 
-	run, err := service.StartDemo(context.Background())
+	run, err := service.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -431,13 +441,13 @@ func TestApprovalExpiresAndResumesWithoutManualRecovery(t *testing.T) {
 			t.Fatalf("approval %s status = %q", value.ID, value.Status)
 		}
 	}
-	if mock.WriteCount(domain.ActionReassign) != 0 || mock.WriteCount(domain.ActionSendSMS) != 0 {
+	if runtime.WriteCount(domain.ActionReassign) != 0 || runtime.WriteCount(domain.ActionSendSMS) != 0 {
 		t.Fatal("expired approvals executed writes")
 	}
 }
 
 func TestLateConfirmExpiresAndResumesBeforeTimer(t *testing.T) {
-	clients, mock, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,18 +457,19 @@ func TestLateConfirmExpiresAndResumesBeforeTimer(t *testing.T) {
 		return time.Unix(0, clockNanos.Load()).UTC()
 	}
 	service, err := Open(Config{
-		DataDir:     t.TempDir(),
-		Clients:     clients,
-		Clock:       clock,
-		ApprovalTTL: time.Hour,
-		StepDelay:   0,
+		DataDir:      t.TempDir(),
+		Reads:        clients,
+		WriteRuntime: runtime,
+		Clock:        clock,
+		ApprovalTTL:  time.Hour,
+		StepDelay:    0,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer service.Close()
 
-	run, err := service.StartDemo(context.Background())
+	run, err := service.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -482,22 +493,22 @@ func TestLateConfirmExpiresAndResumesBeforeTimer(t *testing.T) {
 	if second.PlanVersion != 2 {
 		t.Fatalf("replacement plan version = %d, want 2", second.PlanVersion)
 	}
-	if mock.WriteCount(domain.ActionReassign) != 0 || mock.WriteCount(domain.ActionSendSMS) != 0 {
+	if runtime.WriteCount(domain.ActionReassign) != 0 || runtime.WriteCount(domain.ActionSendSMS) != 0 {
 		t.Fatal("late confirmation executed writes")
 	}
 }
 
 func TestRecoverReplaysConfirmedApproval(t *testing.T) {
 	dataDir := t.TempDir()
-	clients, mock, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := Open(Config{DataDir: dataDir, Clients: clients, StepDelay: 0})
+	first, err := Open(Config{DataDir: dataDir, Reads: clients, WriteRuntime: runtime, StepDelay: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := first.StartDemo(context.Background())
+	run, err := first.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +523,7 @@ func TestRecoverReplaysConfirmedApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := Open(Config{DataDir: dataDir, Clients: clients, StepDelay: 0})
+	reopened, err := Open(Config{DataDir: dataDir, Reads: clients, WriteRuntime: runtime, StepDelay: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -532,23 +543,86 @@ func TestRecoverReplaysConfirmedApproval(t *testing.T) {
 		t.Fatalf("approval status = %q", recovered.Status)
 	}
 	waitForRunStatus(t, reopened, run.RunID, domain.RunCompleted)
-	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 2 {
-		t.Fatalf("writes = reassign:%d sms:%d", mock.WriteCount(domain.ActionReassign), mock.WriteCount(domain.ActionSendSMS))
+	if runtime.WriteCount(domain.ActionReassign) != 1 || runtime.WriteCount(domain.ActionSendSMS) != 2 {
+		t.Fatalf("writes = reassign:%d sms:%d", runtime.WriteCount(domain.ActionReassign), runtime.WriteCount(domain.ActionSendSMS))
+	}
+}
+
+func TestRecoverRejectsChangedReadSource(t *testing.T) {
+	dataDir := t.TempDir()
+	reads, _, err := tools.NewDemoRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRuntime, err := tools.NewFixtureWriteRuntimeForSource(reads, "dataset-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := Open(Config{
+		DataDir:      dataDir,
+		Reads:        reads,
+		WriteRuntime: firstRuntime,
+		ReadSource:   "dataset-a",
+		StepDelay:    0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := first.StartRun(t.Context(), "YD2026101001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := waitForApproval(t, first, run.RunID)
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	secondRuntime, err := tools.NewFixtureWriteRuntimeForSource(reads, "dataset-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(Config{
+		DataDir:      dataDir,
+		Reads:        reads,
+		WriteRuntime: secondRuntime,
+		ReadSource:   "dataset-b",
+		StepDelay:    0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := reopened.Recover(t.Context()); !errors.Is(
+		err,
+		ErrRecoveryReadSourceMismatch,
+	) {
+		t.Fatalf("Recover error = %v, want ErrRecoveryReadSourceMismatch", err)
+	}
+	recovered, err := reopened.GetApproval(pending.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != approval.StatusPending {
+		t.Fatalf("approval status = %q, want pending", recovered.Status)
+	}
+	if secondRuntime.WriteCount(domain.ActionReassign) != 0 ||
+		secondRuntime.WriteCount(domain.ActionSendSMS) != 0 {
+		t.Fatal("source mismatch executed writes")
 	}
 }
 
 func TestEffectReconcilerResumesDuePreparedApproval(t *testing.T) {
-	clients, mock, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := Open(Config{DataDir: t.TempDir(), Clients: clients, StepDelay: 0})
+	service, err := Open(Config{DataDir: t.TempDir(), Reads: clients, WriteRuntime: runtime, StepDelay: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer service.Close()
 
-	run, err := service.StartDemo(context.Background())
+	run, err := service.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,12 +670,12 @@ func TestEffectReconcilerResumesDuePreparedApproval(t *testing.T) {
 	if recovered.Status != approval.StatusExecuted {
 		t.Fatalf("approval status = %q, want executed", recovered.Status)
 	}
-	if mock.WriteCount(domain.ActionReassign) != 1 ||
-		mock.WriteCount(domain.ActionSendSMS) != 2 {
+	if runtime.WriteCount(domain.ActionReassign) != 1 ||
+		runtime.WriteCount(domain.ActionSendSMS) != 2 {
 		t.Fatalf(
 			"writes = reassign:%d sms:%d",
-			mock.WriteCount(domain.ActionReassign),
-			mock.WriteCount(domain.ActionSendSMS),
+			runtime.WriteCount(domain.ActionReassign),
+			runtime.WriteCount(domain.ActionSendSMS),
 		)
 	}
 }
@@ -629,21 +703,22 @@ func TestEffectReconcilerKeepsBusyAndPendingEffectsPaused(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			clients, mock, err := tools.NewDemoClients()
+			clients, runtime, err := tools.NewDemoRuntime()
 			if err != nil {
 				t.Fatal(err)
 			}
 			service, err := Open(Config{
-				DataDir:   t.TempDir(),
-				Clients:   clients,
-				StepDelay: 0,
+				DataDir:      t.TempDir(),
+				Reads:        clients,
+				WriteRuntime: runtime,
+				StepDelay:    0,
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer service.Close()
 
-			run, err := service.StartDemo(context.Background())
+			run, err := service.StartRun(context.Background(), "YD2026101001")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -686,8 +761,8 @@ func TestEffectReconcilerKeepsBusyAndPendingEffectsPaused(t *testing.T) {
 					recovered.Status,
 				)
 			}
-			if mock.WriteCount(domain.ActionReassign) != 0 ||
-				mock.WriteCount(domain.ActionSendSMS) != 0 {
+			if runtime.WriteCount(domain.ActionReassign) != 0 ||
+				runtime.WriteCount(domain.ActionSendSMS) != 0 {
 				t.Fatal("busy or pending recovery resumed mutations")
 			}
 		})
@@ -696,20 +771,21 @@ func TestEffectReconcilerKeepsBusyAndPendingEffectsPaused(t *testing.T) {
 
 func TestRecoverReschedulesPendingApprovalExpiry(t *testing.T) {
 	dataDir := t.TempDir()
-	clients, _, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
 	first, err := Open(Config{
-		DataDir:     dataDir,
-		Clients:     clients,
-		ApprovalTTL: 500 * time.Millisecond,
-		StepDelay:   0,
+		DataDir:      dataDir,
+		Reads:        clients,
+		WriteRuntime: runtime,
+		ApprovalTTL:  500 * time.Millisecond,
+		StepDelay:    0,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := first.StartDemo(context.Background())
+	run, err := first.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -719,10 +795,11 @@ func TestRecoverReschedulesPendingApprovalExpiry(t *testing.T) {
 	}
 
 	reopened, err := Open(Config{
-		DataDir:     dataDir,
-		Clients:     clients,
-		ApprovalTTL: 500 * time.Millisecond,
-		StepDelay:   0,
+		DataDir:      dataDir,
+		Reads:        clients,
+		WriteRuntime: runtime,
+		ApprovalTTL:  500 * time.Millisecond,
+		StepDelay:    0,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -743,15 +820,15 @@ func TestRecoverReschedulesPendingApprovalExpiry(t *testing.T) {
 
 func TestRecoverCompletesApprovalWithoutRepeatingSuccessfulEffects(t *testing.T) {
 	dataDir := t.TempDir()
-	clients, mock, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := Open(Config{DataDir: dataDir, Clients: clients, StepDelay: 0})
+	first, err := Open(Config{DataDir: dataDir, Reads: clients, WriteRuntime: runtime, StepDelay: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := first.StartDemo(context.Background())
+	run, err := first.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -778,7 +855,7 @@ func TestRecoverCompletesApprovalWithoutRepeatingSuccessfulEffects(t *testing.T)
 		t.Fatal(err)
 	}
 
-	reopened, err := Open(Config{DataDir: dataDir, Clients: clients, StepDelay: 0})
+	reopened, err := Open(Config{DataDir: dataDir, Reads: clients, WriteRuntime: runtime, StepDelay: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -793,22 +870,22 @@ func TestRecoverCompletesApprovalWithoutRepeatingSuccessfulEffects(t *testing.T)
 	if recovered.Status != approval.StatusExecuted {
 		t.Fatalf("approval status = %q", recovered.Status)
 	}
-	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 2 {
+	if runtime.WriteCount(domain.ActionReassign) != 1 || runtime.WriteCount(domain.ActionSendSMS) != 2 {
 		t.Fatal("recovery repeated already successful effects")
 	}
 }
 
 func TestRecoverReconcilesStartedEffectWithoutStoppingService(t *testing.T) {
 	dataDir := t.TempDir()
-	clients, mock, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := Open(Config{DataDir: dataDir, Clients: clients, StepDelay: 0})
+	first, err := Open(Config{DataDir: dataDir, Reads: clients, WriteRuntime: runtime, StepDelay: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := first.StartDemo(context.Background())
+	run, err := first.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -837,14 +914,20 @@ func TestRecoverReconcilesStartedEffectWithoutStoppingService(t *testing.T) {
 	if err := json.Unmarshal(reassign.Params, &arguments); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := clients.TMS.Reassign(context.Background(), platform.ReassignRequest{
-		WaybillID:      domain.WaybillID(arguments.WaybillID),
-		CarrierID:      domain.CarrierID(arguments.CarrierID),
-		IdempotencyKey: reassign.IdempotencyKey,
-	}); err != nil {
-		t.Fatal(err)
+	binding := fixtureBindingForItem(t, runtime, reassign)
+	result := runtime.Dispatch(
+		context.Background(),
+		binding,
+		platform.EffectRequest{
+			Action:        reassign.Action,
+			Arguments:     reassign.Params,
+			ArgumentsHash: reassign.ArgumentsHash,
+		},
+		reassign.IdempotencyKey,
+	)
+	if result.Disposition != platform.EffectSucceeded {
+		t.Fatalf("preexisting reassign dispatch = %+v", result)
 	}
-	binding := fixtureBindingForItem(t, clients, reassign)
 	dispatchStartedAt := time.Now().UTC()
 	if _, err := first.journal.Append(context.Background(), run.RunID, audit.Draft{
 		EventID: "write:" + string(reassign.IdempotencyKey) + ":started",
@@ -868,7 +951,7 @@ func TestRecoverReconcilesStartedEffectWithoutStoppingService(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := Open(Config{DataDir: dataDir, Clients: clients, StepDelay: 0})
+	reopened, err := Open(Config{DataDir: dataDir, Reads: clients, WriteRuntime: runtime, StepDelay: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -883,23 +966,28 @@ func TestRecoverReconcilesStartedEffectWithoutStoppingService(t *testing.T) {
 	if recovered.Status != approval.StatusExecuted {
 		t.Fatalf("approval status = %q, want executed", recovered.Status)
 	}
-	if mock.WriteCount(domain.ActionReassign) != 1 {
-		t.Fatalf("reassign calls = %d, want 1", mock.WriteCount(domain.ActionReassign))
+	if runtime.WriteCount(domain.ActionReassign) != 1 {
+		t.Fatalf("reassign calls = %d, want 1", runtime.WriteCount(domain.ActionReassign))
 	}
 }
 
 func TestRecoverLeavesUnknownStartedEffectPendingWithoutStoppingService(t *testing.T) {
 	dataDir := t.TempDir()
-	clients, mock, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	clients.TMS = unknownLookupTMS{TMSClient: clients.TMS}
-	first, err := Open(Config{DataDir: dataDir, Clients: clients, StepDelay: 0})
+	unknownRuntime := &unknownLookupRuntime{WriteRuntime: runtime}
+	first, err := Open(Config{
+		DataDir:      dataDir,
+		Reads:        clients,
+		WriteRuntime: unknownRuntime,
+		StepDelay:    0,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := first.StartDemo(context.Background())
+	run, err := first.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -921,7 +1009,7 @@ func TestRecoverLeavesUnknownStartedEffectPendingWithoutStoppingService(t *testi
 	if item.CallID == "" {
 		t.Fatal("approval has no reassign effect")
 	}
-	binding := fixtureBindingForItem(t, clients, item)
+	binding := fixtureBindingForItem(t, unknownRuntime, item)
 	dispatchStartedAt := time.Now().UTC()
 	if _, err := first.journal.Append(context.Background(), run.RunID, audit.Draft{
 		EventID: "write:" + string(item.IdempotencyKey) + ":started",
@@ -945,7 +1033,12 @@ func TestRecoverLeavesUnknownStartedEffectPendingWithoutStoppingService(t *testi
 		t.Fatal(err)
 	}
 
-	reopened, err := Open(Config{DataDir: dataDir, Clients: clients, StepDelay: 0})
+	reopened, err := Open(Config{
+		DataDir:      dataDir,
+		Reads:        clients,
+		WriteRuntime: unknownRuntime,
+		StepDelay:    0,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -967,26 +1060,27 @@ func TestRecoverLeavesUnknownStartedEffectPendingWithoutStoppingService(t *testi
 	if recoveredRun.Status == domain.RunFailed {
 		t.Fatal("pending reconciliation marked the run failed")
 	}
-	if mock.WriteCount(item.Action) != 0 {
-		t.Fatalf("unknown effect was dispatched %d more times", mock.WriteCount(item.Action))
+	if runtime.WriteCount(item.Action) != 0 {
+		t.Fatalf("unknown effect was dispatched %d more times", runtime.WriteCount(item.Action))
 	}
 }
 
 func TestOpenReleasesAuditLockAfterInitializationFailure(t *testing.T) {
 	dataDir := t.TempDir()
-	clients, _, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Open(Config{
-		DataDir: dataDir,
-		Clients: clients,
-		Model:   agentkit.ModelConfig{Mode: "invalid"},
+		DataDir:      dataDir,
+		Reads:        clients,
+		WriteRuntime: runtime,
+		Model:        agentkit.ModelConfig{Mode: "invalid"},
 	}); err == nil {
 		t.Fatal("Open accepted invalid agent mode")
 	}
 
-	service, err := Open(Config{DataDir: dataDir, Clients: clients})
+	service, err := Open(Config{DataDir: dataDir, Reads: clients, WriteRuntime: runtime})
 	if err != nil {
 		t.Fatalf("Open after initialization failure: %v", err)
 	}
@@ -996,13 +1090,14 @@ func TestOpenReleasesAuditLockAfterInitializationFailure(t *testing.T) {
 }
 
 func TestOpenRejectsNegativeHistoryRetention(t *testing.T) {
-	clients, _, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Open(Config{
 		DataDir:          t.TempDir(),
-		Clients:          clients,
+		Reads:            clients,
+		WriteRuntime:     runtime,
 		HistoryRetention: -time.Second,
 	}); err == nil {
 		t.Fatal("Open accepted negative history retention")
@@ -1011,11 +1106,11 @@ func TestOpenRejectsNegativeHistoryRetention(t *testing.T) {
 
 func TestConcurrentCloseWaitsForResourceRelease(t *testing.T) {
 	dataDir := t.TempDir()
-	clients, _, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := Open(Config{DataDir: dataDir, Clients: clients})
+	service, err := Open(Config{DataDir: dataDir, Reads: clients, WriteRuntime: runtime})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1065,7 +1160,7 @@ func TestConcurrentCloseWaitsForResourceRelease(t *testing.T) {
 		t.Fatal("concurrent Close returned before resource release")
 	}
 
-	reopened, err := Open(Config{DataDir: dataDir, Clients: clients})
+	reopened, err := Open(Config{DataDir: dataDir, Reads: clients, WriteRuntime: runtime})
 	if err != nil {
 		t.Fatalf("Open after concurrent Close: %v", err)
 	}
@@ -1075,11 +1170,11 @@ func TestConcurrentCloseWaitsForResourceRelease(t *testing.T) {
 }
 
 func TestCloseRejectsNewOperations(t *testing.T) {
-	clients, _, err := tools.NewDemoClients()
+	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := Open(Config{DataDir: t.TempDir(), Clients: clients})
+	service, err := Open(Config{DataDir: t.TempDir(), Reads: clients, WriteRuntime: runtime})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1087,8 +1182,8 @@ func TestCloseRejectsNewOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := service.StartDemo(context.Background()); !errors.Is(err, ErrServiceClosed) {
-		t.Fatalf("StartDemo after Close error = %v, want ErrServiceClosed", err)
+	if _, err := service.StartRun(context.Background(), "YD2026101001"); !errors.Is(err, ErrServiceClosed) {
+		t.Fatalf("StartRun after Close error = %v, want ErrServiceClosed", err)
 	}
 	if err := service.Recover(context.Background()); !errors.Is(err, ErrServiceClosed) {
 		t.Fatalf("Recover after Close error = %v, want ErrServiceClosed", err)
@@ -1152,14 +1247,10 @@ func waitForRunStatus(t *testing.T, service *Service, runID domain.RunID, want d
 
 func fixtureBindingForItem(
 	t *testing.T,
-	clients platform.Clients,
+	runtime platform.WriteRuntime,
 	item approval.Item,
 ) platform.EffectBinding {
 	t.Helper()
-	runtime, err := tools.NewFixtureWriteRuntime(clients)
-	if err != nil {
-		t.Fatal(err)
-	}
 	binding, err := runtime.Bind(platform.EffectRequest{
 		Action:        item.Action,
 		Arguments:     item.Params,
@@ -1171,31 +1262,36 @@ func fixtureBindingForItem(
 	return binding
 }
 
-type failingNotificationClient struct{}
-
-func (failingNotificationClient) SendSMS(
-	context.Context,
-	platform.SendSMSRequest,
-) (platform.SMSReceipt, error) {
-	return platform.SMSReceipt{}, platform.PermanentEffectError(errors.New("notification write failed"))
+type failingActionRuntime struct {
+	platform.WriteRuntime
+	action domain.Action
 }
 
-func (failingNotificationClient) LookupEffect(
-	context.Context,
-	platform.LookupEffectRequest,
-) (platform.EffectResult, error) {
-	return platform.EffectResult{Disposition: platform.EffectPermanentFailed}, nil
+func (r *failingActionRuntime) Dispatch(
+	ctx context.Context,
+	binding platform.EffectBinding,
+	request platform.EffectRequest,
+	key domain.IdempotencyKey,
+) platform.DispatchResult {
+	if request.Action == r.action {
+		return platform.DispatchResult{
+			Disposition: platform.EffectPermanentFailed,
+			ErrorCode:   "injected_failure",
+		}
+	}
+	return r.WriteRuntime.Dispatch(ctx, binding, request, key)
 }
 
-type unknownLookupTMS struct {
-	platform.TMSClient
+type unknownLookupRuntime struct {
+	platform.WriteRuntime
 }
 
-func (unknownLookupTMS) LookupEffect(
+func (r *unknownLookupRuntime) Lookup(
 	context.Context,
-	platform.LookupEffectRequest,
-) (platform.EffectResult, error) {
-	return platform.EffectResult{Disposition: platform.EffectUnknown}, nil
+	platform.EffectBinding,
+	domain.IdempotencyKey,
+) platform.LookupResult {
+	return platform.LookupResult{Disposition: platform.LookupPending}
 }
 
 type scheduledRecoveryExecutor struct {

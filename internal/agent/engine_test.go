@@ -32,14 +32,11 @@ func TestScenarioAgentPausesThenExecutesApprovedWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clients, mock, err := guardtools.NewDemoClients()
+	clients, mock, err := guardtools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeRuntime, err := guardtools.NewFixtureWriteRuntime(clients)
-	if err != nil {
-		t.Fatal(err)
-	}
+	writeRuntime := mock
 	idempotencyStore, err := idempotency.NewStore(journal, idempotency.StoreConfig{
 		Runtime: writeRuntime,
 	})
@@ -286,7 +283,7 @@ func TestOnlineEngineRetriesProviderFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clients, _, err := guardtools.NewDemoClients()
+	clients, _, err := guardtools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +348,7 @@ func TestEngineCancellationStopsDetachedRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer journal.Close()
-	clients, _, err := guardtools.NewDemoClients()
+	clients, _, err := guardtools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +424,7 @@ func TestEngineCloseStopsDetachedRunBeforeClosingHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer journal.Close()
-	clients, _, err := guardtools.NewDemoClients()
+	clients, _, err := guardtools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -29,25 +29,25 @@
 
 调度员少做的是在几个系统之间来回查证据。人仍然决定是否改派、是否赔付、是否发通知。复核时按审计序号重放。
 
-仓库里没有时效挽回、成本或人力节省的测量数字。页面上的三项风险分是常量，ETA 延误 86、路况 34、天气 8，写在 [`internal/guardian/service.go`](internal/guardian/service.go)。它们不是算出来的指标。
+仓库里没有时效挽回、成本或人力节省的测量数字。页面上的三项风险分由 [`internal/guardian/assessment.go`](internal/guardian/assessment.go) 的 `deriveAssessment` 计算，并限制在 0 到 100。运单状态的比较不区分大小写。状态不是 `delivered` 时，ETA 分先取 20，每个异常点再加 15，再加上停留小时乘以 8 后四舍五入。路况分是连续驾驶小时乘以 5 后四舍五入，疲劳预警再加 30。天气分取各段预警的最大值。`none`、`normal`、`green` 和空值为 0，`low`、`blue`、`yellow` 为 30，`medium`、`orange` 为 60，`high`、`red`、`critical` 为 90，其余为 20。内置样例因此显示 ETA 83、路况 75、天气 0。这是控制台展示分，仓库里没有对应的业务 KPI。
 
-**默认演示不是在线推理。** `AGENT_MODE=demo` 使用 [`internal/agent/scenario_model.go`](internal/agent/scenario_model.go) 里的 `ScenarioModel`。它按固定顺序调用工具。司机编号、路线、承运商和归因句子写在代码里。把演示改成真实模型推理，见 [issue 59](https://github.com/Duang777/waybill-guardian/issues/59)。
+**默认演示仍是脚本。** `AGENT_MODE=demo` 使用 [`internal/agent/scenario_model.go`](internal/agent/scenario_model.go) 里的 `ScenarioModel`。它按固定顺序调用四个只读工具，从工具结果读取司机、路线和候选承运商，再用固定句子模板写出归因。把演示改成真实模型推理，见仍开放的 [issue 59](https://github.com/Duang777/waybill-guardian/issues/59)。
 
-`AGENT_MODE=online` 可以调用 OpenAI Responses API，或 OpenAI 兼容的 Chat Completions API。这是已经接上的调用路径。issue 59 要求的是默认演示走真实推理、结构化证据引用，以及国产模型验收。这些还没有做。
+`AGENT_MODE=online` 可以调用 OpenAI Responses API，或 OpenAI 兼容的 Chat Completions API。这是已经接上的调用路径。issue 59 还要求默认演示走真实推理、结构化证据引用，以及国产模型验收。这些还没有做。
 
-数据只有内置的一张运单 `YD2026101001`，文件是 [`internal/tools/testdata/demo.json`](internal/tools/testdata/demo.json)。没有文件导入，也不能对任意运单启动。见 [issue 60](https://github.com/Duang777/waybill-guardian/issues/60)。
+默认 `PLATFORM=mock` 只加载内置运单 `YD2026101001`，数据在 [`internal/tools/testdata/demo.json`](internal/tools/testdata/demo.json)。`PLATFORM=file` 在启动时加载一份 JSON 或 CSV v1，页面可以选择文件中的运单并启动处置。这项能力随已关闭的 [issue 60](https://github.com/Duang777/waybill-guardian/issues/60) 合入。文件模式下的写操作仍走内存中的 fixture 写入运行时，短信不会真正发出。这里没有公路港、车辆和线路网络。
 
-页面是这一张运单的工作台。没有全国公路港总览。见 [issue 61](https://github.com/Duang777/waybill-guardian/issues/61)。当前界面也还不是黑橙指挥中心，那是 [issue 77](https://github.com/Duang777/waybill-guardian/issues/77)。
+页面是所选运单的工作台。没有全国公路港总览。见 [issue 61](https://github.com/Duang777/waybill-guardian/issues/61)。当前界面也还不是黑橙指挥中心，那是 [issue 77](https://github.com/Duang777/waybill-guardian/issues/77)。
 
 <p align="center">
-  <img alt="桌面宽度下，脚本演示停在人工审批。方案是改派到川行快运，并通知货主和司机。地图是本地轨迹。" src="docs/assets/console-approval.png" width="840">
+  <img alt="桌面宽度下，内置样例停在人工审批。运单选择器是杭州到成都的 YD2026101001，按钮是重新处置。方案是改派到川行快运，并通知货主和司机。地图是本地轨迹。展示分是 ETA 83、路况 75、天气 0。" src="docs/assets/console-approval.png" width="840">
 </p>
 
 <p align="center">
-  <img alt="手机宽度下，同一次脚本演示在确认后显示处置完成。" src="docs/assets/console-completed-mobile.png" width="280">
+  <img alt="手机宽度下，同一次脚本演示在确认后显示处置完成，按钮是重新处置。" src="docs/assets/console-completed-mobile.png" width="280">
 </p>
 
-上面两张图来自 `npm run verify:e2e`，没有配置高德 key，所以地图显示本地轨迹。审批卡上的归因句子来自 `ScenarioModel`，不是当次模型推理。
+上面两张图来自合并当前 `main` 之后的 `npm run verify:e2e`，没有配置高德 key，所以地图显示本地轨迹。审批卡上的归因句子由 `ScenarioModel` 用工具结果套固定模板生成。
 
 ## 架构
 
@@ -56,15 +56,15 @@ flowchart TD
   incident["异常运单"]
   agent["hastekit Agent"]
   readtools["四个只读工具"]
-  fixture["内置样例 demo.json"]
+  datasource["内置样例或数据文件"]
   approval["人工审批"]
   writetools["写工具"]
-  platformbox["Mock 或改派沙箱"]
+  platformbox["内存写入或改派沙箱"]
   auditlog["审计日志"]
 
   incident --> agent
   agent --> readtools
-  readtools --> fixture
+  readtools --> datasource
   readtools --> agent
   agent --> approval
   approval --> writetools
@@ -77,7 +77,7 @@ flowchart TD
 
 四个只读工具是 `tms.get_waybill`、`tms.get_tracking`、`tms.get_driver`、`ext.get_road_weather`。它们自动执行。三个写工具是 `tms.reassign`、`tms.create_claim`、`notify.send_sms`。它们在执行前暂停，等人工决定。契约在 [`contract.yaml`](contract.yaml)。
 
-默认 `PLATFORM=mock` 时，读和写都走内置样例。短信不会真正发出。`PLATFORM=real` 必须同时使用 PostgreSQL 和 JWT。读路径仍是 `fixture-v1`。写路径只有 `tms.reassign`，发到 HTTP 沙箱 `tms-reassign-sandbox-v1`。这个 profile 不注册赔付和短信。它用来验证网络写入和对账，不是生产 TMS，也不是官方数据导入。
+默认 `PLATFORM=mock` 时，读和写都走内置样例。短信不会真正发出。`PLATFORM=file` 要求 `STORAGE=jsonl`、`AUTH_MODE=local` 和 `DATA_FILE`。服务在监听端口前用 `filestore.Load` 读入整份文件，读路径使用这份文件，写路径使用同一份读数据上的内存 fixture 写入运行时。运行中不会热更新，换文件要重启。`PLATFORM=real` 必须同时使用 PostgreSQL 和 JWT。读路径仍是内置样例 `fixture-v1`。写路径只有 `tms.reassign`，发到 HTTP 沙箱 `tms-reassign-sandbox-v1`。这个 profile 不注册赔付和短信。它用来验证网络写入和对账。它不是生产 TMS。
 
 审计默认是每个 run 一份 append-only JSONL，带 `seq`、`prev_hash` 和 `hash`。`STORAGE=postgres` 时，业务投影、审计和 outbox 在同一事务里提交。时间线用 SSE，客户端可以用 `Last-Event-ID` 续传。
 
@@ -85,7 +85,7 @@ flowchart TD
 
 ## 能力
 
-状态只描述当前 `main` 上的代码。
+状态描述本仓库当前代码。
 
 | 状态 | 含义 |
 |---|---|
@@ -103,7 +103,7 @@ flowchart TD
 | 高德地图或本地轨迹 | 已交付 | 没有 key，或 SDK 加载失败时，页面改用本地坐标。 |
 | 改派 HTTP 沙箱 | 已交付 | 仅 `tms.reassign`。读仍是内置样例。不是生产 TMS。 |
 | 在线模型调用 | 进行中 | 可以配置 OpenAI 兼容 API。默认演示仍是脚本。验收标准见 [issue 59](https://github.com/Duang777/waybill-guardian/issues/59)。 |
-| 文件导入和任意运单 | 计划中 | [issue 60](https://github.com/Duang777/waybill-guardian/issues/60) |
+| 文件导入 | 已交付 | `PLATFORM=file` 在启动时加载 JSON 或 CSV v1，页面可以选择其中的运单。写操作留在内存 fixture 运行时。见已关闭的 [issue 60](https://github.com/Duang777/waybill-guardian/issues/60) 和 [`docs/file-data-source-design.md`](docs/file-data-source-design.md)。 |
 | 公路港总览 | 计划中 | [issue 61](https://github.com/Duang777/waybill-guardian/issues/61) |
 | 许可证文件 | 计划中 | [issue 62](https://github.com/Duang777/waybill-guardian/issues/62) |
 | 非 GET 请求的 CSRF 检查 | 计划中 | [issue 64](https://github.com/Duang777/waybill-guardian/issues/64) |
@@ -119,11 +119,11 @@ flowchart TD
 ./scripts/demo.sh
 ```
 
-打开 <http://127.0.0.1:5173>，点击 **启动演示**。
+打开 <http://127.0.0.1:5173>。运单选择器里是杭州到成都的 `YD2026101001`，点击 **启动处置**。按钮会 `POST /api/runs`，请求体带上 `waybill_id`。`POST /api/demo/trigger` 仍会启动这张内置运单。
 
 1. Agent 查询杭州到成都运单 `YD2026101001`。
 2. 时间线记下运单、轨迹、司机和天气四次工具调用。
-3. 脚本根据连续驾驶 9 小时、绵阳北服务区停留 6 小时和晴天数据写出归因，并暂停在审批卡。方案是改派到川行快运，再通知货主和司机。这三个写操作此时还没有执行。
+3. 脚本把工具结果套进固定句子。内置样例里连续驾驶 9 小时并有疲劳预警，绵阳北服务区停留 6 小时，天气预警是 `none`，所以审批卡建议改派到川行快运，再通知货主和司机。这三个写操作此时还没有执行。
 4. 点击 **确认并执行**。时间线出现平台写入，运单状态变为处置完成。
 5. 用回放控件从第一条审计事件再看一遍，然后点 **实时** 回到末尾。
 6. 如果驳回首选承运商，脚本会改提蜀道联运。`npm run verify:e2e` 覆盖了确认三次和驳回一次。
@@ -162,6 +162,7 @@ go test ./...
 go test -race ./...
 go vet ./...
 go build ./...
+./scripts/check-production-fixture-literals.sh
 ./scripts/check-history-governance.sh
 ```
 
@@ -173,6 +174,7 @@ npm ci
 npm test
 npm run build
 npm run verify:e2e
+npm run verify:file-e2e
 ```
 
 ## 配置
@@ -188,7 +190,8 @@ npm run verify:e2e
 | `HTTP_ADDR` | `127.0.0.1:8080` | 服务监听地址。local 模式必须是 loopback IP |
 | `DATA_DIR` | `data` | JSONL 审计和 hastekit history 目录 |
 | `AGENT_MODE` | `demo` | `demo` 使用 `ScenarioModel`。`online` 调用外部模型 |
-| `PLATFORM` | `mock` | `mock` 使用内置样例。`real` 使用改派沙箱，见下文 |
+| `PLATFORM` | `mock` | `mock` 使用内置样例。`file` 加载 `DATA_FILE`。`real` 使用改派沙箱，见下文 |
+| `DATA_FILE` | 空 | `PLATFORM=file` 时必填，指向一份 JSON 或 CSV v1 |
 | `STORAGE` | `jsonl` | `jsonl` 或 `postgres` |
 | `AUTH_MODE` | `local` | `local` 或 `jwt` |
 | `APPROVAL_TTL` | `10m` | 审批有效期，Go duration。非法值会退回默认值 |
@@ -196,6 +199,28 @@ npm run verify:e2e
 | `DEMO_STEP_DELAY` | `220ms` | 脚本模型每一步的等待 |
 | `TENANT_ID` | `local-demo` | JWT 模式必须显式设置 |
 | `INSTANCE_ID` | 随机 UUID | PostgreSQL 租约里的 worker 身份 |
+
+### 文件数据
+
+仓库里的 v1 模板是 [`data/templates/waybills-v1.json`](data/templates/waybills-v1.json) 和 [`data/templates/waybills-v1.csv`](data/templates/waybills-v1.csv)。用与服务端相同的 loader 校验：
+
+```bash
+go run ./cmd/dataimport validate --data ./data/templates/waybills-v1.csv
+go run ./cmd/dataimport validate --data ./data/templates/waybills-v1.json
+```
+
+两条命令分别打印 `valid dataset=template-v1 format=csv waybills=1 anomalies=1` 和 `valid dataset=template-v1 format=json waybills=1 anomalies=1`。把路径换成自己的 v1 文件即可。仓库里没有 `official-v1.csv`。
+
+校验通过后启动文件模式：
+
+```bash
+PLATFORM=file \
+DATA_FILE=./data/templates/waybills-v1.csv \
+DATA_DIR=/tmp/waybill-file-demo \
+./scripts/demo.sh
+```
+
+`PLATFORM=file` 还要求 `STORAGE=jsonl` 和 `AUTH_MODE=local`。服务启动时一次性加载完整文件。语法、引用、坐标或时间顺序错误会在监听端口前失败。运行期间不会热更新，替换文件后需要重启。字段和校验规则见 [`docs/file-data-source-design.md`](docs/file-data-source-design.md)。页面上的运单选择器列出文件中的运单。
 
 ### 在线模型
 
@@ -314,13 +339,13 @@ hastekit `agent-sdk-go` v0.0.24 以 Go module 引入，许可证是 Apache-2.0�
 | 议题 | 内容 |
 |---|---|
 | [59](https://github.com/Duang777/waybill-guardian/issues/59) | 演示改为真实模型推理，补结构化证据引用 |
-| [60](https://github.com/Duang777/waybill-guardian/issues/60) | 文件导入，以及对任意运单启动 |
+| [60](https://github.com/Duang777/waybill-guardian/issues/60) | 已关闭。启动时加载 JSON 或 CSV v1，并在页面上选择运单。范围不包括公路港网络 |
 | [61](https://github.com/Duang777/waybill-guardian/issues/61) | 多公路港总览和可核验的 KPI |
 | [62](https://github.com/Duang777/waybill-guardian/issues/62) | 选定并加入 LICENSE |
 | [64](https://github.com/Duang777/waybill-guardian/issues/64) | 非 GET 请求的 CSRF 检查 |
 | [65](https://github.com/Duang777/waybill-guardian/issues/65) | Docker Compose |
 | [67](https://github.com/Duang777/waybill-guardian/issues/67) | GitHub Actions |
-| [68](https://github.com/Duang777/waybill-guardian/issues/68) | 评审向 README。本页补了架构图、边界和演示入口。量化指标、官方数据步骤和配音视频仍未完成 |
+| [68](https://github.com/Duang777/waybill-guardian/issues/68) | 仍开放。本页有架构图、边界、演示入口，以及文件格式和校验命令。量化指标和配音视频仍未完成 |
 | [77](https://github.com/Duang777/waybill-guardian/issues/77) | 前端视觉，含 issue 69 到 76 |
 
 生产化处置链路见 [issue 44](https://github.com/Duang777/waybill-guardian/issues/44)。
@@ -338,5 +363,6 @@ hastekit `agent-sdk-go` v0.0.24 以 Go module 引入，许可证是 Apache-2.0�
 - 架构和恢复：[docs/RFC-001.md](docs/RFC-001.md)
 - 真实平台接入：[docs/RFC-002.md](docs/RFC-002.md)
 - 改派沙箱：[docs/real-write-adapter-design.md](docs/real-write-adapter-design.md)
+- 文件数据源：[docs/file-data-source-design.md](docs/file-data-source-design.md)
 - Agent history：[docs/history-governance.md](docs/history-governance.md)
 - 模块索引：[AGENTS.md](AGENTS.md)
