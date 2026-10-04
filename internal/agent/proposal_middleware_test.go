@@ -75,7 +75,7 @@ func TestProposalBoundaryRepairsOnceAndAuditsMetadata(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("model calls = %d, want 2", calls)
 	}
-	text, err := singleAssistantText(response)
+	text, err := assistantResponseText(response)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,6 +139,65 @@ func TestProposalBoundaryRepairsOnceAndAuditsMetadata(t *testing.T) {
 	}
 	if strings.Join(outcomes, ",") != "validation_failed,accepted" {
 		t.Fatalf("model outcomes = %v", outcomes)
+	}
+}
+
+func TestAssistantResponseTextJoinsOutputBlocksInOrder(t *testing.T) {
+	message := assistantText(`{"schema_`)
+	*message.OfOutputMessage.Content = append(
+		*message.OfOutputMessage.Content,
+		responses.OutputContentUnion{
+			OfOutputText: &responses.OutputTextContent{Text: `version":"proposal.v1"}`},
+		},
+	)
+
+	text, err := assistantResponseText(&responses.Response{
+		Output: []responses.OutputMessageUnion{message},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != `{"schema_version":"proposal.v1"}` {
+		t.Fatalf("joined text = %q", text)
+	}
+}
+
+func TestProposalBoundaryRejectsSMSCarrierOutsidePreferredAlternative(t *testing.T) {
+	store, registry, _ := proposalBoundaryFixture(t, "run-sms-alignment")
+	boundary, err := NewProposalBoundary(
+		store,
+		registry,
+		InferenceDescriptor{Mode: ModeOffline},
+		time.Now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sendSMSWire, ok := registry.ActiveWireName(domain.ActionSendSMS)
+	if !ok {
+		t.Fatal("send SMS tool is not active")
+	}
+	response := &responses.Response{
+		Output: []responses.OutputMessageUnion{{
+			OfFunctionCall: &responses.FunctionCallMessage{
+				ID:        "fc-sms",
+				CallID:    "call-sms",
+				Name:      sendSMSWire,
+				Arguments: `{"waybill_id":"YD2026101001","recipient":"shipper","carrier_id":"CARRIER-OTHER"}`,
+			},
+		}},
+	}
+	accepted := proposal.Accepted{
+		Alternatives: []proposal.Alternative{{
+			CarrierID: "CARRIER-SW-42",
+			Reason:    "preferred",
+		}},
+	}
+
+	err = boundary.validateWriteAlignment(response, accepted)
+	if err == nil ||
+		!strings.Contains(err.Error(), `must match first proposal alternative "CARRIER-SW-42"`) {
+		t.Fatalf("validateWriteAlignment error = %v", err)
 	}
 }
 
@@ -239,10 +298,21 @@ func proposalBoundaryFixture(
 			map[string]any{"carrier_id": "CARRIER-SW-42", "name": "西南速运"},
 		},
 	})
+	appendBoundaryToolResult(t, store, runID, "call-tracking", domain.ActionGetTracking, map[string]any{
+		"points": []any{
+			map[string]any{"label": "杭州", "anomaly": false},
+			map[string]any{"label": "绵阳北服务区", "anomaly": true},
+		},
+	})
 	appendBoundaryToolResult(t, store, runID, "call-driver", domain.ActionGetDriver, map[string]any{
 		"driver_id":              "DRV-0286",
 		"continuous_drive_hours": 9,
 		"fatigue_alert":          true,
+	})
+	appendBoundaryToolResult(t, store, runID, "call-weather", domain.ActionGetRoadWeather, map[string]any{
+		"segments": []any{
+			map[string]any{"segment": "绵阳-成都", "condition": "小雨"},
+		},
 	})
 	return store, registry, &agents.ModelCall{
 		RunID:         "sdk-" + string(runID),

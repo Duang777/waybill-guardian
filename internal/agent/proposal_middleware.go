@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -296,7 +297,7 @@ func (m *ProposalBoundary) compileResponse(
 	if err != nil {
 		return proposal.Accepted{}, err
 	}
-	text, err := singleAssistantText(response)
+	text, err := assistantResponseText(response)
 	if err != nil {
 		return proposal.Accepted{}, err
 	}
@@ -330,7 +331,7 @@ func (m *ProposalBoundary) validateWriteAlignment(
 	response *responses.Response,
 	accepted proposal.Accepted,
 ) error {
-	var reassignCarrier string
+	hasReassign := false
 	var carrierIDs []string
 	for _, item := range response.Output {
 		if item.OfFunctionCall == nil {
@@ -354,10 +355,10 @@ func (m *ProposalBoundary) validateWriteAlignment(
 			if err := json.Unmarshal(write.Arguments, &input); err != nil {
 				return err
 			}
-			if reassignCarrier != "" {
+			if hasReassign {
 				return errors.New("proposal contains more than one reassign call")
 			}
-			reassignCarrier = input.CarrierID
+			hasReassign = true
 			carrierID = input.CarrierID
 		case domain.ActionSendSMS:
 			var input guardtools.SendSMSInput
@@ -370,23 +371,21 @@ func (m *ProposalBoundary) validateWriteAlignment(
 			carrierIDs = append(carrierIDs, carrierID)
 		}
 	}
-	for _, carrierID := range carrierIDs {
-		if reassignCarrier != "" && carrierID != reassignCarrier {
-			return fmt.Errorf(
-				"write call carrier %q does not match reassign carrier %q",
-				carrierID,
-				reassignCarrier,
-			)
-		}
-	}
-	if reassignCarrier == "" {
+	if len(carrierIDs) == 0 {
 		return nil
 	}
-	if len(accepted.Alternatives) == 0 ||
-		accepted.Alternatives[0].CarrierID != reassignCarrier {
+	if len(accepted.Alternatives) == 0 {
+		return errors.New("carrier-bearing write calls require a proposal alternative")
+	}
+	preferredCarrier := accepted.Alternatives[0].CarrierID
+	for _, carrierID := range carrierIDs {
+		if carrierID == preferredCarrier {
+			continue
+		}
 		return fmt.Errorf(
-			"selected carrier %q must be the first proposal alternative",
-			reassignCarrier,
+			"write call carrier %q must match first proposal alternative %q",
+			carrierID,
+			preferredCarrier,
 		)
 	}
 	return nil
@@ -400,7 +399,7 @@ func proposalRepairRequest(
 	if request == nil {
 		return nil, errors.New("cannot repair a nil model request")
 	}
-	failedText, err := singleAssistantText(response)
+	failedText, err := assistantResponseText(response)
 	if err != nil {
 		failedText = "<missing proposal JSON>"
 	}
@@ -424,25 +423,27 @@ func proposalRepairRequest(
 	return &repair, nil
 }
 
-func singleAssistantText(response *responses.Response) (string, error) {
+func assistantResponseText(response *responses.Response) (string, error) {
 	if response == nil {
 		return "", errors.New("model returned no response")
 	}
-	var texts []string
+	var text strings.Builder
+	textBlocks := 0
 	for _, item := range response.Output {
 		if item.OfOutputMessage == nil || item.OfOutputMessage.Content == nil {
 			continue
 		}
 		for _, content := range *item.OfOutputMessage.Content {
 			if content.OfOutputText != nil {
-				texts = append(texts, content.OfOutputText.Text)
+				text.WriteString(content.OfOutputText.Text)
+				textBlocks++
 			}
 		}
 	}
-	if len(texts) != 1 {
-		return "", fmt.Errorf("write response must contain exactly one proposal text, got %d", len(texts))
+	if textBlocks == 0 {
+		return "", errors.New("write response must contain proposal text")
 	}
-	return texts[0], nil
+	return text.String(), nil
 }
 
 func modelRunID(call *agents.ModelCall) (domain.RunID, error) {

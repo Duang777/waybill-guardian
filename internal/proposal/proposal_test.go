@@ -40,6 +40,11 @@ func TestCompilerAcceptsAuditedScalarCitations(t *testing.T) {
 		},
 		"",
 	)
+	appendToolResult(t, store, runID, "call-weather", domain.ActionGetRoadWeather, map[string]any{
+		"segments": []any{
+			map[string]any{"segment": "绵阳-成都", "condition": "小雨"},
+		},
+	}, "")
 
 	compiler, err := NewCompiler(store)
 	if err != nil {
@@ -85,6 +90,34 @@ func TestCompilerAcceptsAuditedScalarCitations(t *testing.T) {
 	}
 }
 
+func TestCompilerRequiresCompleteReadSet(t *testing.T) {
+	store := openTestJournal(t)
+	runID := domain.RunID("run-incomplete-reads")
+	appendToolResult(t, store, runID, "call-waybill", domain.ActionGetWaybill, map[string]any{
+		"candidate_carriers": []any{
+			map[string]any{"carrier_id": "CARRIER-SW-42"},
+		},
+	}, "")
+	appendToolResult(t, store, runID, "call-tracking", domain.ActionGetTracking, map[string]any{
+		"points": []any{
+			map[string]any{"label": "杭州"},
+			map[string]any{"label": "绵阳北服务区"},
+		},
+	}, "")
+	appendValidDriver(t, store, runID)
+
+	compiler, err := NewCompiler(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = compiler.Compile(t.Context(), runID, mustMarshal(t, validDraft()))
+	if err == nil ||
+		CodeOf(err) != IssueInvalidCitation ||
+		!strings.Contains(err.Error(), "missing successful ext.get_road_weather result") {
+		t.Fatalf("Compile error = %v, want missing road weather result", err)
+	}
+}
+
 func TestCompilerVerifyRejectsChangedCheckpointCitation(t *testing.T) {
 	store := openTestJournal(t)
 	runID := domain.RunID("run-checkpoint")
@@ -100,6 +133,11 @@ func TestCompilerVerifyRejectsChangedCheckpointCitation(t *testing.T) {
 		},
 	}, "")
 	appendValidDriver(t, store, runID)
+	appendToolResult(t, store, runID, "call-weather", domain.ActionGetRoadWeather, map[string]any{
+		"segments": []any{
+			map[string]any{"segment": "绵阳-成都", "condition": "小雨"},
+		},
+	}, "")
 	compiler, err := NewCompiler(store)
 	if err != nil {
 		t.Fatal(err)
@@ -317,8 +355,17 @@ func TestCompilerRejectsUntrustedCitations(t *testing.T) {
 func TestCompilerResolvesEscapedJSONPointer(t *testing.T) {
 	store := openTestJournal(t)
 	runID := domain.RunID("run-pointer")
+	appendToolResult(t, store, runID, "call-waybill", domain.ActionGetWaybill, map[string]any{
+		"candidate_carriers": []any{},
+	}, "")
+	appendToolResult(t, store, runID, "call-tracking", domain.ActionGetTracking, map[string]any{
+		"points": []any{},
+	}, "")
 	appendToolResult(t, store, runID, "call-driver", domain.ActionGetDriver, map[string]any{
 		"a/b": map[string]any{"~key": "verified"},
+	}, "")
+	appendToolResult(t, store, runID, "call-weather", domain.ActionGetRoadWeather, map[string]any{
+		"segments": []any{},
 	}, "")
 	draft := validDraft()
 	draft.Alternatives = nil

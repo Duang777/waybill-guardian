@@ -254,6 +254,9 @@ func (c *Compiler) Compile(
 			)
 		}
 	}
+	if err := ledger.requireCompleteReadSet(); err != nil {
+		return Accepted{}, err
+	}
 	accepted.Digest, err = digest(accepted)
 	if err != nil {
 		return Accepted{}, err
@@ -342,6 +345,9 @@ func (c *Compiler) Verify(
 				fmt.Errorf("carrier %q is not present in audited waybill candidates", alternative.CarrierID),
 			)
 		}
+	}
+	if err := ledger.requireCompleteReadSet(); err != nil {
+		return err
 	}
 	expectedDigest, err := digest(accepted)
 	if err != nil {
@@ -513,6 +519,7 @@ type evidenceLedger struct {
 	entries           map[string]evidenceEntry
 	duplicates        map[string]struct{}
 	candidateCarriers map[string]struct{}
+	successfulReads   map[domain.Action]bool
 }
 
 func buildLedger(events []audit.Event) (evidenceLedger, error) {
@@ -520,6 +527,7 @@ func buildLedger(events []audit.Event) (evidenceLedger, error) {
 		entries:           make(map[string]evidenceEntry),
 		duplicates:        make(map[string]struct{}),
 		candidateCarriers: make(map[string]struct{}),
+		successfulReads:   make(map[domain.Action]bool),
 	}
 	for _, event := range events {
 		if event.Type != audit.EventToolResult {
@@ -549,6 +557,7 @@ func buildLedger(events []audit.Event) (evidenceLedger, error) {
 				)
 			}
 			entry.result = result
+			ledger.successfulReads[payload.Action] = true
 			if payload.Action == domain.ActionGetWaybill {
 				collectCandidateCarriers(result, ledger.candidateCarriers)
 			}
@@ -556,6 +565,24 @@ func buildLedger(events []audit.Event) (evidenceLedger, error) {
 		ledger.entries[payload.CallID] = entry
 	}
 	return ledger, nil
+}
+
+func (l evidenceLedger) requireCompleteReadSet() error {
+	for _, action := range []domain.Action{
+		domain.ActionGetWaybill,
+		domain.ActionGetTracking,
+		domain.ActionGetDriver,
+		domain.ActionGetRoadWeather,
+	} {
+		if !l.successfulReads[action] {
+			return validationError(
+				IssueInvalidCitation,
+				"",
+				fmt.Errorf("missing successful %s result", action),
+			)
+		}
+	}
+	return nil
 }
 
 func (l evidenceLedger) resolve(ref EvidenceRef) (Citation, error) {
