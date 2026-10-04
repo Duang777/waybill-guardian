@@ -127,6 +127,11 @@ func (a *Adapter) Dispatch(
 	if decoded {
 		retryAfter = parseRetryAfter(response, &envelope, a.clock())
 	}
+	retryAfter = capRetryAfter(
+		retryAfter,
+		binding.KeyExpiresAt,
+		a.clock().UTC(),
+	)
 	if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
 		result, ok := validateApplied(envelope, binding.ProviderRequestHash, &mutation)
 		if !decoded || !ok {
@@ -223,6 +228,11 @@ func (a *Adapter) Lookup(
 	if decoded {
 		retryAfter = parseRetryAfter(response, &envelope, a.clock())
 	}
+	retryAfter = capRetryAfter(
+		retryAfter,
+		binding.KeyExpiresAt,
+		a.clock().UTC(),
+	)
 
 	if response.StatusCode == http.StatusNotFound {
 		if a.clock().UTC().Before(binding.KeyCreatedAt.Add(binding.LookupConsistencyWindow)) {
@@ -408,6 +418,17 @@ func parseRetryAfter(response *http.Response, envelope *effectEnvelope, now time
 		return deadline.Sub(now)
 	}
 	return 0
+}
+
+func capRetryAfter(value time.Duration, expiresAt, now time.Time) time.Duration {
+	remaining := expiresAt.Sub(now)
+	if remaining <= 0 {
+		return 0
+	}
+	if value > remaining {
+		return remaining
+	}
+	return value
 }
 
 func requestID(response *http.Response, bodyValue string) string {

@@ -199,6 +199,45 @@ func TestDispatchClassifiesProviderResponses(t *testing.T) {
 	}
 }
 
+func TestProviderRetryAfterDoesNotCrossKeyExpiry(t *testing.T) {
+	var binding platform.EffectBinding
+	server := providerServer(t, func(w http.ResponseWriter, r *http.Request) {
+		envelope := effectEnvelope{
+			Status:            statusPending,
+			Action:            domain.ActionReassign,
+			RequestHash:       binding.ProviderRequestHash,
+			RetryAfterSeconds: int64((3 * time.Hour) / time.Second),
+		}
+		status := http.StatusServiceUnavailable
+		if r.Method == http.MethodGet {
+			status = http.StatusOK
+		}
+		writeJSON(t, w, status, envelope)
+	})
+	defer server.Close()
+	adapter := openTestAdapter(t, server.URL, func() time.Time { return testNow })
+	var err error
+	binding, err = adapter.Bind(testEffectRequest(), "effect-key", testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := binding.KeyExpiresAt.Sub(testNow)
+
+	dispatched := adapter.Dispatch(
+		t.Context(),
+		binding,
+		testEffectRequest(),
+		"effect-key",
+	)
+	if dispatched.RetryAfter != want {
+		t.Fatalf("dispatch retry after = %s, want %s", dispatched.RetryAfter, want)
+	}
+	lookedUp := adapter.Lookup(t.Context(), binding, "effect-key")
+	if lookedUp.RetryAfter != want {
+		t.Fatalf("lookup retry after = %s, want %s", lookedUp.RetryAfter, want)
+	}
+}
+
 func TestDispatchDistinguishesBeforeAndAfterSendFailures(t *testing.T) {
 	server := manifestServer(t)
 	defer server.Close()
