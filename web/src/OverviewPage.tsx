@@ -374,7 +374,7 @@ export function OverviewPage() {
                 <div className={styles.sectionHeader}>
                   <div>
                     <span className={styles.eyebrow}>Read-only intelligence</span>
-                    <h2 id="brief-heading">AI 经营简报</h2>
+                    <h2 id="brief-heading">经营简报</h2>
                   </div>
                   <span className={styles.readOnly}>
                     <ShieldCheck aria-hidden="true" size={15} />
