@@ -2,16 +2,15 @@
 
 ## 1. Visual theme and atmosphere
 
-The interface is a white logistics strategy table for dispatch operators. The nationwide
+The interface is a white industrial logistics table for dispatch operators. The nationwide
 network is the first-viewport signal: a bright isometric 3D field with graphite labels,
-desaturated teal infrastructure, and coral risk markers. Surrounding controls stay dense,
-quiet, and grouped into a pale instrument bay so the network remains the visual center.
-Green appears only after a write operation completes.
+desaturated teal infrastructure, and vermilion risk markers. Surrounding controls stay dense
+and flush so the network remains the visual center. Green appears only after a write
+operation completes.
 
-BoardUI's public dashboard patterns inform the instrument-bay hierarchy, contact shadow,
-and segmented queue control. The implementation is original CSS Modules code and keeps this
-project's tighter 6 px and 8 px radius scale instead of importing BoardUI's Tailwind or React
-Aria components.
+BoardUI's public dashboard patterns informed the initial hierarchy study. The final
+implementation uses original CSS Modules code, square industrial geometry, divider-led
+structure, and no copied BoardUI source or components.
 
 ## 2. Color palette and roles
 
@@ -38,13 +37,15 @@ Chinese. Numeric values use tabular figures. Letter spacing remains zero.
 
 ## 4. Component styling
 
-- Buttons use a 6 px radius, a 40 px minimum hit area, and `scale(0.96)` press feedback.
-- The 3D map and risk queue are 8 px tool panels on one pale instrument bay.
-- Segmented controls use a quiet neutral track, 6 px white selection, and contact shadow.
+- Buttons use a 4 px radius, a 40 px minimum hit area, and `scale(0.96)` press feedback.
+- The 3D map and risk queue form one flush workspace separated by a 1 px divider.
+- Queue views use plain text tabs with a 2 px active underline.
 - Other operational sections remain flush and use 1 px dividers.
 - The approval object is the only elevated card because it is the human decision boundary.
 - Inputs and range controls use the signal color for active state and a visible focus ring.
 - Icon-only buttons use Lucide icons, tooltips, and accessible labels.
+- The local route fallback uses a pale coordinate field, a restrained route corridor, and a
+  separate evidence rail. Evidence must never obscure the route.
 
 ## 5. Layout principles
 
@@ -54,8 +55,8 @@ waybill workbench uses one status strip and a two-column workspace. Its left col
 map and timeline, and its right column holds the decision boundary.
 
 On the CEO overview, KPI segments form one flush band with dividers. They are not separate
-cards. The network and queue share one pale instrument bay, with white sibling tool panels
-instead of nested cards. The network must occupy at least two thirds of the desktop workspace
+cards. The network and queue share one flush work surface instead of nested cards. The
+network must occupy at least two thirds of the desktop workspace
 width and retain a stable 16:9-like field. The risk queue stays beside it on desktop and
 moves below it on mobile. A risk hub or queue link opens `/waybills/:id`.
 
@@ -69,9 +70,9 @@ Do not use a dark skybox, bloom, glass panels, map tiles, or decorative gradient
 
 ## 6. Depth and elevation
 
-Canvas, instrument bay, inner tool panel, and raised approval layers differ by lightness.
-Tool panels use only a `0 1px 1px oklch(0.2 0.01 255 / 0.05)` contact shadow. The approval
-card uses `0 12px 32px oklch(0.22 0.02 255 / 0.10)`. No blur or glass effect is used.
+Canvas, flush work surface, and raised approval layers differ by lightness. Operational
+surfaces use dividers without decorative shadows. The approval card uses
+`0 12px 32px oklch(0.22 0.02 255 / 0.10)`. No blur or glass effect is used.
 
 ## 7. Do and don't
 
@@ -93,7 +94,8 @@ card uses `0 12px 32px oklch(0.22 0.02 255 / 0.10)`. No blur or glass effect is 
 ## 8. Responsive behavior
 
 At 1000 px the CEO map and risk queue become one column. At 720 px its KPI band becomes two
-columns. At 960 px the waybill workspace becomes one column and approval moves above the map.
+columns. At 960 px the waybill workspace becomes one column and keeps route evidence before
+the approval panel.
 At 640 px the workbench header wraps, route metadata becomes a two-column grid, and playback
 controls keep 40 px hit areas. Both pages must remain usable at 375 px and 320 px without
 horizontal scrolling.
@@ -101,11 +103,10 @@ horizontal scrolling.
 ## 9. Agent prompt guide
 
 - "Create a flush operations panel on `oklch(1 0 0)` with 1 px
-  `oklch(0.91 0.009 220)` dividers, 8 px radius, and no shadow."
-- "Create a pending approval card with a 6 px radius, `oklch(0.96 0.035 29)` header,
+  `oklch(0.91 0.009 220)` dividers, 4 px radius, and no shadow."
+- "Create a pending approval card with a 4 px radius, `oklch(0.96 0.035 29)` header,
   13 px body text, and a single `oklch(0.62 0.18 29)` primary action."
 - "Create a compact event row with a 48 px sequence column in monospace, 13 px event title,
   12 px metadata, and a 1 px divider."
-- "Create a three-option queue segment on `oklch(0.94 0.004 210)` with 3 px track padding,
-  6 px selected radius, white selected fill, 10 px labels, and a
-  `0 1px 1px oklch(0.2 0.01 255 / 0.05)` contact shadow."
+- "Create three queue view tabs with transparent backgrounds, 40 px hit areas, 10 px labels,
+  and a 2 px `oklch(0.215 0.018 255)` active underline."

@@ -87,7 +87,7 @@ try {
   const navigationStarted = performance.now();
   await page.goto(webURL, { waitUntil: "networkidle" });
   await page
-    .getByRole("heading", { name: "全国公路港异常总览", exact: true })
+    .getByRole("heading", { name: "全国公路港异常态势", exact: true })
     .waitFor();
   const visibleInMilliseconds = performance.now() - navigationStarted;
   assert(
@@ -379,7 +379,7 @@ try {
     new URL(page.url()).pathname === href,
     `map drilldown opened ${page.url()}, want ${href}`,
   );
-  await page.getByRole("heading", { name: "异常轨迹", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "运输轨迹证据", exact: true }).waitFor();
   const routePoints = page.locator(
     'button[aria-label^="查看"][aria-label$="轨迹点"]',
   );

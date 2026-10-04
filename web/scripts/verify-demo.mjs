@@ -223,7 +223,9 @@ try {
   await page.screenshot({
     path: join(artifactDir, "mobile-alternative.png"),
   });
-  await page.getByText("异常轨迹", { exact: true }).scrollIntoViewIfNeeded();
+  await page
+    .getByRole("heading", { name: "运输轨迹证据", exact: true })
+    .scrollIntoViewIfNeeded();
   await page.screenshot({
     path: join(artifactDir, "mobile-route.png"),
   });

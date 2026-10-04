@@ -49,6 +49,7 @@ type SceneHub = {
   hub: HubOverview;
   position: Vector3;
   height: number;
+  priority: boolean;
 };
 
 type SceneRoute = {
@@ -110,7 +111,7 @@ export default function HubNetworkScene({
   return (
     <Canvas
       orthographic
-      camera={{ position: [14, 15, 18], near: 0.1, far: 100, zoom: 32 }}
+      camera={{ position: [11, 18, 15], near: 0.1, far: 100, zoom: 34 }}
       dpr={[1, 1.5]}
       frameloop={reducedMotion || paused ? "demand" : "always"}
       gl={{
@@ -119,13 +120,13 @@ export default function HubNetworkScene({
         powerPreference: "high-performance",
       }}
       onCreated={({ gl }) => {
-        gl.setClearColor("#f8fbfa", 1);
+        gl.setClearColor("#f1f2ee", 1);
       }}
     >
-      <color attach="background" args={["#f8fbfa"]} />
-      <ambientLight intensity={2.2} />
-      <hemisphereLight args={["#ffffff", "#b9cbc8", 1.5]} />
-      <directionalLight position={[8, 14, 10]} intensity={2.4} />
+      <color attach="background" args={["#f1f2ee"]} />
+      <ambientLight intensity={2.4} />
+      <hemisphereLight args={["#ffffff", "#bfc7c3", 1.35]} />
+      <directionalLight position={[8, 14, 10]} intensity={2.1} />
       <WebGLContextObserver onFailure={onFailure} />
 
       <StrategyTable />
@@ -161,22 +162,14 @@ function StrategyTable() {
   return (
     <group>
       <mesh position={[0, -0.32, 0]}>
-        <boxGeometry args={[26, 0.24, 16]} />
-        <meshStandardMaterial color="#f0f5f4" roughness={0.96} />
+        <boxGeometry args={[26, 0.2, 16]} />
+        <meshStandardMaterial color="#e9ece8" roughness={1} />
       </mesh>
       <gridHelper
-        args={[26, 26, "#b8d0cc", "#dce8e6"]}
+        args={[26, 26, "#9caaa7", "#d2d8d4"]}
         position={[0, -0.19, 0]}
         scale={[1, 1, 0.615]}
       />
-      <mesh position={[-6.7, -0.12, 2.4]}>
-        <boxGeometry args={[6.2, 0.14, 3.6]} />
-        <meshStandardMaterial color="#e9f1ef" roughness={0.9} />
-      </mesh>
-      <mesh position={[4.1, -0.1, -2.2]}>
-        <boxGeometry args={[8.8, 0.18, 4.1]} />
-        <meshStandardMaterial color="#edf4f2" roughness={0.9} />
-      </mesh>
     </group>
   );
 }
@@ -190,21 +183,23 @@ function HubColumns({
   selectedHubID: string | null;
   onSelectHub: (hubID: string) => void;
 }) {
-  const normalHubs = hubs.filter((item) => item.hub.anomalies === 0);
-  const riskHubs = hubs.filter((item) => item.hub.anomalies > 0);
+  const normalHubs = hubs.filter((item) => !item.priority);
+  const riskHubs = hubs.filter((item) => item.priority);
 
   return (
     <group>
       <HubInstances
         hubs={normalHubs}
         selectedHubID={selectedHubID}
-        color="#4f9891"
+        color="#285f5b"
+        emphasis={false}
         onSelectHub={onSelectHub}
       />
       <HubInstances
         hubs={riskHubs}
         selectedHubID={selectedHubID}
-        color="#df604f"
+        color="#df3f30"
+        emphasis
         onSelectHub={onSelectHub}
       />
     </group>
@@ -215,11 +210,13 @@ function HubInstances({
   hubs,
   selectedHubID,
   color,
+  emphasis,
   onSelectHub,
 }: {
   hubs: readonly SceneHub[];
   selectedHubID: string | null;
   color: string;
+  emphasis: boolean;
   onSelectHub: (hubID: string) => void;
 }) {
   const mesh = useRef<InstancedMesh>(null);
@@ -279,11 +276,13 @@ function HubInstances({
       }}
       onPointerOut={() => setCursor("default")}
     >
-      <cylinderGeometry args={[0.09, 0.16, 1, 6]} />
+      <cylinderGeometry
+        args={emphasis ? [0.07, 0.14, 1, 6] : [0.045, 0.08, 1, 8]}
+      />
       <meshStandardMaterial
         color={color}
-        roughness={0.5}
-        metalness={0.05}
+        roughness={0.68}
+        metalness={0.02}
       />
     </instancedMesh>
   );
@@ -311,17 +310,17 @@ function RouteLines({ routes }: { routes: readonly SceneRoute[] }) {
     <group>
       <lineSegments geometry={normalGeometry}>
         <lineBasicMaterial
-          color="#73aaa5"
+          color="#5e6e6a"
           transparent
-          opacity={0.46}
+          opacity={0.2}
           toneMapped={false}
         />
       </lineSegments>
       <lineSegments geometry={riskGeometry}>
         <lineBasicMaterial
-          color="#d75b4b"
+          color="#df3f30"
           transparent
-          opacity={0.78}
+          opacity={0.88}
           toneMapped={false}
         />
       </lineSegments>
@@ -351,16 +350,16 @@ function FlowMarkers({
     <group>
       <FlowMarkerInstances
         markers={normalMarkers}
-        color="#2f8f88"
-        scale={1}
+        color="#176e68"
+        scale={0.72}
         reducedMotion={reducedMotion}
         paused={paused}
         onSelectWaybill={onSelectWaybill}
       />
       <FlowMarkerInstances
         markers={riskMarkers}
-        color="#ee6654"
-        scale={1.28}
+        color="#ef3f2f"
+        scale={1.15}
         reducedMotion={reducedMotion}
         paused={paused}
         onSelectWaybill={onSelectWaybill}
@@ -506,8 +505,8 @@ function RiskRings({
       args={[undefined, undefined, hubs.length]}
       frustumCulled={false}
     >
-      <torusGeometry args={[0.24, 0.025, 6, 20]} />
-      <meshBasicMaterial color="#e26352" transparent opacity={0.68} />
+      <torusGeometry args={[0.22, 0.018, 6, 20]} />
+      <meshBasicMaterial color="#e13f30" transparent opacity={0.76} />
     </instancedMesh>
   );
 }
@@ -517,15 +516,15 @@ function SelectionBeacon({ hub }: { hub: SceneHub }) {
     <group position={[hub.position.x, 0, hub.position.z]}>
       <mesh position={[0, -0.08, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <ringGeometry args={[0.32, 0.39, 32]} />
-        <meshBasicMaterial color="#146d68" transparent opacity={0.9} />
+        <meshBasicMaterial color="#171a1a" transparent opacity={0.9} />
       </mesh>
       <mesh position={[0, 1.55, 0]}>
         <octahedronGeometry args={[0.16, 0]} />
-        <meshStandardMaterial color="#146d68" roughness={0.35} />
+        <meshStandardMaterial color="#171a1a" roughness={0.5} />
       </mesh>
       <mesh position={[0, 0.78, 0]}>
         <cylinderGeometry args={[0.012, 0.012, 1.35, 5]} />
-        <meshBasicMaterial color="#146d68" transparent opacity={0.5} />
+        <meshBasicMaterial color="#171a1a" transparent opacity={0.46} />
       </mesh>
     </group>
   );
@@ -552,12 +551,12 @@ function CameraRig({
   const desiredPosition = useMemo(
     () =>
       selectedHub === undefined
-        ? new Vector3(14, 15, 18)
-        : focus.clone().add(new Vector3(7.2, 8.2, 9.2)),
+        ? new Vector3(11, 18, 15)
+        : focus.clone().add(new Vector3(6.8, 10.5, 8.4)),
     [focus, selectedHub],
   );
-  const baseZoom = Math.min(size.width / 23.5, size.height / 14.5);
-  const desiredZoom = baseZoom * (selectedHub === undefined ? 1 : 1.42);
+  const baseZoom = Math.min(size.width / 23, size.height / 14);
+  const desiredZoom = baseZoom * (selectedHub === undefined ? 1 : 1.48);
 
   useEffect(() => {
     if (!(camera instanceof OrthographicCamera)) {
@@ -653,11 +652,16 @@ export function buildSceneModel(
   anomalies: readonly AnomalyOverview[],
 ) {
   const maxInFlight = Math.max(...hubs.map((hub) => hub.in_flight), 1);
-  const sceneHubs = hubs.map((hub) => ({
-    hub,
-    position: projectHub(hub),
-    height: 0.28 + (hub.in_flight / maxInFlight) * 0.82,
-  }));
+  const sceneHubs = hubs.map((hub) => {
+    const priority = hub.anomalies >= 2;
+    const load = hub.in_flight / maxInFlight;
+    return {
+      hub,
+      position: projectHub(hub),
+      height: priority ? 0.34 + load * 1.08 : 0.09 + load * 0.3,
+      priority,
+    };
+  });
   const hubsByID = new Map(sceneHubs.map((item) => [item.hub.hub_id, item]));
   const anomalyByRoute = new Map<string, AnomalyOverview>();
   for (const item of anomalies) {
@@ -678,11 +682,14 @@ export function buildSceneModel(
     const from = origin.position.clone().setY(0.08);
     const to = destination.position.clone().setY(0.08);
     const distance = from.distanceTo(to);
+    const midpointHeight = route.anomalies > 0
+      ? 0.7 + Math.min(distance * 0.09, 1.8)
+      : 0.3 + Math.min(distance * 0.04, 0.8);
     const midpoint = from
       .clone()
       .add(to)
       .multiplyScalar(0.5)
-      .setY(0.85 + Math.min(distance * 0.11, 2.25));
+      .setY(midpointHeight);
     return [{
       route,
       curve: new QuadraticBezierCurve3(from, midpoint, to),
@@ -711,7 +718,10 @@ export function buildSceneModel(
     hubsByID,
     routes: sceneRoutes,
     markers,
-    riskHubs: sceneHubs.filter((item) => item.hub.anomalies > 0),
+    riskHubs: sceneHubs
+      .filter((item) => item.priority)
+      .sort((left, right) => right.hub.anomalies - left.hub.anomalies)
+      .slice(0, 12),
   };
 }
 
