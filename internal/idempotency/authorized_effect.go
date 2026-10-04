@@ -26,8 +26,7 @@ func AuthorizeEffect(
 	}
 	if !request.Action.IsWrite() ||
 		request.Action != command.Identity.Action ||
-		request.ArgumentsHash == "" ||
-		request.ArgumentsHash != command.Identity.ArgumentsHash {
+		request.ArgumentsHash == "" {
 		return AuthorizedEffect{}, ErrInvalidEffectRequest
 	}
 	canonical, err := canonicalArguments(request.Arguments)
@@ -38,6 +37,14 @@ func AuthorizeEffect(
 	if hex.EncodeToString(sum[:]) != request.ArgumentsHash {
 		return AuthorizedEffect{}, ErrInvalidEffectRequest
 	}
+	if command.Identity.Version == IdentityLegacyV1 {
+		if request.ArgumentsHash != command.Identity.ArgumentsHash &&
+			!matchesLegacyArgumentsHash(command, canonical) {
+			return AuthorizedEffect{}, ErrInvalidEffectRequest
+		}
+	} else if request.ArgumentsHash != command.Identity.ArgumentsHash {
+		return AuthorizedEffect{}, ErrInvalidEffectRequest
+	}
 	return AuthorizedEffect{
 		command: command,
 		request: platform.EffectRequest{
@@ -46,6 +53,27 @@ func AuthorizeEffect(
 			ArgumentsHash: request.ArgumentsHash,
 		},
 	}, nil
+}
+
+func matchesLegacyArgumentsHash(command Command, canonical json.RawMessage) bool {
+	var arguments map[string]json.RawMessage
+	if err := json.Unmarshal(canonical, &arguments); err != nil || arguments == nil {
+		return false
+	}
+	if _, exists := arguments["idempotency_key"]; exists {
+		return false
+	}
+	key, err := json.Marshal(command.Identity.Key)
+	if err != nil {
+		return false
+	}
+	arguments["idempotency_key"] = key
+	legacyCanonical, err := json.Marshal(arguments)
+	if err != nil {
+		return false
+	}
+	sum := sha256.Sum256(legacyCanonical)
+	return hex.EncodeToString(sum[:]) == command.Identity.ArgumentsHash
 }
 
 func (effect AuthorizedEffect) Command() Command {

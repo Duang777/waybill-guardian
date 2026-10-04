@@ -38,6 +38,60 @@ func TestAuthorizeEffectCanonicalizesAndCopiesArguments(t *testing.T) {
 	}
 }
 
+func TestAuthorizeEffectRehydratesLegacyIdempotencyKey(t *testing.T) {
+	const key = domain.IdempotencyKey("legacy-key")
+	businessArguments := json.RawMessage(
+		`{"waybill_id":"YD2026101001","carrier_id":"CARRIER-SW-42"}`,
+	)
+	businessHash, err := ArgumentsHash(string(businessArguments))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyHash, err := ArgumentsHash(
+		`{"idempotency_key":"legacy-key","carrier_id":"CARRIER-SW-42","waybill_id":"YD2026101001"}`,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := LegacyIdentity(domain.ActionReassign, key, legacyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := Command{
+		RunID:    "run-legacy-authorized",
+		CallID:   "call-legacy-authorized",
+		Identity: identity,
+	}
+
+	effect, err := AuthorizeEffect(command, platform.EffectRequest{
+		Action:        domain.ActionReassign,
+		Arguments:     businessArguments,
+		ArgumentsHash: businessHash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := json.RawMessage(`{"carrier_id":"CARRIER-SW-42","waybill_id":"YD2026101001"}`)
+	if got := effect.Request(); !bytes.Equal(got.Arguments, want) {
+		t.Fatalf("legacy authorized arguments = %s, want %s", got.Arguments, want)
+	}
+
+	changed := json.RawMessage(
+		`{"waybill_id":"YD2026101001","carrier_id":"CARRIER-OTHER"}`,
+	)
+	changedHash, err := ArgumentsHash(string(changed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AuthorizeEffect(command, platform.EffectRequest{
+		Action:        domain.ActionReassign,
+		Arguments:     changed,
+		ArgumentsHash: changedHash,
+	}); !errors.Is(err, ErrInvalidEffectRequest) {
+		t.Fatalf("changed legacy arguments error = %v, want %v", err, ErrInvalidEffectRequest)
+	}
+}
+
 func TestAuthorizeEffectRejectsMismatchedRequest(t *testing.T) {
 	command, request := authorizedEffectFixture(t)
 	otherArguments := json.RawMessage(

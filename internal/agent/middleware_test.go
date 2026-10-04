@@ -141,6 +141,106 @@ func TestWriteEffectMiddlewareSeparatesSameActionEffects(t *testing.T) {
 	}
 }
 
+func TestWriteEffectMiddlewareExecutesConfirmedLegacyApproval(t *testing.T) {
+	journal, err := audit.Open(t.TempDir(), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	approvals, err := approval.NewStore(journal, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clients, mock, err := guardtools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRuntime, err := guardtools.NewFixtureWriteRuntime(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effects, err := idempotency.NewStore(journal, idempotency.StoreConfig{
+		Runtime: writeRuntime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlers, err := guardtools.NewHandlers(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := guardtools.NewRegistry(handlers)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runContext := domain.RunContext{
+		RunID:       "run-legacy-effect",
+		IncidentID:  "incident-legacy-effect",
+		WaybillID:   "YD2026101001",
+		PlanVersion: 1,
+	}
+	call := &agents.ToolCall{
+		FunctionCallMessage: &responses.FunctionCallMessage{
+			ID:     "fc-legacy-reassign",
+			CallID: "call-legacy-reassign",
+			Name:   "tms_reassign",
+			Arguments: `{
+				"waybill_id":"YD2026101001",
+				"carrier_id":"CARRIER-SW-42",
+				"idempotency_key":"legacy-key"
+			}`,
+		},
+		RunContext: contextMap(runContext),
+	}
+	write, err := registry.ParseWrite(call.Name, json.RawMessage(call.Arguments))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvalID := approval.IDFor(runContext.RunID, []string{call.CallID})
+	if _, err := approvals.Create(t.Context(), approval.Approval{
+		ID:          approvalID,
+		RunID:       runContext.RunID,
+		WaybillID:   runContext.WaybillID,
+		PlanVersion: runContext.PlanVersion,
+		Items: []approval.Item{{
+			CallID:         call.CallID,
+			Action:         write.Action,
+			WireName:       write.WireName,
+			Params:         json.RawMessage(call.Arguments),
+			ArgumentsHash:  write.LegacyFullHash,
+			IdempotencyKey: write.LegacyKey,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := approvals.Decide(t.Context(), approvalID, approval.Decision{
+		Kind:      approval.DecisionConfirm,
+		DecidedBy: "reviewer",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	middleware := NewWriteEffectMiddleware(approvals, effects, registry)
+	tool := &agents.BaseTool{Meta: map[string]any{
+		guardtools.MetaAccess:       guardtools.AccessWrite,
+		guardtools.MetaContractName: string(domain.ActionReassign),
+	}}
+	execute := middleware.WrapToolCall(func(
+		_ context.Context,
+		_ *agents.BaseTool,
+		call *agents.ToolCall,
+	) (*agents.ToolCallResponse, error) {
+		return agents.ToolCallResult(call, `{"unexpected":true}`), nil
+	})
+	if _, err := execute(t.Context(), tool, call); err != nil {
+		t.Fatal(err)
+	}
+	if got := mock.WriteCount(domain.ActionReassign); got != 1 {
+		t.Fatalf("reassign writes = %d, want 1", got)
+	}
+}
+
 func materializeTestItem(
 	t *testing.T,
 	registry *guardtools.Registry,
