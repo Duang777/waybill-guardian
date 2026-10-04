@@ -29,6 +29,7 @@ jobs:
           cache-dependency-path: go.sum
       - run: go vet ./...
       - run: go test -race -count=1 ./...
+      - run: ./scripts/check-production-fixture-literals.sh
 
   recovery-stability:
     name: Recovery stability
@@ -176,6 +177,8 @@ jobs:
       - run: npm ci
         working-directory: web
       - run: npm run verify:e2e
+        working-directory: web
+      - run: npm run verify:file-e2e
         working-directory: web
       - name: Upload screenshots
         if: always()

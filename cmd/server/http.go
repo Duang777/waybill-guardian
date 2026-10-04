@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/netip"
 	"os"
@@ -73,6 +74,8 @@ func newHandlerWithFrontend(
 		sseSlots:     make(chan struct{}, maxSSESubscriptions),
 	}
 	server.mux.HandleFunc("POST /api/demo/trigger", server.triggerDemo)
+	server.mux.HandleFunc("GET /api/waybills", server.listWaybills)
+	server.mux.HandleFunc("POST /api/runs", server.startRun)
 	server.mux.HandleFunc("GET /api/runs", server.listRuns)
 	server.mux.HandleFunc("GET /api/runs/{id}", server.runSnapshot)
 	server.mux.HandleFunc("GET /api/runs/{id}/timeline", server.timeline)
@@ -284,14 +287,73 @@ func (a *api) health(w http.ResponseWriter, _ *http.Request) {
 
 func (a *api) triggerDemo(w http.ResponseWriter, r *http.Request) {
 	_, grant, ok := a.grant(w, r, httpauth.StartRun)
-	if !ok || !a.requireWaybill(w, grant, guardian.DemoWaybillID) {
+	if !ok {
 		return
 	}
 	if err := requireEmptyBody(r.Body); err != nil {
 		writeProblem(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
-	run, err := a.service.StartDemo(r.Context())
+	waybills, err := a.service.ListWaybills(r.Context())
+	if err != nil {
+		a.writeServiceError(w, err)
+		return
+	}
+	waybills = slices.DeleteFunc(waybills, func(item guardian.WaybillCatalogItem) bool {
+		return !grant.Allows(item.WaybillID) || !item.HasAnomaly
+	})
+	if len(waybills) == 0 {
+		writeProblem(w, http.StatusNotFound, "not_found", "no anomalous waybill is available")
+		return
+	}
+	run, err := a.service.StartRun(r.Context(), waybills[0].WaybillID)
+	if err != nil {
+		a.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, run)
+}
+
+func (a *api) listWaybills(w http.ResponseWriter, r *http.Request) {
+	_, grant, ok := a.grant(w, r, httpauth.Read)
+	if !ok {
+		return
+	}
+	waybills, err := a.service.ListWaybills(r.Context())
+	if err != nil {
+		a.writeServiceError(w, err)
+		return
+	}
+	waybills = slices.DeleteFunc(waybills, func(item guardian.WaybillCatalogItem) bool {
+		return !grant.Allows(item.WaybillID)
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"waybills": waybills})
+}
+
+func (a *api) startRun(w http.ResponseWriter, r *http.Request) {
+	_, grant, ok := a.grant(w, r, httpauth.StartRun)
+	if !ok {
+		return
+	}
+	if err := requireJSONContentType(r.Header.Get("Content-Type")); err != nil {
+		writeProblem(w, http.StatusUnsupportedMediaType, "invalid_content_type", err.Error())
+		return
+	}
+	var body struct {
+		WaybillID domain.WaybillID `json:"waybill_id"`
+	}
+	if err := decodeJSON(r.Body, &body); err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	if err := domain.ValidateWaybillID(body.WaybillID); err != nil {
+		a.writeServiceError(w, err)
+		return
+	}
+	if !a.requireWaybill(w, grant, body.WaybillID) {
+		return
+	}
+	run, err := a.service.StartRun(r.Context(), body.WaybillID)
 	if err != nil {
 		a.writeServiceError(w, err)
 		return
@@ -697,6 +759,14 @@ func decodeJSON(body io.Reader, target any) error {
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return fmt.Errorf("expected one JSON object")
+	}
+	return nil
+}
+
+func requireJSONContentType(value string) error {
+	mediaType, _, err := mime.ParseMediaType(value)
+	if err != nil || mediaType != "application/json" {
+		return fmt.Errorf("Content-Type must be application/json")
 	}
 	return nil
 }

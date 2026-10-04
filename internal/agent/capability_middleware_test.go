@@ -62,7 +62,7 @@ func TestCapabilityModelMiddlewareFiltersExecutionOnlyTools(t *testing.T) {
 
 func partialRegistry(t *testing.T) *guardtools.Registry {
 	t.Helper()
-	clients, _, err := guardtools.NewDemoClients()
+	clients, _, err := guardtools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}

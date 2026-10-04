@@ -9,6 +9,7 @@ BACKEND_PORT="${BACKEND_PORT:-8080}"
 WEB_HOST="${WEB_HOST:-127.0.0.1}"
 WEB_PORT="${WEB_PORT:-5173}"
 DATA_DIR="${DATA_DIR:-$ROOT_DIR/data}"
+DATA_FILE="${DATA_FILE:-}"
 AGENT_MODE="${AGENT_MODE:-demo}"
 PLATFORM="${PLATFORM:-mock}"
 API_URL="http://$BACKEND_HOST:$BACKEND_PORT"
@@ -78,6 +79,11 @@ require_command go
 require_command npm
 require_command curl
 
+if [[ "$PLATFORM" == "file" && -z "$DATA_FILE" ]]; then
+	printf 'DATA_FILE is required when PLATFORM=file.\n' >&2
+	exit 1
+fi
+
 if [[ ! -x "$WEB_DIR/node_modules/.bin/vite" ]]; then
 	printf 'Installing web dependencies with npm ci...\n'
 	(cd "$WEB_DIR" && npm ci)
@@ -91,6 +97,7 @@ printf 'Starting API at %s...\n' "$API_URL"
 	cd "$ROOT_DIR"
 	exec env \
 		AGENT_MODE="$AGENT_MODE" \
+		DATA_FILE="$DATA_FILE" \
 		PLATFORM="$PLATFORM" \
 		DATA_DIR="$DATA_DIR" \
 		HTTP_ADDR="$BACKEND_HOST:$BACKEND_PORT" \

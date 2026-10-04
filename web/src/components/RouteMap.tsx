@@ -3,9 +3,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { hasAMapKey, loadAMap } from "../amap";
 import type { TrackPoint } from "../api";
 import styles from "../app.module.css";
+import type { WaybillResource } from "../waybill-resource";
 
 type RouteMapProps = {
   points: readonly TrackPoint[];
+  origin: string | null;
+  destination: string | null;
+  resourceKind: WaybillResource["kind"];
 };
 
 type MapMode =
@@ -20,7 +24,12 @@ type ProjectedPoint = TrackPoint & {
 
 type Coordinate = [longitude: number, latitude: number];
 
-export function RouteMap({ points }: RouteMapProps) {
+export function RouteMap({
+  points,
+  origin,
+  destination,
+  resourceKind,
+}: RouteMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [mode, setMode] = useState<MapMode>(
@@ -102,7 +111,7 @@ export function RouteMap({ points }: RouteMapProps) {
     return (
       <div className={styles.mapEmpty}>
         <MapPin aria-hidden="true" size={20} />
-        <span>正在读取运单轨迹</span>
+        <span>{emptyMapLabel(resourceKind)}</span>
       </div>
     );
   }
@@ -117,6 +126,8 @@ export function RouteMap({ points }: RouteMapProps) {
       {mode.kind !== "amap" && (
         <FallbackMap
           points={projected}
+          origin={origin}
+          destination={destination}
           selectedIndex={selectedIndex}
           onSelect={setSelectedIndex}
         />
@@ -156,19 +167,60 @@ export function RouteMap({ points }: RouteMapProps) {
   );
 }
 
+function emptyMapLabel(kind: WaybillResource["kind"]): string {
+  switch (kind) {
+    case "empty":
+      return "暂无运单轨迹";
+    case "loading":
+      return "正在读取运单轨迹";
+    case "error":
+      return "运单轨迹加载失败";
+    case "ready":
+      return "当前运单暂无轨迹";
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
+}
+
 type FallbackMapProps = {
   points: readonly ProjectedPoint[];
+  origin: string | null;
+  destination: string | null;
   selectedIndex: number;
   onSelect: (index: number) => void;
 };
 
-function FallbackMap({ points, selectedIndex, onSelect }: FallbackMapProps) {
+function FallbackMap({
+  points,
+  origin,
+  destination,
+  selectedIndex,
+  onSelect,
+}: FallbackMapProps) {
   const route = points.map((point) => `${point.x},${point.y}`).join(" ");
+  const firstPoint = points[0];
+  const lastPoint = points.at(-1);
   return (
     <div className={styles.localMap}>
       <div className={styles.mapGrid} aria-hidden="true" />
-      <span className={styles.originLabel}>杭州</span>
-      <span className={styles.destinationLabel}>成都</span>
+      {origin !== null && firstPoint !== undefined && (
+        <span
+          className={styles.routeEndpointLabel}
+          style={{ left: `${firstPoint.x}%`, top: `${firstPoint.y}%` }}
+        >
+          {origin}
+        </span>
+      )}
+      {destination !== null && lastPoint !== undefined && (
+        <span
+          className={styles.routeEndpointLabel}
+          style={{ left: `${lastPoint.x}%`, top: `${lastPoint.y}%` }}
+        >
+          {destination}
+        </span>
+      )}
       <svg
         className={styles.routeLine}
         viewBox="0 0 100 100"

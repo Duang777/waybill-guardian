@@ -17,6 +17,7 @@
 - 默认每个 run 使用一份 append-only JSONL。PostgreSQL 模式在同一事务提交业务投影、审计和 outbox。
 - SSE 支持 `Last-Event-ID` 续传。前端按 `(run_id, seq)` 去重。
 - 审批支持确认、驳回和超时。首选运力被驳回后，Agent 会提交第二个候选方案。
+- `PLATFORM=file` 在启动时严格加载 JSON/CSV v1，页面可选择并处置文件中的任意运单。
 - 当前无认证版本只监听 loopback，并用进程锁阻止两个实例共享同一个数据目录。
 - 默认演示不需要模型密钥或高德密钥。
 
@@ -58,7 +59,7 @@ JSONL。示例中的数据库密码和 checkpoint key 只供本机演示。真�
 ```
 
 脚本首次运行时执行 `npm ci`，然后启动 API 和前端。打开
-<http://127.0.0.1:5173>，点击 **启动演示**。按 `Ctrl+C` 会同时停止两个进程。
+<http://127.0.0.1:5173>，选择运单并点击 **启动处置**。按 `Ctrl+C` 会同时停止两个进程。
 
 演示流程如下：
 
@@ -88,7 +89,8 @@ JSONL。示例中的数据库密码和 checkpoint key 只供本机演示。真�
 | `APPROVAL_TTL` | `10m` | 审批有效期，使用 Go duration 格式 |
 | `HISTORY_RETENTION` | `168h` | 已结束 Agent history 的保留期，必须为正数 |
 | `DEMO_STEP_DELAY` | `220ms` | 确定性模型每一步的演示延迟 |
-| `PLATFORM` | `mock` | `mock` 可用；`real` 会在 adapter 未实现时拒绝启动 |
+| `PLATFORM` | `mock` | `mock` 使用内嵌数据；`file` 加载 JSON/CSV；`real` 未实现时拒绝启动 |
+| `DATA_FILE` | 空 | `PLATFORM=file` 时必填的 JSON/CSV v1 文件 |
 | `STORAGE` | `jsonl` | `jsonl` 用于离线演示；`postgres` 使用事务仓储 |
 | `AUTH_MODE` | `local` | `local` 使用本机演示身份；`jwt` 验证 Bearer JWT |
 | `AUTH_JWT_ISSUER` | 空 | `AUTH_MODE=jwt` 时必填，必须精确匹配 JWT `iss` |
@@ -120,6 +122,38 @@ JSONL。示例中的数据库密码和 checkpoint key 只供本机演示。真�
 ```bash
 BACKEND_PORT=18080 WEB_PORT=15173 DATA_DIR=/tmp/waybill-demo ./scripts/demo.sh
 ```
+
+### 使用 JSON/CSV 数据
+
+仓库提供等价的 v1 模板：
+[`data/templates/waybills-v1.json`](./data/templates/waybills-v1.json) 和
+[`data/templates/waybills-v1.csv`](./data/templates/waybills-v1.csv)。先用与服务端相同的
+loader 校验文件：
+
+```bash
+env -u GOROOT go run ./cmd/dataimport validate --data ./official-v1.csv
+```
+
+校验成功后启动文件模式：
+
+```bash
+PLATFORM=file \
+DATA_FILE=./official-v1.csv \
+DATA_DIR=/tmp/waybill-file-demo \
+./scripts/demo.sh
+```
+
+Compose 将仓库的 `data/` 目录只读挂载到 `/app/data`。容器内运行模板数据可使用：
+
+```bash
+COMPOSE_PROFILES= STORAGE=jsonl PLATFORM=file \
+DATA_FILE=/app/data/templates/waybills-v1.json \
+docker compose up --build
+```
+
+服务启动时一次性加载完整文件，任何语法、引用、坐标或时间顺序错误都会在监听端口前失败。
+运行期间不会热更新数据；替换文件后需要重启。格式、字段矩阵与校验规则见
+[`docs/file-data-source-design.md`](./docs/file-data-source-design.md)。
 
 `AUTH_MODE=local` 时，`BACKEND_HOST` 必须是 loopback IP 字面量。直接运行
 `go run ./cmd/server` 时，`HTTP_ADDR` 默认是 `127.0.0.1:8080`。local 模式拒绝空 host、
@@ -177,6 +211,7 @@ go test ./...
 go test -race ./...
 go vet ./...
 go build ./...
+./scripts/check-production-fixture-literals.sh
 ./scripts/check-history-governance.sh
 ./scripts/licenses.sh
 ```
@@ -199,10 +234,12 @@ npm test
 npm run build
 npm audit
 npm run verify:e2e
+npm run verify:file-e2e
 ```
 
 `verify:e2e` 启动隔离的后端和前端，连续确认三次演示，再验证一次驳回路径。脚本还检查移动端
-横向溢出、按钮尺寸和截图。
+横向溢出、按钮尺寸和截图。`verify:file-e2e` 使用双运单 CSV 验证目录切换、旧响应抑制、
+动态路线与异常标签，以及所选运单的完整审批执行。
 
 GitHub Actions 会在 pull request 和 `main` 推送上运行 Go race、恢复稳定性、PostgreSQL
 17、Web、许可证与 Docker 检查。浏览器 E2E 每日定时运行，也可在 Actions 页面手动触发；
@@ -246,6 +283,7 @@ outbox 和 Agent history 的唯一事实源。
 - 架构、恢复矩阵和取舍：[`docs/RFC-001.md`](./docs/RFC-001.md)
 - 真实平台接入与生产处置链路：[`docs/RFC-002.md`](./docs/RFC-002.md)
 - Agent history 隐私与保留策略：[`docs/history-governance.md`](./docs/history-governance.md)
+- 文件数据源与任意运单：[`docs/file-data-source-design.md`](./docs/file-data-source-design.md)
 - hastekit 源码研究：[`docs/research/hastekit-v0.0.24.md`](./docs/research/hastekit-v0.0.24.md)
 - 三分钟演示讲稿：[`docs/demo-script.md`](./docs/demo-script.md)
 - 模块职责索引：[`AGENTS.md`](./AGENTS.md)

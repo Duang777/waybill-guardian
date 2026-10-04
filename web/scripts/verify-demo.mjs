@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
 import {
+  availablePort,
   findChrome,
   repoDir,
   startProcess,
@@ -13,8 +14,8 @@ import {
 
 const artifactDir = join(webDir, "artifacts");
 const dataDir = await mkdtemp(join(tmpdir(), "waybill-guardian-e2e-"));
-const backendPort = Number(process.env.E2E_BACKEND_PORT ?? "18181");
-const webPort = Number(process.env.E2E_WEB_PORT ?? "15173");
+const backendPort = await availablePort(process.env.E2E_BACKEND_PORT);
+const webPort = await availablePort(process.env.E2E_WEB_PORT);
 const backendURL = `http://127.0.0.1:${backendPort}`;
 const webURL = `http://127.0.0.1:${webPort}`;
 const processes = [];
@@ -36,10 +37,16 @@ try {
     });
   let backendProcess = startBackend();
   processes.push(backendProcess);
-  await waitForHTTP(`${backendURL}/healthz`, processes);
+  await waitForHTTP(
+    `${backendURL}/healthz`,
+    backendProcess,
+    processes,
+    /waybill guardian listening/,
+  );
 
-  processes.push(
-    startProcess("npm", [
+  const webProcess = startProcess(
+    "npm",
+    [
       "run",
       "dev",
       "--",
@@ -48,15 +55,17 @@ try {
       "--port",
       String(webPort),
       "--strictPort",
-    ], {
+    ],
+    {
       cwd: webDir,
       env: {
         ...process.env,
         VITE_API_TARGET: backendURL,
       },
-    }),
+    },
   );
-  await waitForHTTP(webURL, processes);
+  processes.push(webProcess);
+  await waitForHTTP(webURL, webProcess, processes, /Local:/);
 
   browser = await chromium.launch({
     executablePath: await findChrome(),
@@ -65,7 +74,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   let triggerRequests = 0;
   page.on("request", (request) => {
-    if (request.method() === "POST" && request.url().endsWith("/api/demo/trigger")) {
+    if (request.method() === "POST" && request.url().endsWith("/api/runs")) {
       triggerRequests += 1;
     }
   });
@@ -74,7 +83,7 @@ try {
 
   const runs = [];
   for (let index = 0; index < 3; index += 1) {
-    const buttonName = index === 0 ? "启动演示" : "重新演示";
+    const buttonName = index === 0 ? "启动处置" : "重新处置";
     await page.getByRole("button", { name: buttonName, exact: true }).click();
     await page.getByText("改派至川行快运", { exact: true }).waitFor();
     await page.getByText("待确认", { exact: true }).waitFor();
@@ -94,7 +103,12 @@ try {
       await stopProcess(backendProcess);
       backendProcess = startBackend();
       processes.push(backendProcess);
-      await waitForHTTP(`${backendURL}/healthz`, processes);
+      await waitForHTTP(
+        `${backendURL}/healthz`,
+        backendProcess,
+        processes,
+        /waybill guardian listening/,
+      );
       await page.reload({ waitUntil: "networkidle" });
       await page.getByText("改派至川行快运", { exact: true }).waitFor();
       await page.getByText("待确认", { exact: true }).waitFor();
@@ -139,7 +153,7 @@ try {
     path: join(artifactDir, "mobile-completed.png"),
   });
 
-  await page.getByRole("button", { name: "重新演示", exact: true }).click();
+  await page.getByRole("button", { name: "重新处置", exact: true }).click();
   await page.getByText("改派至川行快运", { exact: true }).waitFor();
   await page.getByRole("button", { name: "驳回方案", exact: true }).click();
   const rejectionReason = "首选承运商当前无可用车辆";

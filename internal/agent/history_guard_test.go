@@ -62,7 +62,10 @@ func TestHistoryGuardAllowsOpaqueUUIDIdentifiers(t *testing.T) {
 		"id":          phoneLikeUUID,
 		"message_id":  "msg_" + phoneLikeUUID,
 		"incident_id": "delay-" + phoneLikeUUID,
-		"output_id":   "msg_13800138000a1234",
+		"run_context": map[string]any{
+			"incident_id": "incident-" + phoneLikeUUID,
+		},
+		"output_id": "msg_13800138000a1234",
 		"queued_approvals": []string{
 			"call_13800138000a1234",
 			"call_13800138000ABCDEF",
@@ -80,6 +83,12 @@ func TestHistoryGuardAllowsOpaqueUUIDIdentifiers(t *testing.T) {
 		map[string]any{"id": "13800138000"},
 	); !errors.Is(err, ErrUnsafeHistory) {
 		t.Fatalf("phone-valued identifier error = %v, want ErrUnsafeHistory", err)
+	}
+	if err := validateHistoryValue(
+		"test value",
+		map[string]any{"incident_id": "incident-13800138000"},
+	); !errors.Is(err, ErrUnsafeHistory) {
+		t.Fatalf("phone-valued incident identifier error = %v, want ErrUnsafeHistory", err)
 	}
 	if err := validateHistoryValue(
 		"test value",

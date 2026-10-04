@@ -170,7 +170,9 @@ cmd/server/http.go       路由、资源解析、problem 映射
 
 | 路由 | capability | 运单来源 |
 |---|---|---|
-| `POST /api/demo/trigger` | `run:create` | `guardian.DemoWaybillID` |
+| `GET /api/waybills` | `read` | 每个 `WaybillCatalogItem.WaybillID` |
+| `POST /api/runs` | `run:create` | 已校验的请求体 `waybill_id` |
+| `POST /api/demo/trigger` | `run:create` | 授权目录中的第一张异常运单 |
 | `GET /api/runs` | `read` | 每个 `RunSummary.WaybillID` |
 | run detail、timeline | `read` | `GetRun(id).WaybillID` |
 | `GET /api/approvals` | `read` | 每个摘要的 `WaybillID` |

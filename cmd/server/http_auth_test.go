@@ -21,7 +21,6 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
 	"github.com/Duang777/waybill-guardian/internal/httpauth"
-	"github.com/Duang777/waybill-guardian/internal/platform"
 	"github.com/Duang777/waybill-guardian/internal/tools"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -47,6 +46,12 @@ func TestJWTHandlerRequiresAuthenticationOnEveryAPIRoute(t *testing.T) {
 		body   io.Reader
 	}{
 		{method: http.MethodPost, path: "/api/demo/trigger"},
+		{
+			method: http.MethodPost,
+			path:   "/api/runs",
+			body:   strings.NewReader(`{"waybill_id":"YD2026101001"}`),
+		},
+		{method: http.MethodGet, path: "/api/waybills"},
 		{method: http.MethodGet, path: "/api/runs?status=active"},
 		{method: http.MethodGet, path: "/api/runs/run-1"},
 		{method: http.MethodGet, path: "/api/runs/run-1/timeline"},
@@ -127,7 +132,7 @@ func TestJWTHandlerEnforcesTenantRoleAndWaybillScope(t *testing.T) {
 	server := httptest.NewServer(newHandler(service, access))
 	defer server.Close()
 
-	run, err := service.StartDemo(context.Background())
+	run, err := service.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +152,7 @@ func TestJWTHandlerEnforcesTenantRoleAndWaybillScope(t *testing.T) {
 		t,
 		privateKey,
 		"tenant-a",
-		[]string{"viewer", "operator"},
+		[]string{"viewer", "operator", "dispatcher"},
 		false,
 		[]string{"YD2026101002"},
 	)
@@ -170,8 +175,17 @@ func TestJWTHandlerEnforcesTenantRoleAndWaybillScope(t *testing.T) {
 	if mock.WriteCount(domain.ActionReassign) != 0 {
 		t.Fatal("unauthorized approval executed a platform write")
 	}
+	response = doAuthenticatedRequest(
+		t,
+		http.MethodPost,
+		server.URL+"/api/runs",
+		wrongWaybill,
+		strings.NewReader(`{"waybill_id":"YD2026101001"}`),
+	)
+	assertProblem(t, response, http.StatusForbidden, "forbidden")
 
 	for _, path := range []string{
+		"/api/waybills",
 		"/api/runs?status=active",
 		"/api/approvals?status=pending",
 	} {
@@ -224,7 +238,7 @@ func TestJWTHandlerUsesVerifiedSubjectForApproval(t *testing.T) {
 	server := httptest.NewServer(newHandler(service, access))
 	defer server.Close()
 
-	run, err := service.StartDemo(context.Background())
+	run, err := service.StartRun(context.Background(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,16 +362,17 @@ func TestTenantIDFromEnv(t *testing.T) {
 	}
 }
 
-func newHTTPAuthService(t *testing.T) (*guardian.Service, *platform.Mock) {
+func newHTTPAuthService(t *testing.T) (*guardian.Service, *tools.FixtureWriteRuntime) {
 	t.Helper()
-	clients, mock, err := tools.NewDemoClients()
+	clients, mock, err := tools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
 	service, err := guardian.Open(guardian.Config{
-		DataDir:   t.TempDir(),
-		Clients:   clients,
-		StepDelay: 0,
+		DataDir:      t.TempDir(),
+		Reads:        clients,
+		WriteRuntime: mock,
+		StepDelay:    0,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -452,6 +467,9 @@ func doAuthenticatedRequest(
 		t.Fatal(err)
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)

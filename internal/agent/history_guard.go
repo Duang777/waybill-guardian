@@ -272,9 +272,15 @@ func isOpaqueHistoryIdentifier(key string, value string) bool {
 	if isOpaqueUUID(value) || opaqueIDPattern.MatchString(value) {
 		return true
 	}
-	return key == "incident_id" &&
-		strings.HasPrefix(value, "delay-") &&
-		isCanonicalUUID(strings.TrimPrefix(value, "delay-"))
+	if key != "incident_id" {
+		return false
+	}
+	for _, prefix := range [...]string{"delay-", "incident-"} {
+		if candidate, ok := strings.CutPrefix(value, prefix); ok {
+			return isCanonicalUUID(candidate)
+		}
+	}
+	return false
 }
 
 func isOpaqueCallIdentifier(value string) bool {

@@ -12,6 +12,7 @@ services:
       CHECKPOINT_ENCRYPTION_KEY: ${CHECKPOINT_ENCRYPTION_KEY:-}
       CHECKPOINT_KEY_ID: ${CHECKPOINT_KEY_ID:-local-v1}
       DATABASE_URL: ${DATABASE_URL:-}
+      DATA_FILE: ${DATA_FILE:-}
       DATA_DIR: /data
       DEMO_STEP_DELAY: ${DEMO_STEP_DELAY:-220ms}
       HISTORY_RETENTION: ${HISTORY_RETENTION:-168h}
@@ -21,7 +22,7 @@ services:
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_MODEL: ${LLM_MODEL:-}
       LOCAL_TRUSTED_REMOTE: container-gateway
-      PLATFORM: mock
+      PLATFORM: ${PLATFORM:-mock}
       STORAGE: ${STORAGE:-jsonl}
       TENANT_ID: ${TENANT_ID:-local-demo}
       WEB_STATIC_DIR: /app/web
@@ -29,6 +30,7 @@ services:
       - "127.0.0.1:${APP_PORT:-8080}:8080"
     volumes:
       - app-data:/data
+      - ./data:/app/data:ro
     depends_on:
       postgres:
         condition: service_healthy

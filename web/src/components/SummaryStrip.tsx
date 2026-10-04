@@ -1,9 +1,10 @@
 import { Clock3, CloudSun, Route, ShieldCheck, Truck } from "lucide-react";
-import type { RunStatus, WaybillView } from "../api";
+import type { RunStatus } from "../api";
 import styles from "../app.module.css";
+import type { WaybillResource } from "../waybill-resource";
 
 type SummaryStripProps = {
-  view: WaybillView | null;
+  resource: WaybillResource;
   status: RunStatus | null;
   connected: boolean;
 };
@@ -19,8 +20,22 @@ const statusLabels = {
   manual_review: "等待人工复核",
 } satisfies Record<RunStatus, string>;
 
-export function SummaryStrip({ view, status, connected }: SummaryStripProps) {
-  const route = view === null ? "杭州 → 成都" : `${view.waybill.origin} → ${view.waybill.destination}`;
+export function SummaryStrip({
+  resource,
+  status,
+  connected,
+}: SummaryStripProps) {
+  const view = resource.kind === "ready" ? resource.view : null;
+  const waybillID = resource.kind === "empty" ? null : resource.waybillID;
+  const route = routeLabel(resource);
+  const cargo =
+    resource.kind === "ready"
+      ? resource.view.waybill.cargo
+      : resource.kind === "error"
+        ? "加载失败"
+        : resource.kind === "loading"
+          ? "读取中"
+          : "--";
   return (
     <section className={styles.summaryStrip} aria-label="运单状态摘要">
       <div className={styles.routeSummary}>
@@ -30,9 +45,7 @@ export function SummaryStrip({ view, status, connected }: SummaryStripProps) {
         <div>
           <span className={styles.eyebrow}>异常运单</span>
           <strong className={styles.routeTitle}>{route}</strong>
-          <span className={styles.mono}>
-            {view?.waybill.waybill_id ?? "YD2026101001"}
-          </span>
+          <span className={styles.mono}>{waybillID ?? "尚未选择运单"}</span>
         </div>
       </div>
 
@@ -42,7 +55,7 @@ export function SummaryStrip({ view, status, connected }: SummaryStripProps) {
             <Truck aria-hidden="true" size={14} />
             货物
           </dt>
-          <dd>{view?.waybill.cargo ?? "读取中"}</dd>
+          <dd>{cargo}</dd>
         </div>
         <div>
           <dt>
@@ -82,6 +95,23 @@ export function SummaryStrip({ view, status, connected }: SummaryStripProps) {
       </div>
     </section>
   );
+}
+
+function routeLabel(resource: WaybillResource): string {
+  switch (resource.kind) {
+    case "empty":
+      return "暂无可处置运单";
+    case "loading":
+      return "正在读取路线";
+    case "error":
+      return "路线加载失败";
+    case "ready":
+      return `${resource.view.waybill.origin} → ${resource.view.waybill.destination}`;
+    default: {
+      const exhaustive: never = resource;
+      return exhaustive;
+    }
+  }
 }
 
 type RiskBarProps = {

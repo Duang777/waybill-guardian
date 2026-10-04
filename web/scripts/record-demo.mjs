@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
 import { chromium } from "playwright-core";
 import {
+  availablePort,
   findChrome,
   repoDir,
   startProcess,
@@ -18,8 +19,8 @@ const outputPath = resolve(
 );
 const dataDir = await mkdtemp(join(tmpdir(), "waybill-guardian-recording-"));
 const rawVideoDir = join(dataDir, "video");
-const backendPort = Number(process.env.RECORD_BACKEND_PORT ?? "18282");
-const webPort = Number(process.env.RECORD_WEB_PORT ?? "15276");
+const backendPort = await availablePort(process.env.RECORD_BACKEND_PORT);
+const webPort = await availablePort(process.env.RECORD_WEB_PORT);
 const backendURL = `http://127.0.0.1:${backendPort}`;
 const webURL = `http://127.0.0.1:${webPort}`;
 const processes = [];
@@ -37,42 +38,45 @@ try {
 
   const goEnvironment = { ...process.env };
   delete goEnvironment.GOROOT;
-  processes.push(
-    startProcess("go", ["run", "./cmd/server"], {
-      cwd: repoDir,
-      env: {
-        ...goEnvironment,
-        DATA_DIR: dataDir,
-        HTTP_ADDR: `127.0.0.1:${backendPort}`,
-        DEMO_STEP_DELAY: "120ms",
-      },
-    }),
+  const backendProcess = startProcess("go", ["run", "./cmd/server"], {
+    cwd: repoDir,
+    env: {
+      ...goEnvironment,
+      DATA_DIR: dataDir,
+      HTTP_ADDR: `127.0.0.1:${backendPort}`,
+      DEMO_STEP_DELAY: "120ms",
+    },
+  });
+  processes.push(backendProcess);
+  await waitForHTTP(
+    `${backendURL}/healthz`,
+    backendProcess,
+    processes,
+    /waybill guardian listening/,
   );
-  await waitForHTTP(`${backendURL}/healthz`, processes);
 
-  processes.push(
-    startProcess(
-      "npm",
-      [
-        "run",
-        "dev",
-        "--",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        String(webPort),
-        "--strictPort",
-      ],
-      {
-        cwd: webDir,
-        env: {
-          ...process.env,
-          VITE_API_TARGET: backendURL,
-        },
+  const webProcess = startProcess(
+    "npm",
+    [
+      "run",
+      "dev",
+      "--",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(webPort),
+      "--strictPort",
+    ],
+    {
+      cwd: webDir,
+      env: {
+        ...process.env,
+        VITE_API_TARGET: backendURL,
       },
-    ),
+    },
   );
-  await waitForHTTP(webURL, processes);
+  processes.push(webProcess);
+  await waitForHTTP(webURL, webProcess, processes, /Local:/);
 
   browser = await chromium.launch({
     executablePath: await findChrome(),
@@ -109,7 +113,7 @@ try {
     "Agent 开始调查",
     "系统依次查询运单、轨迹、司机和天气，工具调用实时写入审计日志。",
   );
-  await page.getByRole("button", { name: "启动演示", exact: true }).click();
+  await page.getByRole("button", { name: "启动处置", exact: true }).click();
   await page.getByText("改派至川行快运", { exact: true }).waitFor();
   await page.getByText("待确认", { exact: true }).waitFor();
   await hold(page, 2_000);
@@ -155,7 +159,7 @@ try {
     "人工可以驳回方案",
     "驳回必须填写原因，Agent 会读取决定并提交第二个候选运力。",
   );
-  await page.getByRole("button", { name: "重新演示", exact: true }).click();
+  await page.getByRole("button", { name: "重新处置", exact: true }).click();
   await page.getByText("改派至川行快运", { exact: true }).waitFor();
   await page.getByRole("button", { name: "驳回方案", exact: true }).click();
   await page

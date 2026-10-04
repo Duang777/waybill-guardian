@@ -29,7 +29,7 @@ cmd/server ── internal/guardian
                  ├─ approval:    pending → confirmed / rejected / expired
                  ├─ idempotency: 稳定 effect 身份、并发合并、结果回放
                  ├─ audit:       append-only JSONL、哈希链、SSE replay/live
-                 └─ platform:    mock clients 和未实现的 real adapter
+                 └─ platform:    内嵌 mock、JSON/CSV file 和 real adapter 边界
 ```
 
 ## 工具契约（contract.yaml）
@@ -46,7 +46,7 @@ cmd/server ── internal/guardian
 | 人工审批 | SDK pause/resume 加持久化审批投影 | 写操作先暂停，人工决定落盘后才恢复同一个 thread。超时默认拒绝 |
 | 幂等 | 服务端从业务参数生成 `effect_id` 和 key | 模型不接触执行身份。同类写操作按目标和参数独立去重 |
 | 审计 | 每个 run 一份 append-only JSONL | `seq`、`prev_hash` 和 `hash` 支持完整性校验、回放和 SSE 续传 |
-| 数据层 | fixture 驱动的 mock clients | 默认演示可离线重复运行。`PLATFORM=real` 在 adapter 未实现时拒绝启动 |
+| 数据层 | 不可变读快照 + 独立写 runtime | `mock` 使用内嵌 fixture，`file` 启动时严格加载 JSON/CSV，`real` 在 adapter 未实现时拒绝启动 |
 | 前端地图 | 高德 JS API 加本地降级视图 | 未配置 key 或 SDK 加载失败时，其他演示功能仍可使用 |
 
 ## 目录地图
@@ -62,7 +62,8 @@ cmd/server ── internal/guardian
 - `internal/approval`：审批状态机和事件投影。
 - `internal/audit`：append-only JSONL、哈希校验、回放和订阅。
 - `internal/idempotency`：幂等键生成、校验、并发合并和结果回放。
-- `internal/platform`：TMS、天气和通知接口，以及 mock 实现。
+- `internal/platform`：TMS、天气和通知接口，读能力与写 runtime 的边界。
+- `internal/platform/filestore`：JSON/CSV v1 严格校验和不可变读快照。
 - `web`：React 运营控制台。
 
 ## 参考项目（诚实标注，详见 THIRD_PARTY_NOTICES.md）
@@ -89,4 +90,5 @@ cmd/server ── internal/guardian
 - [x] `./scripts/demo.sh` 可启动完整演示。
 - [x] README 和三分钟讲稿使用当前页面流程。
 - [x] `npm run record:demo` 可生成带中文字幕的演示录像。
+- [x] `PLATFORM=file DATA_FILE=...` 可选择并处置文件中的任意运单。
 - [ ] 审看最终视频、补充正式配音，并在赛事平台提交视频和公开仓库链接。

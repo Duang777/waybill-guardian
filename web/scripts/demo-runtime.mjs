@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { access } from "node:fs/promises";
+import { createServer } from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,7 +22,13 @@ export function startProcess(command, args, options) {
   };
   child.stdout.on("data", collect);
   child.stderr.on("data", collect);
+  let spawnError = null;
+  child.on("error", (error) => {
+    spawnError = error;
+    collect(error);
+  });
   child.diagnosticOutput = () => output.join("");
+  child.spawnError = () => spawnError;
   return child;
 }
 
@@ -40,12 +47,31 @@ export function stopProcesses(processes) {
   }
 }
 
-export async function waitForHTTP(url, processes) {
+export async function waitForHTTP(
+  url,
+  process,
+  diagnostics = [process],
+  readinessPattern,
+) {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
+    const failure = processFailure(process);
+    if (failure !== null) {
+      throw new Error(`${failure}\n${diagnosticOutput(diagnostics)}`);
+    }
+    if (!readinessPattern.test(process.diagnosticOutput())) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+      continue;
+    }
     try {
       const response = await fetch(url);
       if (response.ok) {
+        const responseFailure = processFailure(process);
+        if (responseFailure !== null) {
+          throw new Error(
+            `${responseFailure}\n${diagnosticOutput(diagnostics)}`,
+          );
+        }
         return;
       }
     } catch {
@@ -53,8 +79,37 @@ export async function waitForHTTP(url, processes) {
     }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
   }
-  const diagnostics = processes.map((child) => child.diagnosticOutput()).join("\n");
-  throw new Error(`timed out waiting for ${url}\n${diagnostics}`);
+  throw new Error(`timed out waiting for ${url}\n${diagnosticOutput(diagnostics)}`);
+}
+
+export async function availablePort(configuredValue) {
+  if (configuredValue !== undefined) {
+    const configured = Number(configuredValue);
+    if (!Number.isInteger(configured) || configured < 1 || configured > 65_535) {
+      throw new Error(`invalid configured port: ${configuredValue}`);
+    }
+    return configured;
+  }
+  return new Promise((resolvePort, rejectPort) => {
+    const server = createServer();
+    server.unref();
+    server.once("error", rejectPort);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        server.close();
+        rejectPort(new Error("failed to allocate an ephemeral TCP port"));
+        return;
+      }
+      server.close((error) => {
+        if (error === undefined) {
+          resolvePort(address.port);
+        } else {
+          rejectPort(error);
+        }
+      });
+    });
+  });
 }
 
 export async function findChrome() {
@@ -74,4 +129,22 @@ export async function findChrome() {
     }
   }
   throw new Error("Chrome was not found. Set CHROME_PATH to a Chromium executable.");
+}
+
+function processFailure(child) {
+  const spawnError = child.spawnError();
+  if (spawnError !== null) {
+    return `failed to start child process: ${spawnError.message}`;
+  }
+  if (child.exitCode !== null) {
+    return `child process exited during startup with status ${child.exitCode}`;
+  }
+  if (child.signalCode !== null) {
+    return `child process exited during startup from signal ${child.signalCode}`;
+  }
+  return null;
+}
+
+function diagnosticOutput(processes) {
+  return processes.map((child) => child.diagnosticOutput()).join("\n");
 }

@@ -2,6 +2,7 @@ package guardian
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -24,7 +25,8 @@ import (
 
 type Config struct {
 	DataDir          string
-	Clients          platform.Clients
+	Reads            platform.ReadSet
+	WriteRuntime     platform.WriteRuntime
 	ActiveActions    []domain.Action
 	PlatformProfile  string
 	ReadSource       string
@@ -62,20 +64,6 @@ type RunView struct {
 	LastSeq    audit.Seq         `json:"last_seq"`
 }
 
-type RiskScore struct {
-	ETADelay int `json:"eta_delay"`
-	Road     int `json:"road"`
-	Weather  int `json:"weather"`
-}
-
-type WaybillView struct {
-	Waybill  platform.Waybill       `json:"waybill"`
-	Tracking []platform.TrackPoint  `json:"tracking"`
-	Driver   platform.Driver        `json:"driver"`
-	Weather  []platform.RoadWeather `json:"weather"`
-	Risk     RiskScore              `json:"risk"`
-}
-
 type DecisionRequest struct {
 	Kind         approval.DecisionKind
 	DecidedBy    string
@@ -91,11 +79,12 @@ type runStartedPayload struct {
 }
 
 var (
-	ErrServiceClosed             = errors.New("guardian service is closed")
-	ErrRecoverySourceUnavailable = errors.New("effect recovery source is unavailable")
+	ErrServiceClosed              = errors.New("guardian service is closed")
+	ErrRecoverySourceUnavailable  = errors.New("effect recovery source is unavailable")
+	ErrRecoveryReadSourceMismatch = errors.New(
+		"run recovery read source does not match the configured source",
+	)
 )
-
-const DemoWaybillID domain.WaybillID = "YD2026101001"
 
 type Service struct {
 	ctx    context.Context
@@ -103,7 +92,7 @@ type Service struct {
 	clock  func() time.Time
 	ttl    time.Duration
 
-	clients         platform.Clients
+	reads           platform.ReadSet
 	platformProfile string
 	readSource      string
 	journal         audit.Journal
@@ -133,9 +122,12 @@ func Open(config Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	writeRuntime, err := guardtools.NewFixtureWriteRuntime(config.Clients)
-	if err != nil {
-		return nil, errors.Join(err, journal.Close())
+	writeRuntime := config.WriteRuntime
+	if writeRuntime == nil {
+		writeRuntime, err = guardtools.NewFixtureWriteRuntime(config.Reads)
+		if err != nil {
+			return nil, errors.Join(err, journal.Close())
+		}
 	}
 	idempotencyStore, err := idempotency.NewStore(journal, idempotency.StoreConfig{
 		Runtime: writeRuntime,
@@ -187,7 +179,7 @@ func openService(
 	if err != nil {
 		return closeJournal(err)
 	}
-	handlers, err := guardtools.NewHandlers(config.Clients)
+	handlers, err := guardtools.NewHandlers(config.Reads)
 	if err != nil {
 		return closeJournal(err)
 	}
@@ -202,6 +194,7 @@ func openService(
 	}
 	middlewares := []agents.Middleware{
 		agentkit.NewAuditMiddleware(journal),
+		agentkit.NewReadBindingMiddleware(config.Reads),
 		agentkit.NewWriteEffectMiddleware(approvals, effects, registry),
 	}
 	var engine *agentkit.Engine
@@ -235,7 +228,7 @@ func openService(
 		cancel:          cancel,
 		clock:           config.Clock,
 		ttl:             config.ApprovalTTL,
-		clients:         config.Clients,
+		reads:           config.Reads,
 		platformProfile: config.PlatformProfile,
 		readSource:      config.ReadSource,
 		journal:         journal,
@@ -277,25 +270,39 @@ func validateConfig(config Config) error {
 	if config.HistoryRetention < 0 {
 		return fmt.Errorf("history retention must be positive")
 	}
-	if config.Clients.TMS == nil ||
-		config.Clients.Weather == nil ||
-		config.Clients.Notification == nil {
-		return fmt.Errorf("all platform clients are required")
+	if config.Reads.TMS == nil ||
+		config.Reads.Weather == nil ||
+		config.Reads.Catalog == nil {
+		return fmt.Errorf("all platform readers are required")
 	}
 	return nil
 }
 
-func (s *Service) StartDemo(ctx context.Context) (RunView, error) {
+func (s *Service) StartRun(
+	ctx context.Context,
+	waybillID domain.WaybillID,
+) (RunView, error) {
 	if err := s.beginOperation(); err != nil {
 		return RunView{}, err
 	}
 	defer s.wg.Done()
+	if err := ctx.Err(); err != nil {
+		return RunView{}, err
+	}
+	if err := domain.ValidateWaybillID(waybillID); err != nil {
+		return RunView{}, err
+	}
+	if _, err := s.reads.TMS.GetWaybill(ctx, platform.GetWaybillRequest{
+		WaybillID: waybillID,
+	}); err != nil {
+		return RunView{}, err
+	}
 
 	runID := domain.RunID(uuid.NewString())
 	run := RunView{
 		RunID:      runID,
-		IncidentID: domain.IncidentID("delay-" + string(runID)),
-		WaybillID:  DemoWaybillID,
+		IncidentID: domain.IncidentID("incident-" + string(runID)),
+		WaybillID:  waybillID,
 		Status:     domain.RunStarted,
 	}
 	event, err := s.journal.Append(ctx, runID, audit.Draft{
@@ -484,45 +491,14 @@ func (s *Service) CurrentApproval(runID domain.RunID) (approval.Approval, error)
 	return approval.Approval{}, approval.ErrNotFound
 }
 
-func (s *Service) GetWaybill(ctx context.Context, id domain.WaybillID) (WaybillView, error) {
-	if err := domain.ValidateWaybillID(id); err != nil {
-		return WaybillView{}, err
-	}
-	waybill, err := s.clients.TMS.GetWaybill(ctx, platform.GetWaybillRequest{WaybillID: id})
-	if err != nil {
-		return WaybillView{}, err
-	}
-	tracking, err := s.clients.TMS.GetTracking(ctx, platform.GetTrackingRequest{WaybillID: id})
-	if err != nil {
-		return WaybillView{}, err
-	}
-	driver, err := s.clients.TMS.GetDriver(ctx, platform.GetDriverRequest{DriverID: waybill.DriverID})
-	if err != nil {
-		return WaybillView{}, err
-	}
-	weather, err := s.clients.Weather.GetRoadWeather(ctx, platform.GetRoadWeatherRequest{
-		Route: waybill.Origin + "-" + waybill.Destination,
-	})
-	if err != nil {
-		return WaybillView{}, err
-	}
-	waybill.ShipperPhone = audit.MaskPhone(waybill.ShipperPhone)
-	driver.Phone = audit.MaskPhone(driver.Phone)
-	driver.Plate = audit.MaskPlate(driver.Plate)
-	return WaybillView{
-		Waybill:  waybill,
-		Tracking: tracking,
-		Driver:   driver,
-		Weather:  weather,
-		Risk:     RiskScore{ETADelay: 86, Road: 34, Weather: 8},
-	}, nil
-}
-
 func (s *Service) Recover(ctx context.Context) error {
 	if err := s.beginOperation(); err != nil {
 		return err
 	}
 	defer s.wg.Done()
+	if err := s.validateRecoveryReadSources(ctx); err != nil {
+		return err
+	}
 
 	values := s.approvals.List()
 	latestPlan := make(map[domain.RunID]int)
@@ -575,6 +551,35 @@ func (s *Service) Recover(ctx context.Context) error {
 		lock.Lock()
 		s.recordFailure(run.RunID, errors.New("run stopped before a durable approval checkpoint"))
 		lock.Unlock()
+	}
+	return nil
+}
+
+func (s *Service) validateRecoveryReadSources(ctx context.Context) error {
+	for _, run := range s.runSnapshot() {
+		if isTerminal(run.Status) {
+			continue
+		}
+		events, err := s.journal.Replay(ctx, run.RunID, 0)
+		if err != nil {
+			return err
+		}
+		if len(events) == 0 || events[0].Type != audit.EventRunStarted {
+			return fmt.Errorf("run %q has no run_started prefix", run.RunID)
+		}
+		var payload runStartedPayload
+		if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+			return fmt.Errorf("decode run %q source: %w", run.RunID, err)
+		}
+		if payload.ReadSource != s.readSource {
+			return fmt.Errorf(
+				"%w: run %q uses %q, configured %q",
+				ErrRecoveryReadSourceMismatch,
+				run.RunID,
+				payload.ReadSource,
+				s.readSource,
+			)
+		}
 	}
 	return nil
 }
@@ -1074,23 +1079,31 @@ func (s *Service) handleOutcome(
 		if len(outcome.Interrupts) == 0 {
 			return fmt.Errorf("agent paused without interrupts")
 		}
+		facts, err := s.loadWaybillFacts(ctx, run.WaybillID)
+		if err != nil {
+			return err
+		}
+		analysis := deriveAssessment(facts)
+		evidence := make([]map[string]string, 0, len(analysis.Evidence))
+		for _, item := range analysis.Evidence {
+			evidence = append(evidence, map[string]string{
+				"label": item.Label,
+				"value": item.Value,
+			})
+		}
 		if _, err := s.journal.Append(ctx, run.RunID, audit.Draft{
 			EventID: fmt.Sprintf("run:%s:attribution:%d", run.RunID, planVersion),
 			Actor:   audit.ActorAgent,
 			Type:    audit.EventAttribution,
 			Payload: map[string]any{
-				"summary": "司机疲劳驾驶与服务区长时间停留导致延误，天气因素已排除。",
-				"evidence": []map[string]any{
-					{"label": "连续驾驶", "value": "9 小时"},
-					{"label": "异常停留", "value": "绵阳北服务区 6 小时"},
-					{"label": "天气", "value": "晴，无预警"},
-				},
+				"summary":      analysis.Summary,
+				"evidence":     evidence,
 				"plan_version": planVersion,
 			},
 		}); err != nil {
 			return err
 		}
-		_, err := s.createApproval(ctx, run, planVersion, outcome)
+		_, err = s.createApproval(ctx, run, planVersion, outcome, analysis)
 		if err != nil {
 			return err
 		}
@@ -1125,6 +1138,7 @@ func (s *Service) createApproval(
 	run RunView,
 	planVersion int,
 	outcome agentkit.Outcome,
+	analysis assessment,
 ) (approval.Approval, error) {
 	items := make([]approval.Item, 0, len(outcome.Interrupts))
 	callIDs := make([]string, 0, len(outcome.Interrupts))
@@ -1183,13 +1197,9 @@ func (s *Service) createApproval(
 		WaybillID:   run.WaybillID,
 		PlanVersion: planVersion,
 		Items:       items,
-		Reason:      "降低延误风险并通知货主新的承运安排。",
-		Evidence: []approval.Evidence{
-			{Label: "连续驾驶", Value: "9 小时"},
-			{Label: "异常停留", Value: "绵阳北服务区 6 小时"},
-			{Label: "天气", Value: "晴，无预警"},
-		},
-		ExpiresAt: s.clock().UTC().Add(s.ttl),
+		Reason:      analysis.Reason,
+		Evidence:    append([]approval.Evidence(nil), analysis.Evidence...),
+		ExpiresAt:   s.clock().UTC().Add(s.ttl),
 	}
 	created, err := s.approvals.Create(ctx, value)
 	if err != nil {

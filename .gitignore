@@ -17,7 +17,9 @@ web/.env.local
 # local data
 *.db
 *.sqlite
-data/
+data/*
+!data/templates/
+!data/templates/**
 
 # IDE
 .idea/
