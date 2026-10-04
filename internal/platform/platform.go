@@ -138,6 +138,14 @@ type GetRoadWeatherRequest struct {
 	Route string
 }
 
+type SimulationImpact struct {
+	NoActionETAHours    float64
+	PostActionETAHours  float64
+	AvoidedPenaltyCents int64
+	ReassignDeltaCents  int64
+	HandlingCostCents   int64
+}
+
 type WaybillSummary struct {
 	WaybillID        domain.WaybillID
 	Origin           string
@@ -150,6 +158,7 @@ type WaybillSummary struct {
 	AnomalyLabel     string
 	AnomalyType      string
 	LastRecordedAt   time.Time
+	Impact           *SimulationImpact
 }
 
 type TMSReader interface {

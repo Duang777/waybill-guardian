@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"sort"
 	"strings"
 	"time"
@@ -287,6 +288,15 @@ func (s *Service) Overview(
 		return result.AnomalyDistribution[i].Count > result.AnomalyDistribution[j].Count
 	})
 	result.Brief = buildExecutiveBrief(result)
+	if s.briefGenerator != nil {
+		input := briefInputForOverview(result)
+		generated, generateErr := s.briefGenerator.Generate(ctx, input)
+		if generateErr == nil {
+			if brief, materializeErr := materializeGeneratedBrief(input, generated); materializeErr == nil {
+				result.Brief = brief
+			}
+		}
+	}
 	return result, nil
 }
 
@@ -327,6 +337,7 @@ func (s *Service) KPIs(
 	anomalies := 0
 	observed := 0
 	closed := 0
+	impactPopulation := make([]platform.WaybillSummary, 0)
 	latest := latestRunMap(runs, allowed)
 	for _, item := range catalog {
 		if item.LastRecordedAt.Before(windowStart) || item.LastRecordedAt.After(asOf) {
@@ -337,6 +348,7 @@ func (s *Service) KPIs(
 			continue
 		}
 		anomalies++
+		impactPopulation = append(impactPopulation, item)
 		status := latest[item.WaybillID].Status
 		if status == domain.RunCompleted || status == domain.RunRejected {
 			closed++
@@ -394,6 +406,7 @@ func (s *Service) KPIs(
 		}
 	}
 
+	timeRecovered, costImpact := simulationImpactMetrics(impactPopulation)
 	report := KPIReport{
 		Window: window.String(),
 		AsOf:   asOf,
@@ -401,20 +414,8 @@ func (s *Service) KPIs(
 			EvidenceStepMinutes: s.evidenceStepMinutes,
 		},
 		Metrics: []KPIMetric{
-			unavailableMetric(
-				"time_recovered_hours",
-				"时效挽回",
-				"小时",
-				"sum(不处置预测 ETA - 处置后 ETA)",
-				"数据源未提供不处置预测 ETA 与处置后 ETA",
-			),
-			unavailableMetric(
-				"cost_impact_cny",
-				"成本影响",
-				"元",
-				"sum(避免违约金 - 改派差价 - 处置成本)",
-				"数据源未提供改派价格、违约金与处置成本",
-			),
+			timeRecovered,
+			costImpact,
 			availableMetric(
 				"labor_saved_hours",
 				"人力节省",
@@ -441,6 +442,61 @@ func (s *Service) KPIs(
 		},
 	}
 	return report, nil
+}
+
+func simulationImpactMetrics(
+	items []platform.WaybillSummary,
+) (KPIMetric, KPIMetric) {
+	const (
+		timeFormula = "sum(不处置预测 ETA - 处置后 ETA)"
+		costFormula = "sum(避免违约金 - 改派差价 - 处置成本)"
+	)
+	for _, item := range items {
+		if item.Impact == nil {
+			reason := "窗口内至少一张异常运单缺少完整仿真影响数据"
+			return unavailableMetric(
+					"time_recovered_hours",
+					"时效挽回",
+					"小时",
+					timeFormula,
+					reason,
+				),
+				unavailableMetric(
+					"cost_impact_cny",
+					"成本影响",
+					"元",
+					costFormula,
+					reason,
+				)
+		}
+	}
+
+	recoveredHours := 0.0
+	var costCents big.Int
+	for _, item := range items {
+		impact := item.Impact
+		recoveredHours += impact.NoActionETAHours - impact.PostActionETAHours
+		costCents.Add(&costCents, big.NewInt(impact.AvoidedPenaltyCents))
+		costCents.Sub(&costCents, big.NewInt(impact.ReassignDeltaCents))
+		costCents.Sub(&costCents, big.NewInt(impact.HandlingCostCents))
+	}
+	costCNY, _ := new(big.Rat).
+		SetFrac(&costCents, big.NewInt(100)).
+		Float64()
+	return availableMetric(
+			"time_recovered_hours",
+			"时效挽回",
+			recoveredHours,
+			"小时",
+			timeFormula,
+		),
+		availableMetric(
+			"cost_impact_cny",
+			"成本影响",
+			costCNY,
+			"元",
+			costFormula,
+		)
 }
 
 func (s *Service) scopedCatalog(
@@ -598,142 +654,6 @@ func dataMode(source string) string {
 		return "fixture"
 	default:
 		return "external"
-	}
-}
-
-func buildExecutiveBrief(overview Overview) ExecutiveBrief {
-	items := make([]ExecutiveBriefItem, 0, 3)
-	if len(overview.AnomalyDistribution) > 0 {
-		top := overview.AnomalyDistribution[0]
-		items = append(items, ExecutiveBriefItem{
-			ID:       "anomaly-mix",
-			Headline: "优先治理高频异常类型",
-			Body: fmt.Sprintf(
-				"%s为当前首要异常类型，建议复盘其线路与承运环节的共性。",
-				anomalyTypeLabel(top.Type),
-			),
-			Evidence: []EvidenceCitation{{
-				Label:  anomalyTypeLabel(top.Type),
-				Value:  fmt.Sprintf("%d 单，占异常 %d%%", top.Count, percentage(top.Count, overview.Totals.Anomalies)),
-				Source: "anomaly_distribution",
-			}},
-		})
-	} else {
-		items = append(items, ExecutiveBriefItem{
-			ID:       "anomaly-mix",
-			Headline: "授权范围内暂无异常",
-			Body:     "当前数据快照没有需要升级处置的异常运单。",
-			Evidence: []EvidenceCitation{{
-				Label:  "异常运单",
-				Value:  "0 单",
-				Source: "totals.anomalies",
-			}},
-		})
-	}
-
-	if route, ok := hottestRoute(overview.Routes); ok {
-		items = append(items, ExecutiveBriefItem{
-			ID:       "route-hotspot",
-			Headline: "聚焦异常线路",
-			Body:     "建议把线路级承运能力与天气预案优先投向当前热度最高的线路。",
-			Evidence: []EvidenceCitation{{
-				Label:  string(route.ID),
-				Value:  fmt.Sprintf("%d 单异常，线路热度 %d%%", route.Anomalies, route.DelayHeat),
-				Source: "routes",
-			}},
-		})
-	} else {
-		items = append(items, ExecutiveBriefItem{
-			ID:       "route-hotspot",
-			Headline: "补齐线路经营数据",
-			Body:     "当前授权范围没有可计算的异常线路，暂不提出线路调整建议。",
-			Evidence: []EvidenceCitation{{
-				Label:  "可计算异常线路",
-				Value:  "0 条",
-				Source: "routes",
-			}},
-		})
-	}
-
-	if hub, ok := busiestAnomalyHub(overview.Hubs); ok {
-		items = append(items, ExecutiveBriefItem{
-			ID:       "hub-capacity",
-			Headline: "前置公路港处置资源",
-			Body:     fmt.Sprintf("建议在%s增加异常核验与接驳准备，缩短批量处置等待。", hub.Name),
-			Evidence: []EvidenceCitation{
-				{
-					Label:  "异常运单",
-					Value:  fmt.Sprintf("%d 单", hub.Anomalies),
-					Source: "hubs",
-				},
-				{
-					Label:  "处置中",
-					Value:  fmt.Sprintf("%d 单", hub.Handling),
-					Source: "hubs",
-				},
-			},
-		})
-	} else {
-		items = append(items, ExecutiveBriefItem{
-			ID:       "hub-capacity",
-			Headline: "等待公路港网络数据",
-			Body:     "当前数据源未提供可关联的公路港异常，暂不调整节点资源。",
-			Evidence: []EvidenceCitation{{
-				Label:  "网络数据",
-				Value:  "不可用",
-				Source: "network_available",
-			}},
-		})
-	}
-	return ExecutiveBrief{Mode: "deterministic_read_only", Items: items}
-}
-
-func hottestRoute(routes []RouteOverview) (RouteOverview, bool) {
-	var result RouteOverview
-	found := false
-	for _, route := range routes {
-		if route.Anomalies == 0 {
-			continue
-		}
-		if !found || route.DelayHeat > result.DelayHeat ||
-			(route.DelayHeat == result.DelayHeat && route.MaxRisk > result.MaxRisk) {
-			result = route
-			found = true
-		}
-	}
-	return result, found
-}
-
-func busiestAnomalyHub(hubs []HubOverview) (HubOverview, bool) {
-	var result HubOverview
-	found := false
-	for _, hub := range hubs {
-		if hub.Anomalies == 0 {
-			continue
-		}
-		if !found || hub.Anomalies > result.Anomalies ||
-			(hub.Anomalies == result.Anomalies && hub.ID < result.ID) {
-			result = hub
-			found = true
-		}
-	}
-	return result, found
-}
-
-func anomalyTypeLabel(value string) string {
-	switch value {
-	case "delay":
-		return "时效延误"
-	case "damage":
-		return "货损"
-	case "fatigue":
-		return "疲劳驾驶"
-	case "loss":
-		return "货物丢失"
-	case "weather":
-		return "天气影响"
-	default:
-		return value
 	}
 }
 

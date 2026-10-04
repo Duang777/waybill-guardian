@@ -4,6 +4,7 @@ import {
   confirmApproval,
   getKPIs,
   listWaybills,
+  overviewSchema,
   startBatch,
   startRun,
   waybillIdSchema,
@@ -234,6 +235,44 @@ describe("waybill API", () => {
 
     expect(report.metrics[0]?.value).toBeNull();
     expect(report.metrics[2]?.value).toBe(2);
+  });
+
+  it("accepts a validated read-only model brief", () => {
+    const parsed = overviewSchema.parse({
+      as_of: "2026-10-12T04:24:00Z",
+      data_mode: "simulated",
+      network_available: true,
+      totals: {
+        waybills: 200,
+        anomalies: 67,
+        in_flight: 133,
+        handling: 5,
+        closed: 0,
+      },
+      hubs: [],
+      routes: [],
+      anomalies: [],
+      anomaly_distribution: [],
+      brief: {
+        mode: "model_read_only",
+        items: [
+          {
+            id: "model-brief-1",
+            headline: "治理高频异常",
+            body: "建议复盘共性",
+            evidence: [
+              {
+                label: "时效延误",
+                value: "14 单，占异常 21%",
+                source: "anomaly_distribution",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(parsed.brief.mode).toBe("model_read_only");
   });
 
   it("posts batch IDs and parses independent run outcomes", async () => {

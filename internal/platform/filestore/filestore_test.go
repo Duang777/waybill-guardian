@@ -103,6 +103,89 @@ func TestSnapshotReturnsDefensiveCopies(t *testing.T) {
 	}
 }
 
+func TestSimulationImpactIsValidatedAndDefensivelyCopied(t *testing.T) {
+	draft := validDraft()
+	draft.Waybills[0].Impact = &impactDraft{
+		NoActionETAHours:    42.5,
+		PostActionETAHours:  31,
+		AvoidedPenaltyCents: 180_000,
+		ReassignDeltaCents:  28_000,
+		HandlingCostCents:   7_500,
+	}
+	raw, err := json.Marshal(draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadEmbeddedJSON("impact.json", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := loaded.Reads.Catalog.ListWaybills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := platform.SimulationImpact{
+		NoActionETAHours:    42.5,
+		PostActionETAHours:  31,
+		AvoidedPenaltyCents: 180_000,
+		ReassignDeltaCents:  28_000,
+		HandlingCostCents:   7_500,
+	}
+	if catalog[0].Impact == nil || *catalog[0].Impact != want {
+		t.Fatalf("impact = %+v, want %+v", catalog[0].Impact, want)
+	}
+
+	catalog[0].Impact.NoActionETAHours = 999
+	again, err := loaded.Reads.Catalog.ListWaybills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again[0].Impact == nil || *again[0].Impact != want {
+		t.Fatalf("catalog impact mutation changed snapshot: %+v", again[0].Impact)
+	}
+}
+
+func TestSimulationImpactRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		impact impactDraft
+		want   string
+	}{
+		{
+			name: "post action exceeds baseline",
+			impact: impactDraft{
+				NoActionETAHours:   10,
+				PostActionETAHours: 11,
+			},
+			want: "post_action_eta_hours: must not exceed no_action_eta_hours",
+		},
+		{
+			name: "negative monetary input",
+			impact: impactDraft{
+				NoActionETAHours:    10,
+				PostActionETAHours:  8,
+				HandlingCostCents:   -1,
+				AvoidedPenaltyCents: 1,
+			},
+			want: "handling_cost_cents: must not be negative",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			draft := validDraft()
+			draft.Waybills[0].Impact = &test.impact
+			raw, err := json.Marshal(draft)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = LoadEmbeddedJSON("invalid-impact.json", raw)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want substring %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestCatalogIsSortedByWaybillID(t *testing.T) {
 	draft := validDraft()
 	draft.Waybills[0], draft.Waybills[1] = draft.Waybills[1], draft.Waybills[0]
@@ -337,6 +420,9 @@ func TestCSVNetworkExtension(t *testing.T) {
 			"vehicle_id": "VEHICLE-1", "cargo": "医疗器械",
 			"current_carrier_id": "CARRIER-1", "driver_id": "DRIVER-1",
 			"status": "delay", "sla_hours": "18", "shipper_phone": "13800004101",
+			"no_action_eta_hours": "31", "post_action_eta_hours": "24",
+			"avoided_penalty_cents": "120000", "reassign_delta_cents": "20000",
+			"handling_cost_cents": "5000",
 		},
 		{
 			"record_type": "driver", "driver_id": "DRIVER-1",
@@ -399,6 +485,30 @@ func TestCSVNetworkExtension(t *testing.T) {
 		Routes:    1,
 	}) {
 		t.Fatalf("stats = %+v", loaded.Stats)
+	}
+	catalog, err := loaded.Reads.Catalog.ListWaybills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog) != 1 || catalog[0].Impact == nil ||
+		catalog[0].Impact.NoActionETAHours != 31 ||
+		catalog[0].Impact.PostActionETAHours != 24 ||
+		catalog[0].Impact.AvoidedPenaltyCents != 120_000 {
+		t.Fatalf("catalog impact = %+v", catalog)
+	}
+
+	incomplete := bytes.Replace(
+		raw.Bytes(),
+		[]byte(",31,24,120000,20000,5000\n"),
+		[]byte(",31,,120000,20000,5000\n"),
+		1,
+	)
+	_, err = loadBytes("csv", incomplete)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"simulation_impact: requires all five simulation impact values",
+	) {
+		t.Fatalf("incomplete impact error = %v", err)
 	}
 }
 

@@ -203,12 +203,53 @@ func validateWaybill(
 			"must not be negative",
 		)
 	}
+	validateSimulationImpact(collector, waybill)
 	validateRequiredText(
 		collector,
 		waybill.location,
 		"shipper_phone",
 		waybill.ShipperPhone,
 	)
+}
+
+func validateSimulationImpact(collector *issueCollector, waybill waybillDraft) {
+	if waybill.Impact == nil {
+		return
+	}
+	location := waybill.location + ".impact"
+	impact := waybill.Impact
+	for field, value := range map[string]float64{
+		"no_action_eta_hours":   impact.NoActionETAHours,
+		"post_action_eta_hours": impact.PostActionETAHours,
+	} {
+		if !finite(value) || value < 0 {
+			collector.add(
+				location,
+				field,
+				"invalid_duration",
+				"must be a finite non-negative number",
+			)
+		}
+	}
+	if finite(impact.NoActionETAHours) &&
+		finite(impact.PostActionETAHours) &&
+		impact.PostActionETAHours > impact.NoActionETAHours {
+		collector.add(
+			location,
+			"post_action_eta_hours",
+			"invalid_sequence",
+			"must not exceed no_action_eta_hours",
+		)
+	}
+	for field, value := range map[string]int64{
+		"avoided_penalty_cents": impact.AvoidedPenaltyCents,
+		"reassign_delta_cents":  impact.ReassignDeltaCents,
+		"handling_cost_cents":   impact.HandlingCostCents,
+	} {
+		if value < 0 {
+			collector.add(location, field, "negative", "must not be negative")
+		}
+	}
 }
 
 func validateHubs(

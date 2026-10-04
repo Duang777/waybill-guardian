@@ -170,7 +170,7 @@ export const overviewSchema = z
     ),
     brief: z
       .object({
-        mode: z.literal("deterministic_read_only"),
+        mode: z.enum(["deterministic_read_only", "model_read_only"]),
         items: z.array(executiveBriefItemSchema),
       })
       .strict(),

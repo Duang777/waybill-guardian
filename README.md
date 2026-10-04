@@ -30,7 +30,7 @@
 
 调度员少做的是在几个系统之间来回查证据。人仍然决定是否改派、是否赔付、是否发通知。复核时按审计序号重放。
 
-经营总览按下文口径计算人力节省、异常闭环率、平均处置时长和审批通过率。数据文件还没有时效基线与成本字段，因此时效挽回和成本影响会明确显示为不可用，不会用仿真假设补值。单运单页面的三项风险分由 [`internal/guardian/assessment.go`](internal/guardian/assessment.go) 的 `deriveAssessment` 计算，并限制在 0 到 100。运单状态的比较不区分大小写。状态不是 `delivered` 时，ETA 分先取 20，每个异常点再加 15，再加上停留小时乘以 8 后四舍五入。路况分是连续驾驶小时乘以 5 后四舍五入，疲劳预警再加 30。天气分取各段预警的最大值。`none`、`normal`、`green` 和空值为 0，`low`、`blue`、`yellow` 为 30，`medium`、`orange` 为 60，`high`、`red`、`critical` 为 90，其余为 20。内置样例因此显示 ETA 83、路况 75、天气 0。
+经营总览按下文口径计算时效挽回、成本影响、人力节省、异常闭环率、平均处置时长和审批通过率。仿真数据为异常运单提供可复现的时效与成本影响字段；外部数据缺少完整影响记录时，两项 KPI 显示 `unavailable`，服务不会补值。单运单页面的三项风险分由 [`internal/guardian/assessment.go`](internal/guardian/assessment.go) 的 `deriveAssessment` 计算，并限制在 0 到 100。运单状态的比较不区分大小写。状态不是 `delivered` 时，ETA 分先取 20，每个异常点再加 15，再加上停留小时乘以 8 后四舍五入。路况分是连续驾驶小时乘以 5 后四舍五入，疲劳预警再加 30。天气分取各段预警的最大值。`none`、`normal`、`green` 和空值为 0，`low`、`blue`、`yellow` 为 30，`medium` 和 `orange` 为 60，`high`、`red` 和 `critical` 为 90，其余为 20。内置样例因此显示 ETA 83、路况 75、天气 0。
 
 `./scripts/demo.sh`、`npm run record:demo` 和容器默认使用 `AGENT_MODE=online`。在线模型先调用四个只读工具，再输出结构化提案和写工具调用。服务端校验提案 schema、候选承运商、写参数和每条证据引用；校验失败时只允许修复一次，第二次失败转人工复核。模型模式、模型名、API 风格、调用时延和 token 用量写入审计时间线。
 
@@ -314,7 +314,11 @@ env -u GOROOT go run ./cmd/dataimport validate \
 ### 经营总览和 KPI
 
 `GET /api/overview` 返回授权范围内的港口、线路、异常队列和三条经营简报。服务先按
-`waybill_id` 授权范围过滤，再计算所有总数和比例。简报只读取聚合结果，不调用写工具。
+`waybill_id` 授权范围过滤，再计算所有总数和比例。`AGENT_MODE=offline` 返回确定性简报，
+`demo` 是兼容别名。
+`AGENT_MODE=online` 使用独立的无工具、无历史模型调用生成简报。模型只接收不含运单、线路、
+港口、人员或车辆身份的聚合计数，并只能引用服务端提供的证据 ID。服务端据此重建展示引用。
+模型调用、解析、隐私或引用校验失败时，接口仍以 HTTP 200 返回确定性简报。
 
 `POST /api/runs:batch` 接受最多 20 个 `waybill_id`。服务为每个运单调用一次 `StartRun`，
 并返回逐项成功或失败结果。`MAX_CONCURRENT_RUNS` 限制同时执行的调查任务。每个已接受的
@@ -325,15 +329,17 @@ run 使用独立的 `run_id`、审批记录和 SSE 时间线。
 
 | KPI | 公式 | 数据不足时的结果 |
 |---|---|---|
-| 时效挽回 | `sum(不处置预测 ETA - 处置后 ETA)` | 缺少两个 ETA 字段时返回 `unavailable` |
-| 成本影响 | `sum(避免违约金 - 改派差价 - 处置成本)` | 缺少价格和成本字段时返回 `unavailable` |
+| 时效挽回 | `sum(no_action_eta_hours - post_action_eta_hours)` | 窗口内任一异常运单缺少完整影响数据时返回 `unavailable` |
+| 成本影响 | `sum(avoided_penalty_cents - reassign_delta_cents - handling_cost_cents) / 100` | 窗口内任一异常运单缺少完整影响数据时返回 `unavailable` |
 | 人力节省 | `成功自动证据采集步数 * EVIDENCE_STEP_MINUTES / 60` | 没有采集事件时返回 `0` 小时 |
 | 异常闭环率 | `已完成或已驳回处置的异常运单数 / 窗口内异常运单数 * 100%` | 没有异常运单时返回 `0%` |
 | 平均处置时长 | `sum(终态时间 - 启动时间) / 窗口内闭环 run 数` | 没有闭环 run 时返回 `unavailable` |
 | 人工审批通过率 | `人工确认数 / 人工决定数 * 100%` | 没有人工决定时返回 `unavailable` |
 
-时效挽回和成本影响不会用仿真假设补值。接入正式数据后，adapter 必须提供计算公式所需的
-基线、结果和成本字段。
+JSON 运单可选提供完整 `impact` 对象；CSV 可选提供同名的五列扩展。五个值必须整组出现。
+ETA 使用小时，金额使用整数分，服务先以整数分求和，最后统一换算为元。仿真数据为异常
+运单提供可复现的演示值；正式 adapter 必须提供同一口径的基线、结果和成本事实，服务不会
+用均值或默认值补齐缺失记录。窗口内没有异常时，两项指标均为可用的零值。
 
 ### 在线模型
 
@@ -361,6 +367,8 @@ LLM_MODEL=deepseek-v4-flash \
 `LLM_API_STYLE` 默认是 `responses`。`LLM_BASE_URL` 必须是 API 根路径，不能以 `/` 结尾，也不能带上 `/responses` 或 `/chat/completions`。在线模式只配置一个 provider，没有 provider fallback。一次模型调用最多尝试三次，包含第一次。服务会把每次调用的 token 用量和时延写入审计事件，但不会设置消费限额。
 
 调用模型会产生费用，并把脱敏后的运单证据发送给所选提供商。部署方必须在调用前核对当前模型名、价格、数据处理规则和服务条款。各家的条款入口登记在 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。仓库的自动测试只验证兼容协议，不替代真实服务验收。
+
+在线经营简报不复用处置 Agent，也不改变 issue 59 的处置推理范围。
 
 ### 平台
 
@@ -472,7 +480,7 @@ hastekit `agent-sdk-go` v0.0.24 以 Go module 引入，许可证是 Apache-2.0�
 |---|---|
 | [59](https://github.com/Duang777/waybill-guardian/issues/59) | 演示改为真实模型推理，补结构化证据引用 |
 | [60](https://github.com/Duang777/waybill-guardian/issues/60) | 已关闭。启动时加载 JSON 或 CSV v1，并在页面上选择运单 |
-| [61](https://github.com/Duang777/waybill-guardian/issues/61) | 已完成。多公路港总览、KPI、异常队列和批量启动 |
+| [61](https://github.com/Duang777/waybill-guardian/issues/61) | 已完成。多公路港总览、价值 KPI、只读模型简报和批量启动 |
 | [62](https://github.com/Duang777/waybill-guardian/issues/62) | 已完成。Apache-2.0、传递依赖清单和 `.mailmap` |
 | [64](https://github.com/Duang777/waybill-guardian/issues/64) | 非 GET 请求的 CSRF 检查 |
 | [65](https://github.com/Duang777/waybill-guardian/issues/65) | 已完成。单容器镜像和 Docker Compose |

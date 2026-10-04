@@ -57,20 +57,29 @@ type datasetDraft struct {
 }
 
 type waybillDraft struct {
-	WaybillID        string `json:"waybill_id"`
-	Origin           string `json:"origin"`
-	Destination      string `json:"destination"`
-	OriginHubID      string `json:"origin_hub_id,omitempty"`
-	DestinationHubID string `json:"destination_hub_id,omitempty"`
-	RouteID          string `json:"route_id,omitempty"`
-	VehicleID        string `json:"vehicle_id,omitempty"`
-	Cargo            string `json:"cargo"`
-	CurrentCarrierID string `json:"current_carrier_id"`
-	DriverID         string `json:"driver_id"`
-	Status           string `json:"status"`
-	SLAHours         int    `json:"sla_hours"`
-	ShipperPhone     string `json:"shipper_phone"`
+	WaybillID        string       `json:"waybill_id"`
+	Origin           string       `json:"origin"`
+	Destination      string       `json:"destination"`
+	OriginHubID      string       `json:"origin_hub_id,omitempty"`
+	DestinationHubID string       `json:"destination_hub_id,omitempty"`
+	RouteID          string       `json:"route_id,omitempty"`
+	VehicleID        string       `json:"vehicle_id,omitempty"`
+	Cargo            string       `json:"cargo"`
+	CurrentCarrierID string       `json:"current_carrier_id"`
+	DriverID         string       `json:"driver_id"`
+	Status           string       `json:"status"`
+	SLAHours         int          `json:"sla_hours"`
+	ShipperPhone     string       `json:"shipper_phone"`
+	Impact           *impactDraft `json:"impact,omitempty"`
 	sourceRef
+}
+
+type impactDraft struct {
+	NoActionETAHours    float64 `json:"no_action_eta_hours"`
+	PostActionETAHours  float64 `json:"post_action_eta_hours"`
+	AvoidedPenaltyCents int64   `json:"avoided_penalty_cents"`
+	ReassignDeltaCents  int64   `json:"reassign_delta_cents"`
+	HandlingCostCents   int64   `json:"handling_cost_cents"`
 }
 
 type hubDraft struct {

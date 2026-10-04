@@ -30,7 +30,7 @@ After a delay, damage, or loss, waybill-guardian reads the waybill, tracking, dr
 
 The agent collects waybill, tracking, driver, and weather evidence before the person decides whether to reassign, open a claim, or send a notice. Reviewers replay the audit by sequence number.
 
-The overview calculates labor saved, anomaly closure rate, average handling time, and approval rate from the documented formulas below. The data file does not yet provide ETA baselines or cost fields, so time recovered and cost impact are explicitly unavailable instead of being filled with simulated assumptions. The three scores on the waybill page come from `deriveAssessment` in [`internal/guardian/assessment.go`](internal/guardian/assessment.go), clamped to 0 through 100. Status matching ignores case. When it is not `delivered`, the ETA score starts at 20, adds 15 for each anomaly point, then adds stop hours times 8, rounded. The road score is continuous driving hours times 5, rounded, plus 30 when the fatigue alert is set. The weather score is the highest segment alert. `none`, `normal`, `green`, and an empty value are 0. `low`, `blue`, and `yellow` are 30. `medium` and `orange` are 60. `high`, `red`, and `critical` are 90. Any other value is 20. The embedded fixture therefore shows ETA 83, road 75, and weather 0.
+The overview calculates time recovered, cost impact, labor saved, anomaly closure rate, average handling time, and approval rate from the documented formulas below. The simulated data provides reproducible ETA and cost-impact fields for anomalous waybills. If external data omits a complete impact record, the two affected KPIs show `unavailable`. The service does not fill missing values. The three scores on the waybill page come from `deriveAssessment` in [`internal/guardian/assessment.go`](internal/guardian/assessment.go), clamped to 0 through 100. Status matching ignores case. When it is not `delivered`, the ETA score starts at 20, adds 15 for each anomaly point, then adds stop hours times 8, rounded. The road score is continuous driving hours times 5, rounded, plus 30 when the fatigue alert is set. The weather score is the highest segment alert. `none`, `normal`, `green`, and an empty value are 0. `low`, `blue`, and `yellow` are 30. `medium` and `orange` are 60. `high`, `red`, and `critical` are 90. Any other value is 20. The embedded fixture therefore shows ETA 83, road 75, and weather 0.
 
 `./scripts/demo.sh`, `npm run record:demo`, and the container use `AGENT_MODE=online` by default. The online model calls the four read tools before it returns a structured proposal and write-tool calls. The server checks the proposal schema, candidate carriers, write arguments, and every evidence reference. It allows one repair after a validation failure, then sends a second failure to manual review. The audit records the inference mode, model, API style, latency, and token usage.
 
@@ -316,26 +316,35 @@ not operational data.
 ### Operating overview and KPIs
 
 `GET /api/overview` returns authorized highway ports, routes, the anomaly queue, and three cited
-operating briefs. The service filters the waybill scope before calculating totals and ratios. The
-brief reads aggregate data only and cannot invoke write tools.
+operating briefs. The service filters the waybill scope before calculating totals and ratios.
+`AGENT_MODE=offline` returns the deterministic brief, and `demo` is an alias. `AGENT_MODE=online`
+uses an independent model call without tools or history. The model receives aggregate counts
+without waybill, route, port, person, or vehicle identities. It can cite only evidence IDs supplied
+by the server, which rebuilds the displayed references. If the model call, parsing, privacy check,
+or citation check fails, the endpoint returns the deterministic brief with HTTP 200.
 
 `POST /api/runs:batch` accepts up to 20 `waybill_id` values and returns an independent result for
 each one. `MAX_CONCURRENT_RUNS` limits concurrent investigations. Every accepted run has its own
 `run_id`, approval record, and SSE timeline.
 
-`GET /api/kpis?window=24h` uses these formulas:
+`GET /api/kpis?window=24h` uses these formulas. The window ends at the latest anomalous waybill
+`last_recorded_at` in the authorized scope, or at a later audit event time.
 
 | KPI | Formula | Result when data is missing |
 |---|---|---|
-| Time recovered | `sum(baseline ETA without action - ETA after action)` | `unavailable` without both ETA fields |
-| Cost impact | `sum(avoided penalty - reassignment delta - handling cost)` | `unavailable` without cost fields |
+| Time recovered | `sum(no_action_eta_hours - post_action_eta_hours)` | `unavailable` when any anomalous waybill in the window lacks a complete impact record |
+| Cost impact | `sum(avoided_penalty_cents - reassign_delta_cents - handling_cost_cents) / 100` | `unavailable` when any anomalous waybill in the window lacks a complete impact record |
 | Labor saved | `successful evidence steps * EVIDENCE_STEP_MINUTES / 60` | `0` hours without evidence events |
 | Anomaly closure rate | `completed or rejected anomaly runs / anomalous waybills * 100%` | `0%` without anomalous waybills |
 | Average handling time | `sum(terminal time - start time) / closed runs` | `unavailable` without closed runs |
 | Approval rate | `confirmed decisions / human decisions * 100%` | `unavailable` without decisions |
 
-The service does not invent values for time recovered or cost impact. A production adapter must
-provide the baseline, result, and cost fields required by those formulas.
+A JSON waybill can include one complete `impact` object. CSV input can include the five fields with
+the same names. All five values must appear together. ETA values use hours, and monetary values use
+integer cents. The service sums cents before converting the result to yuan. The simulated data
+provides reproducible values for anomalous waybills. A production adapter must provide the same
+facts, and the service does not fill incomplete records with averages or defaults. Both KPIs are
+available with a zero value when the window contains no anomalies.
 
 ### Online model
 
@@ -363,6 +372,8 @@ The following domestic providers expose compatible Chat Completions APIs. Model 
 `LLM_API_STYLE` defaults to `responses`. `LLM_BASE_URL` must be the API root. It must not end in `/`, and it must not include `/responses` or `/chat/completions`. Online mode configures one provider and does not enable provider fallback. A model call is attempted at most three times, including the first try. The audit records token usage and latency for every model call, but the server does not enforce a spending limit.
 
 Model calls incur provider charges and send redacted waybill evidence to the selected provider. Before a deployment calls a provider, the operator must review its current model IDs, prices, data rules, and service terms. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists the terms pages. The automated suite tests protocol compatibility, not a live provider.
+
+The online operating brief does not reuse the handling agent or change the handling inference scope in issue 59.
 
 ### Platform
 

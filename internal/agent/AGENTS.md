@@ -85,3 +85,8 @@ hastekit 自己根据 `RequiresApproval` 在首次写调用前暂停。项目 mi
 provider fallback。测试覆盖两个 API style、鉴权 header、模型名、配置校验和 503 重试。
 协议级 fake provider 还会让三张不同异常运单完成四类证据读取，并停在三个写操作的审批前。
 该测试不等同于真实模型服务验收。
+
+经营简报使用独立的 `BriefGenerator` 直接调用同一 provider。它只接收授权范围内的聚合计数，
+不创建 Agent、thread 或 session，不加载或保存 history，不注册工具，并固定 `Store=false`。
+请求和响应都经过同一隐私校验；三条建议必须引用服务端提供的语义 evidence ID，展示标签和值
+由 `internal/guardian` 重建。总调用预算为 1.5 秒，失败时总览保留确定性简报。

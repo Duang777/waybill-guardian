@@ -40,6 +40,7 @@ type Config struct {
 	MaxConcurrentRuns   int
 	EvidenceStepMinutes float64
 	Model               agentkit.ModelConfig
+	BriefGenerator      agentkit.BriefGenerator
 }
 
 type RunCoordinator interface {
@@ -119,6 +120,7 @@ type Service struct {
 	effects         idempotency.Executor
 	registry        *guardtools.Registry
 	engine          *agentkit.Engine
+	briefGenerator  agentkit.BriefGenerator
 	coordinator     RunCoordinator
 	recovery        audit.RecoveryJournal
 
@@ -212,6 +214,13 @@ func openService(
 	if err != nil {
 		return closeJournal(err)
 	}
+	briefGenerator := config.BriefGenerator
+	if briefGenerator == nil {
+		briefGenerator, err = agentkit.NewBriefGenerator(config.Model)
+		if err != nil {
+			return closeJournal(err)
+		}
+	}
 	middlewares := []agents.Middleware{
 		agentkit.NewAuditMiddleware(journal),
 		agentkit.NewReadBindingMiddleware(config.Reads),
@@ -257,6 +266,7 @@ func openService(
 		effects:             effects,
 		registry:            registry,
 		engine:              engine,
+		briefGenerator:      briefGenerator,
 		coordinator:         coordinator,
 		recovery:            recovery,
 		runs:                make(map[domain.RunID]RunView),

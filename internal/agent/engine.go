@@ -203,12 +203,12 @@ func NewEngineWithPersistence(
 }
 
 func prepareModel(modelConfig ModelConfig) (InferenceDescriptor, llm.Provider, error) {
-	mode := strings.ToLower(strings.TrimSpace(modelConfig.Mode))
-	if mode == "" || mode == ModeDemo {
-		mode = ModeOffline
+	mode, err := normalizeModelMode(modelConfig.Mode)
+	if err != nil {
+		return InferenceDescriptor{}, nil, err
 	}
 	if mode == ModeOnline {
-		onlineModel, err := newOnlineModel(modelConfig)
+		onlineModel, modelErr := newOnlineModel(modelConfig)
 		apiStyle := strings.ToLower(strings.TrimSpace(modelConfig.APIStyle))
 		if apiStyle == "" {
 			apiStyle = APIStyleResponses
@@ -217,12 +217,20 @@ func prepareModel(modelConfig ModelConfig) (InferenceDescriptor, llm.Provider, e
 			Mode:     mode,
 			APIStyle: apiStyle,
 			Model:    strings.TrimSpace(modelConfig.Model),
-		}, onlineModel, err
-	}
-	if mode != ModeOffline {
-		return InferenceDescriptor{}, nil, fmt.Errorf("AGENT_MODE must be offline, demo, or online")
+		}, onlineModel, modelErr
 	}
 	return InferenceDescriptor{Mode: mode}, nil, nil
+}
+
+func normalizeModelMode(value string) (string, error) {
+	switch mode := strings.ToLower(strings.TrimSpace(value)); mode {
+	case "", ModeDemo, ModeOffline:
+		return ModeOffline, nil
+	case ModeOnline:
+		return ModeOnline, nil
+	default:
+		return "", fmt.Errorf("AGENT_MODE must be offline, demo, or online")
+	}
 }
 
 func newEngine(
