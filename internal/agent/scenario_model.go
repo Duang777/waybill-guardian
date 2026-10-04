@@ -55,9 +55,9 @@ func (m *ScenarioModel) NewStreamingResponses(
 		{domain.ActionGetDriver, guardtools.GetDriverInput{DriverID: "DRV-0286"}},
 		{domain.ActionGetRoadWeather, guardtools.GetRoadWeatherInput{Route: "杭州-成都"}},
 	} {
-		wireName, ok := m.registry.WireName(step.action)
+		wireName, ok := m.registry.ActiveWireName(step.action)
 		if !ok {
-			return nil, fmt.Errorf("tool %q is not registered", step.action)
+			return nil, fmt.Errorf("tool capability %q is unavailable", step.action)
 		}
 		if !state.hasResult(wireName) {
 			return &responses.Response{
@@ -68,8 +68,11 @@ func (m *ScenarioModel) NewStreamingResponses(
 		}
 	}
 
-	reassignWire, _ := m.registry.WireName(domain.ActionReassign)
-	smsWire, _ := m.registry.WireName(domain.ActionSendSMS)
+	reassignWire, ok := m.registry.ActiveWireName(domain.ActionReassign)
+	if !ok {
+		return nil, fmt.Errorf("tool capability %q is unavailable", domain.ActionReassign)
+	}
+	smsWire, smsActive := m.registry.ActiveWireName(domain.ActionSendSMS)
 	reassignCalls := state.calls[reassignWire]
 	if reassignCalls == 0 {
 		return m.proposal(runContext, 1, "CARRIER-SW-42",
@@ -82,8 +85,13 @@ func (m *ScenarioModel) NewStreamingResponses(
 		}
 		return textResponse("两个改派方案均被驳回，本次处置结束并转人工跟进。"), nil
 	}
-	if state.hasSuccessfulResult(reassignWire) && state.successfulResultCount(smsWire) >= 2 {
-		return textResponse("改派已完成，货主和司机通知已发送，处置过程已写入审计时间线。"), nil
+	if state.hasSuccessfulResult(reassignWire) {
+		if !smsActive {
+			return textResponse("改派已完成，处置过程已写入审计时间线。"), nil
+		}
+		if state.successfulResultCount(smsWire) >= 2 {
+			return textResponse("改派已完成，货主和司机通知已发送，处置过程已写入审计时间线。"), nil
+		}
 	}
 	return textResponse("写操作未全部成功，本次处置转人工检查。"), nil
 }
@@ -94,11 +102,18 @@ func (m *ScenarioModel) proposal(
 	carrierID string,
 	summary string,
 ) *responses.Response {
-	reassignWire, _ := m.registry.WireName(domain.ActionReassign)
-	smsWire, _ := m.registry.WireName(domain.ActionSendSMS)
+	reassignWire, _ := m.registry.ActiveWireName(domain.ActionReassign)
 	reassign := guardtools.ReassignInput{
 		WaybillID: string(runContext.WaybillID),
 		CarrierID: carrierID,
+	}
+	output := []responses.OutputMessageUnion{
+		assistantText(summary),
+		toolCall(runContext.RunID, reassignWire, planVersion, reassign),
+	}
+	smsWire, smsActive := m.registry.ActiveWireName(domain.ActionSendSMS)
+	if !smsActive {
+		return &responses.Response{Output: output}
 	}
 	shipperSMS := guardtools.SendSMSInput{
 		WaybillID: string(runContext.WaybillID),
@@ -110,12 +125,11 @@ func (m *ScenarioModel) proposal(
 		Recipient: guardtools.RecipientDriver,
 		CarrierID: carrierID,
 	}
-	return &responses.Response{Output: []responses.OutputMessageUnion{
-		assistantText(summary),
-		toolCall(runContext.RunID, reassignWire, planVersion, reassign),
+	output = append(output,
 		toolCall(runContext.RunID, smsWire, planVersion, shipperSMS),
 		toolCall(runContext.RunID, smsWire, planVersion, driverSMS),
-	}}
+	)
+	return &responses.Response{Output: output}
 }
 
 type conversationState struct {

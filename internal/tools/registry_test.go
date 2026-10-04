@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -186,6 +187,70 @@ func TestParseWriteRejectsUnknownExecutionFields(t *testing.T) {
 	}
 	if legacy.LegacyKey != "old-key" || strings.Contains(string(legacy.Arguments), "idempotency_key") {
 		t.Fatalf("legacy canonical write = %+v", legacy)
+	}
+}
+
+func TestExecutionRegistrySeparatesActiveAndHistoricalTools(t *testing.T) {
+	clients, _, err := NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlers, err := NewHandlers(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := []domain.Action{
+		domain.ActionGetWaybill,
+		domain.ActionGetTracking,
+		domain.ActionGetDriver,
+		domain.ActionGetRoadWeather,
+		domain.ActionReassign,
+	}
+	registry, err := NewRegistryForActions(handlers, active)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(registry.Definitions()) != 7 || len(registry.Tools()) != 7 {
+		t.Fatalf(
+			"execution registry = definitions:%d tools:%d, want 7 each",
+			len(registry.Definitions()),
+			len(registry.Tools()),
+		)
+	}
+	if len(registry.ActiveDefinitions()) != len(active) {
+		t.Fatalf("active definitions = %d, want %d", len(registry.ActiveDefinitions()), len(active))
+	}
+	if !registry.IsActiveAction(domain.ActionReassign) ||
+		registry.IsActiveAction(domain.ActionCreateClaim) ||
+		registry.IsActiveWireName("notify_send_sms") {
+		t.Fatalf("unexpected active actions: %+v", registry.ActiveDefinitions())
+	}
+
+	claim := json.RawMessage(`{"waybill_id":"YD2026101001","claim_type":"damage"}`)
+	if _, err := registry.ParseWrite("tms_create_claim", claim); err != nil {
+		t.Fatalf("historical parser rejected catalog tool: %v", err)
+	}
+	if _, err := registry.ParseActiveWrite("tms_create_claim", claim); !errors.Is(
+		err,
+		ErrCapabilityUnavailable,
+	) {
+		t.Fatalf("inactive write error = %v, want ErrCapabilityUnavailable", err)
+	}
+}
+
+func TestExecutionRegistryRejectsUnknownActiveAction(t *testing.T) {
+	clients, _, err := NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlers, err := NewHandlers(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewRegistryForActions(handlers, []domain.Action{"tms.unknown"})
+	if !errors.Is(err, ErrCapabilityUnavailable) {
+		t.Fatalf("error = %v, want ErrCapabilityUnavailable", err)
 	}
 }
 

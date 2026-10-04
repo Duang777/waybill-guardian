@@ -25,6 +25,7 @@ import (
 type Config struct {
 	DataDir          string
 	Clients          platform.Clients
+	ActiveActions    []domain.Action
 	Clock            func() time.Time
 	ApprovalTTL      time.Duration
 	HistoryRetention time.Duration
@@ -170,7 +171,12 @@ func openService(
 	if err != nil {
 		return closeJournal(err)
 	}
-	registry, err := guardtools.NewRegistry(handlers)
+	var registry *guardtools.Registry
+	if config.ActiveActions == nil {
+		registry, err = guardtools.NewRegistry(handlers)
+	} else {
+		registry, err = guardtools.NewRegistryForActions(handlers, config.ActiveActions)
+	}
 	if err != nil {
 		return closeJournal(err)
 	}
@@ -1024,7 +1030,7 @@ func (s *Service) createApproval(
 		PlanVersion: planVersion,
 	}
 	for _, interrupt := range outcome.Interrupts {
-		write, err := s.registry.ParseWrite(interrupt.WireName, interrupt.Arguments)
+		write, err := s.registry.ParseActiveWrite(interrupt.WireName, interrupt.Arguments)
 		if err != nil {
 			return approval.Approval{}, err
 		}

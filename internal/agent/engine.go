@@ -204,6 +204,7 @@ func newEngine(
 			agentmiddleware.NewRetry(agentmiddleware.RetryConfig{MaxAttempts: 3}),
 		)
 	}
+	middlewares = append(middlewares, NewCapabilityModelMiddleware(registry))
 	options.Middlewares = protectModelBoundary(middlewares)
 	if mode == ModeOnline {
 		sdkAgent = agents.NewAgent(options)
