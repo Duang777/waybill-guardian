@@ -30,6 +30,7 @@ try {
     cwd: repoDir,
     env: {
       ...goEnvironment,
+      AGENT_MODE: "offline",
       AUTH_MODE: "local",
       DATA_DIR: dataDir,
       DATA_FILE: dataFile,

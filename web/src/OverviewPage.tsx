@@ -470,8 +470,13 @@ function statusFromEvent(event: AuditEvent): RunStatus | null {
     case "run_failed":
     case "approval_execution_failed":
       return "failed";
+    case "run_review_required":
+      return "review_required";
+    case "model_call_started":
+    case "model_call_finished":
     case "tool_call":
     case "tool_result":
+    case "proposal_prepared":
     case "attribution":
       return "investigating";
     default:
@@ -480,7 +485,12 @@ function statusFromEvent(event: AuditEvent): RunStatus | null {
 }
 
 function isTerminal(status: RunStatus): boolean {
-  return status === "completed" || status === "rejected" || status === "failed";
+  return (
+    status === "completed" ||
+    status === "rejected" ||
+    status === "failed" ||
+    status === "review_required"
+  );
 }
 
 function runStatusLabel(status: RunStatus | undefined): string {
@@ -498,6 +508,8 @@ function runStatusLabel(status: RunStatus | undefined): string {
       return "已驳回";
     case "failed":
       return "需介入";
+    case "review_required":
+      return "提案待复核";
     case "manual_review":
       return "人工复核";
     default:
@@ -520,7 +532,11 @@ function statusClass(
   ) {
     return classNames.statusActive;
   }
-  if (status === "failed" || status === "manual_review") {
+  if (
+    status === "failed" ||
+    status === "review_required" ||
+    status === "manual_review"
+  ) {
     return classNames.statusDanger;
   }
   return classNames.statusIdle;

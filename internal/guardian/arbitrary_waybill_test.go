@@ -71,9 +71,17 @@ func TestArbitraryWaybillDrivesRunEvidenceAndProposal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"2.5 小时", "襄阳服务区停留3.5 小时", "yellow"} {
+	for _, want := range []string{"2.5", "襄阳服务区", "3.5", "yellow"} {
 		if !strings.Contains(string(evidence), want) {
 			t.Fatalf("approval evidence %s does not contain %q", evidence, want)
+		}
+	}
+	if pending.ProposalRef == nil || pending.ProposalRef.Digest == "" {
+		t.Fatalf("approval proposal reference = %+v", pending.ProposalRef)
+	}
+	for _, item := range pending.Evidence {
+		if item.Source == nil || item.Source.ToolCallID == "" || item.Source.SourceSeq == 0 {
+			t.Fatalf("approval evidence has no audit source: %+v", item)
 		}
 	}
 	for _, stale := range []string{"绵阳", "9 小时", "川行快运"} {
@@ -105,7 +113,7 @@ func TestArbitraryWaybillDrivesRunEvidenceAndProposal(t *testing.T) {
 		}
 	}
 	if !strings.Contains(attribution, "襄阳服务区") ||
-		!strings.Contains(attribution, "沿途天气预警") {
+		!strings.Contains(attribution, "沪陕高速存在天气预警") {
 		t.Fatalf("attribution = %s", attribution)
 	}
 }

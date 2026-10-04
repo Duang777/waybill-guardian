@@ -2,9 +2,12 @@ import { z } from "zod";
 import {
   approvalSchema,
   approvalStatusSchema,
+  preparedProposalSchema,
+  runStartedPayloadSchema,
   type Approval,
   type AuditEvent,
   type AuditEventType,
+  type Proposal,
   type RunID,
   type RunStatus,
 } from "./api";
@@ -18,6 +21,7 @@ export type TimelineState = {
   runID: RunID | null;
   events: readonly AuditEvent[];
   playback: Playback;
+  focusedSeq: number | null;
 };
 
 export type TimelineAction =
@@ -26,6 +30,7 @@ export type TimelineAction =
   | { type: "event_received"; event: AuditEvent }
   | { type: "toggle_playback" }
   | { type: "seek"; cursor: number }
+  | { type: "focus_event"; seq: number }
   | { type: "go_live" }
   | { type: "tick" };
 
@@ -33,6 +38,7 @@ export const initialTimelineState: TimelineState = {
   runID: null,
   events: [],
   playback: { kind: "live" },
+  focusedSeq: null,
 };
 
 export function timelineReducer(
@@ -47,6 +53,7 @@ export function timelineReducer(
         runID: action.events[0]?.run_id ?? null,
         events: [...action.events],
         playback: { kind: "live" },
+        focusedSeq: null,
       };
     case "event_received": {
       if (state.runID !== null && state.runID !== action.event.run_id) {
@@ -63,12 +70,14 @@ export function timelineReducer(
         return {
           ...state,
           playback: { kind: "paused", cursor: state.events.length },
+          focusedSeq: null,
         };
       }
       if (state.playback.kind === "playing") {
         return {
           ...state,
           playback: { kind: "paused", cursor: state.playback.cursor },
+          focusedSeq: null,
         };
       }
       return {
@@ -78,6 +87,7 @@ export function timelineReducer(
           cursor:
             state.playback.cursor >= state.events.length ? 0 : state.playback.cursor,
         },
+        focusedSeq: null,
       };
     case "seek":
       return {
@@ -86,9 +96,21 @@ export function timelineReducer(
           kind: "paused",
           cursor: clamp(action.cursor, 0, state.events.length),
         },
+        focusedSeq: null,
       };
+    case "focus_event": {
+      const index = state.events.findIndex((event) => event.seq === action.seq);
+      if (index < 0) {
+        return state;
+      }
+      return {
+        ...state,
+        playback: { kind: "paused", cursor: index + 1 },
+        focusedSeq: action.seq,
+      };
+    }
     case "go_live":
-      return { ...state, playback: { kind: "live" } };
+      return { ...state, playback: { kind: "live" }, focusedSeq: null };
     case "tick":
       if (state.playback.kind !== "playing") {
         return state;
@@ -227,6 +249,68 @@ export function latestApproval(events: readonly AuditEvent[]): Approval | null {
   return current;
 }
 
+export function latestProposal(events: readonly AuditEvent[]): Proposal | null {
+  let current: Proposal | null = null;
+  for (const event of events) {
+    if (event.type !== "proposal_prepared") {
+      continue;
+    }
+    const parsed = preparedProposalSchema.safeParse(event.payload);
+    if (parsed.success) {
+      current = parsed.data.proposal;
+    }
+  }
+  return current;
+}
+
+export function proposalForApproval(
+  events: readonly AuditEvent[],
+  approval: Approval | null,
+): Proposal | null {
+  if (approval?.proposal_ref === undefined) {
+    return null;
+  }
+  const reference = approval.proposal_ref;
+  const event = events.find((candidate) => candidate.event_id === reference.event_id);
+  if (event?.type !== "proposal_prepared") {
+    return null;
+  }
+  const parsed = preparedProposalSchema.safeParse(event.payload);
+  if (
+    !parsed.success ||
+    parsed.data.approval_id !== approval.id ||
+    parsed.data.proposal_id !== reference.proposal_id ||
+    parsed.data.proposal.digest !== reference.digest
+  ) {
+    return null;
+  }
+  return parsed.data.proposal;
+}
+
+export type InferenceMode =
+  | { kind: "online"; model: string | null; apiStyle: string | null }
+  | { kind: "offline" }
+  | { kind: "legacy" };
+
+export function inferenceMode(events: readonly AuditEvent[]): InferenceMode {
+  const started = events.find((event) => event.type === "run_started");
+  if (started === undefined) {
+    return { kind: "legacy" };
+  }
+  const parsed = runStartedPayloadSchema.safeParse(started.payload);
+  if (!parsed.success || parsed.data.inference === undefined) {
+    return { kind: "legacy" };
+  }
+  if (parsed.data.inference.mode === "offline") {
+    return { kind: "offline" };
+  }
+  return {
+    kind: "online",
+    model: parsed.data.inference.model ?? null,
+    apiStyle: parsed.data.inference.api_style ?? null,
+  };
+}
+
 export function runStatus(events: readonly AuditEvent[]): RunStatus | null {
   let status: RunStatus | null = null;
   for (const event of events) {
@@ -257,8 +341,14 @@ export function runStatus(events: readonly AuditEvent[]): RunStatus | null {
       case "approval_execution_failed":
         status = "failed";
         break;
+      case "run_review_required":
+        status = "review_required";
+        break;
+      case "model_call_started":
+      case "model_call_finished":
       case "tool_call":
       case "tool_result":
+      case "proposal_prepared":
       case "attribution":
       case "approval_executed":
       case "duplicate_suppressed":
@@ -281,8 +371,11 @@ export type EventPresentation = {
 
 const eventLabels = {
   run_started: "异常处置已启动",
+  model_call_started: "模型推理已发起",
+  model_call_finished: "模型推理已完成",
   tool_call: "Agent 调用工具",
   tool_result: "工具返回证据",
+  proposal_prepared: "结构化方案已固化",
   attribution: "归因完成",
   approval_requested: "等待人工审批",
   approval_decided: "审批决定已记录",
@@ -299,6 +392,7 @@ const eventLabels = {
   run_completed: "处置完成",
   run_rejected: "处置转人工跟进",
   run_failed: "处置失败",
+  run_review_required: "模型提案等待人工复核",
   note: "系统备注",
 } satisfies Record<AuditEventType, string>;
 
@@ -313,9 +407,33 @@ export function presentEvent(event: AuditEvent): EventPresentation {
 }
 
 function eventDetail(event: AuditEvent): string {
+  if (event.type === "run_started") {
+    const mode = inferenceMode([event]);
+    return mode.kind === "online"
+      ? "在线模型开始分析"
+      : mode.kind === "offline"
+        ? "离线回放开始分析"
+        : "历史运行开始分析";
+  }
+  if (event.type === "proposal_prepared") {
+    const prepared = preparedProposalSchema.safeParse(event.payload);
+    if (prepared.success) {
+      return `置信度 ${formatConfidence(prepared.data.proposal.confidence_bps)} · ${prepared.data.writes.length} 项写操作`;
+    }
+  }
+  if (event.type === "run_review_required") {
+    return "模型提案未通过证据校验";
+  }
   const payload = recordSchema.safeParse(event.payload);
   if (!payload.success) {
     return `事件 ${event.event_id}`;
+  }
+  if (event.type === "model_call_finished") {
+    const latency = payload.data["latency_ms"];
+    const outcome = payload.data["outcome"];
+    if (typeof latency === "number" && typeof outcome === "string") {
+      return `${modelOutcomeLabel(outcome)} · ${latency} ms`;
+    }
   }
   for (const key of ["summary", "action", "status", "wire_name"]) {
     const value = payload.data[key];
@@ -335,6 +453,7 @@ function eventDetail(event: AuditEvent): string {
 function eventTone(type: AuditEventType): EventPresentation["tone"] {
   switch (type) {
     case "approval_requested":
+    case "proposal_prepared":
     case "attribution":
     case "approval_reconciliation_required":
     case "write_unknown":
@@ -350,8 +469,11 @@ function eventTone(type: AuditEventType): EventPresentation["tone"] {
     case "approval_execution_failed":
     case "run_failed":
     case "run_rejected":
+    case "run_review_required":
       return "danger";
     case "run_started":
+    case "model_call_started":
+    case "model_call_finished":
     case "tool_call":
     case "tool_result":
     case "approval_decided":
@@ -362,6 +484,25 @@ function eventTone(type: AuditEventType): EventPresentation["tone"] {
       const exhaustive: never = type;
       return exhaustive;
     }
+  }
+}
+
+function formatConfidence(value: number): string {
+  return `${new Intl.NumberFormat("zh-CN", {
+    maximumFractionDigits: 1,
+  }).format(value / 100)}%`;
+}
+
+function modelOutcomeLabel(value: string): string {
+  switch (value) {
+    case "accepted":
+      return "提案通过校验";
+    case "succeeded":
+      return "调用完成";
+    case "validation_failed":
+      return "结构校验失败";
+    default:
+      return value;
   }
 }
 

@@ -11,9 +11,11 @@ import {
 import { useEffect, useRef, type Dispatch } from "react";
 import styles from "../app.module.css";
 import {
+  inferenceMode,
   playbackCursor,
   presentEvent,
   visibleEvents,
+  type InferenceMode,
   type TimelineAction,
   type TimelineState,
 } from "../timeline";
@@ -23,6 +25,7 @@ type TimelinePanelProps = {
 };
 
 export function TimelinePanel({ state }: TimelinePanelProps) {
+  const mode = inferenceMode(state.events);
   return (
     <section className={styles.timelinePanel} aria-labelledby="timeline-title">
       <div className={styles.timelineHeader}>
@@ -30,9 +33,14 @@ export function TimelinePanel({ state }: TimelinePanelProps) {
           <span className={styles.eyebrow}>Append-only audit</span>
           <h2 id="timeline-title">Agent 审计时间线</h2>
         </div>
-        <span className={styles.eventCount}>
-          {state.events.length.toString().padStart(2, "0")} events
-        </span>
+        <div className={styles.timelineMeta}>
+          <span className={`${styles.inferenceBadge} ${modeClassName(mode)}`}>
+            {modeLabel(mode)}
+          </span>
+          <span className={styles.eventCount}>
+            {state.events.length.toString().padStart(2, "0")} events
+          </span>
+        </div>
       </div>
       <TimelineFeed state={state} />
     </section>
@@ -103,6 +111,17 @@ function TimelineFeed({ state }: TimelineFeedProps) {
     }
   }, [events.length, state.playback.kind]);
 
+  useEffect(() => {
+    if (state.focusedSeq === null) {
+      return;
+    }
+    const target = feed.current?.querySelector<HTMLElement>(
+      `[data-event-seq="${state.focusedSeq}"]`,
+    );
+    target?.scrollIntoView({ block: "center", behavior: "smooth" });
+    target?.focus({ preventScroll: true });
+  }, [state.focusedSeq]);
+
   if (events.length === 0) {
     return (
       <div className={styles.timelineEmpty}>
@@ -118,7 +137,14 @@ function TimelineFeed({ state }: TimelineFeedProps) {
       {events.map((event) => {
         const presentation = presentEvent(event);
         return (
-          <li className={styles.timelineEvent} key={`${event.run_id}-${event.seq}`}>
+          <li
+            className={`${styles.timelineEvent} ${
+              state.focusedSeq === event.seq ? styles.timelineEventFocused : ""
+            }`}
+            data-event-seq={event.seq}
+            key={`${event.run_id}-${event.seq}`}
+            tabIndex={-1}
+          >
             <span className={styles.sequence}>{event.seq.toString().padStart(2, "0")}</span>
             <span
               className={`${styles.eventNode} ${styles[`eventNode${capitalize(presentation.tone)}`]}`}
@@ -141,6 +167,36 @@ function TimelineFeed({ state }: TimelineFeedProps) {
       })}
     </ol>
   );
+}
+
+function modeClassName(mode: InferenceMode): string {
+  switch (mode.kind) {
+    case "online":
+      return styles.inferenceBadgeOnline;
+    case "offline":
+      return styles.inferenceBadgeOffline;
+    case "legacy":
+      return styles.inferenceBadgeLegacy;
+    default: {
+      const exhaustive: never = mode;
+      return exhaustive;
+    }
+  }
+}
+
+function modeLabel(mode: InferenceMode): string {
+  switch (mode.kind) {
+    case "online":
+      return mode.model === null ? "在线推理" : `在线推理 · ${mode.model}`;
+    case "offline":
+      return "离线回放模式";
+    case "legacy":
+      return "历史运行";
+    default: {
+      const exhaustive: never = mode;
+      return exhaustive;
+    }
+  }
 }
 
 function actorIcon(actor: "agent" | "human" | "system") {

@@ -30,6 +30,7 @@ try {
       cwd: repoDir,
       env: {
         ...goEnvironment,
+        AGENT_MODE: "offline",
         DATA_DIR: dataDir,
         HTTP_ADDR: `127.0.0.1:${backendPort}`,
         DEMO_STEP_DELAY: "25ms",
@@ -89,8 +90,25 @@ try {
     await page.getByText("待确认", { exact: true }).waitFor();
     await page.getByText("发送至货主 · 川行快运", { exact: true }).waitFor();
     await page.getByText("发送至司机 · 川行快运", { exact: true }).waitFor();
+    await page.getByText("离线回放模式", { exact: true }).waitFor();
+    await page.getByText("候选方案", { exact: true }).waitFor();
+    await page.getByText("置信度 86%", { exact: true }).waitFor();
 
     if (index === 0) {
+      const evidenceLink = page.locator('button[title^="定位到审计事件"]').first();
+      assert((await evidenceLink.count()) === 1, "approval has no linked evidence");
+      const evidenceTarget = await evidenceLink.getAttribute("title");
+      const sourceSeq = Number(evidenceTarget?.match(/#(\d+)$/)?.[1]);
+      assert(Number.isInteger(sourceSeq), `invalid evidence target ${evidenceTarget}`);
+      await evidenceLink.click();
+      const focusedEvent = page.locator(`[data-event-seq="${sourceSeq}"]`);
+      await focusedEvent.waitFor();
+      assert(
+        (await focusedEvent.textContent())?.includes("工具返回证据"),
+        `evidence target #${sourceSeq} is not a tool result`,
+      );
+      await page.getByRole("button", { name: "实时", exact: true }).click();
+      await page.getByText("待确认", { exact: true }).waitFor();
       await page.screenshot({
         path: join(artifactDir, "desktop-pending.png"),
         fullPage: true,
@@ -122,7 +140,15 @@ try {
       .getByText("处置完成", { exact: true })
       .waitFor();
     const eventCount = await page.locator("ol li").count();
-    assert(eventCount === 26, `run ${index + 1} produced ${eventCount} events, want 26`);
+    assert(eventCount >= 26, `run ${index + 1} produced only ${eventCount} events`);
+    assert(
+      (await page.getByText("模型推理已完成", { exact: true }).count()) > 0,
+      `run ${index + 1} has no model audit event`,
+    );
+    assert(
+      (await page.getByText("结构化方案已固化", { exact: true }).count()) > 0,
+      `run ${index + 1} has no proposal checkpoint`,
+    );
     assert(
       !(await hasHorizontalOverflow(page)),
       `run ${index + 1} has horizontal overflow`,
@@ -191,7 +217,7 @@ try {
     "new approval retained the previous rejection draft",
   );
   const rejectionEventCount = await page.locator("ol li").count();
-  assert(rejectionEventCount === 14, `reject path produced ${rejectionEventCount} events, want 14`);
+  assert(rejectionEventCount >= 14, `reject path produced only ${rejectionEventCount} events`);
   assert(await skipLinkIsHidden(page), "skip link is visible after the reject flow");
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({

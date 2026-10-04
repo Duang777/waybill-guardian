@@ -167,6 +167,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	modelConfig, err := modelConfigFromEnv()
+	if err != nil {
+		return err
+	}
 	commonConfig := guardian.Config{
 		DataDir:             envOr("DATA_DIR", "data"),
 		Reads:               runtimeProfile.reads,
@@ -179,13 +183,7 @@ func run() error {
 		StepDelay:           durationEnv("DEMO_STEP_DELAY", 220*time.Millisecond),
 		MaxConcurrentRuns:   maxConcurrentRuns,
 		EvidenceStepMinutes: evidenceStepMinutes,
-		Model: agentkit.ModelConfig{
-			Mode:     envOr("AGENT_MODE", agentkit.ModeDemo),
-			APIStyle: envOr("LLM_API_STYLE", agentkit.APIStyleResponses),
-			BaseURL:  strings.TrimSpace(os.Getenv("LLM_BASE_URL")),
-			APIKey:   strings.TrimSpace(os.Getenv("LLM_API_KEY")),
-			Model:    strings.TrimSpace(os.Getenv("LLM_MODEL")),
-		},
+		Model:               modelConfig,
 	}
 	var service *guardian.Service
 	if storageMode == storage.ModePostgres {
@@ -602,6 +600,38 @@ func strictDurationEnv(name string, fallback time.Duration) (time.Duration, erro
 		return 0, fmt.Errorf("%s must be a positive duration", name)
 	}
 	return parsed, nil
+}
+
+func modelConfigFromEnv() (agentkit.ModelConfig, error) {
+	mode := envOr("AGENT_MODE", agentkit.ModeOffline)
+	config := agentkit.ModelConfig{
+		Mode:     mode,
+		APIStyle: envOr("LLM_API_STYLE", agentkit.APIStyleResponses),
+		BaseURL:  strings.TrimSpace(os.Getenv("LLM_BASE_URL")),
+		APIKey:   strings.TrimSpace(os.Getenv("LLM_API_KEY")),
+		Model:    strings.TrimSpace(os.Getenv("LLM_MODEL")),
+	}
+	if !strings.EqualFold(strings.TrimSpace(mode), agentkit.ModeOnline) {
+		return config, nil
+	}
+	requestTimeout, err := strictDurationEnv(
+		"LLM_REQUEST_TIMEOUT",
+		agentkit.DefaultLLMRequestTimeout,
+	)
+	if err != nil {
+		return agentkit.ModelConfig{}, err
+	}
+	maxOutputTokens, err := positiveIntEnv(
+		"LLM_MAX_OUTPUT_TOKENS",
+		agentkit.DefaultLLMMaxOutputTokens,
+		agentkit.MaxLLMMaxOutputTokens,
+	)
+	if err != nil {
+		return agentkit.ModelConfig{}, err
+	}
+	config.RequestTimeout = requestTimeout
+	config.MaxOutputTokens = maxOutputTokens
+	return config, nil
 }
 
 func serve(ctx context.Context, server *http.Server, listener net.Listener) error {

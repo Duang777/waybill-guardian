@@ -18,8 +18,11 @@ const (
 	ActorSystem Actor = "system"
 
 	EventRunStarted                     EventType = "run_started"
+	EventModelCallStarted               EventType = "model_call_started"
+	EventModelCallFinished              EventType = "model_call_finished"
 	EventToolCall                       EventType = "tool_call"
 	EventToolResult                     EventType = "tool_result"
+	EventProposalPrepared               EventType = "proposal_prepared"
 	EventAttribution                    EventType = "attribution"
 	EventApprovalRequested              EventType = "approval_requested"
 	EventApprovalDecided                EventType = "approval_decided"
@@ -36,6 +39,7 @@ const (
 	EventRunCompleted                   EventType = "run_completed"
 	EventRunRejected                    EventType = "run_rejected"
 	EventRunFailed                      EventType = "run_failed"
+	EventRunReviewRequired              EventType = "run_review_required"
 	EventNote                           EventType = "note"
 )
 

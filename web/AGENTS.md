@@ -46,8 +46,9 @@ React 运营控制台。目标是在三分钟内显示异常、归因、审批�
 `npm run verify:overview` 使用 72 港仿真数据验证 KPI、港网 SVG、5 个独立 run 与审批、
 单独确认不影响其余 4 个审批、地图下钻、轨迹异常点和三档响应式布局。
 
-`npm run record:demo` 启动隔离服务，录制确认、回放和驳回路径，再用 ffmpeg 生成带中文字幕的
-1600×900 MP4。录制文件写入已忽略的 `web/artifacts/`。
+`npm run record:demo` 默认使用在线模型，启动隔离服务并录制确认、回放和驳回路径，再用
+ffmpeg 生成带中文字幕的 1600×900 MP4。无模型凭据时显式运行
+`AGENT_MODE=offline npm run record:demo`。录制文件写入已忽略的 `web/artifacts/`。
 
 参考项目只用于交互思路，本仓库没有复制其源码。登记见根目录
 `THIRD_PARTY_NOTICES.md`。

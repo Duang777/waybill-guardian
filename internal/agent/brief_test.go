@@ -113,12 +113,17 @@ func TestModelBriefGeneratorRetriesProviderErrorsWithinOneDeadline(t *testing.T)
 }
 
 func TestNewBriefGeneratorOnlyEnablesOnlineMode(t *testing.T) {
-	generator, err := NewBriefGenerator(ModelConfig{Mode: ModeDemo})
-	if err != nil || generator != nil {
-		t.Fatalf("demo generator = %#v, error = %v", generator, err)
+	for _, mode := range []string{"", ModeDemo, ModeOffline} {
+		generator, err := NewBriefGenerator(ModelConfig{Mode: mode})
+		if err != nil || generator != nil {
+			t.Fatalf("%q generator = %#v, error = %v", mode, generator, err)
+		}
 	}
 	if _, err := NewBriefGenerator(ModelConfig{Mode: ModeOnline}); err == nil {
 		t.Fatal("online brief generator accepted incomplete provider config")
+	}
+	if _, err := NewBriefGenerator(ModelConfig{Mode: "invalid"}); err == nil {
+		t.Fatal("brief generator accepted invalid mode")
 	}
 }
 
