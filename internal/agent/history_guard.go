@@ -242,9 +242,6 @@ func inspectHistoryValue(value any, path string) error {
 			}
 			return inspectHistoryValue(nested, path+"<json>")
 		}
-		if isOpaqueUUID(current) || opaqueIDPattern.MatchString(current) {
-			return nil
-		}
 		if mobileNumberPattern.MatchString(current) {
 			return fmt.Errorf("%w: mobile number at %s", ErrUnsafeHistory, path)
 		}
