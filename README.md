@@ -299,7 +299,10 @@ env -u GOROOT go run ./cmd/dataimport validate \
 ### 经营总览和 KPI
 
 `GET /api/overview` 返回授权范围内的港口、线路、异常队列和三条经营简报。服务先按
-`waybill_id` 授权范围过滤，再计算所有总数和比例。简报只读取聚合结果，不调用写工具。
+`waybill_id` 授权范围过滤，再计算所有总数和比例。`AGENT_MODE=demo` 返回确定性简报；
+`AGENT_MODE=online` 使用独立的无工具、无历史模型调用生成简报。模型只接收不含运单、线路、
+港口、人员或车辆身份的聚合计数，并只能引用服务端提供的证据 ID。服务端据此重建展示引用。
+模型调用、解析、隐私或引用校验失败时，接口仍以 HTTP 200 返回确定性简报。
 
 `POST /api/runs:batch` 接受最多 20 个 `waybill_id`。服务为每个运单调用一次 `StartRun`，
 并返回逐项成功或失败结果。`MAX_CONCURRENT_RUNS` 限制同时执行的调查任务。每个已接受的
@@ -335,7 +338,7 @@ LLM_MODEL=gpt-5-mini \
 
 `LLM_API_STYLE` 可以是 `responses` 或 `chat_completions`，默认 `responses`。`LLM_BASE_URL` 必须是 API 根路径，不能以 `/` 结尾，也不能带上 `/responses` 或 `/chat/completions`。在线模式只配置一个 provider，没有 provider fallback。一次模型调用最多尝试三次，包含第一次。
 
-这仍不是 issue 59 里的默认真实推理演示。
+在线经营简报不复用处置 Agent，也不改变 issue 59 的处置推理范围。
 
 ### 平台
 

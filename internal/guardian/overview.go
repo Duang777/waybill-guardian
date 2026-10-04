@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	agentkit "github.com/Duang777/waybill-guardian/internal/agent"
 	"github.com/Duang777/waybill-guardian/internal/approval"
 	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
@@ -288,6 +289,15 @@ func (s *Service) Overview(
 		return result.AnomalyDistribution[i].Count > result.AnomalyDistribution[j].Count
 	})
 	result.Brief = buildExecutiveBrief(result)
+	if s.briefGenerator != nil {
+		input := briefInputForOverview(result)
+		generated, generateErr := s.briefGenerator.Generate(ctx, input)
+		if generateErr == nil {
+			if brief, materializeErr := materializeGeneratedBrief(input, generated); materializeErr == nil {
+				result.Brief = brief
+			}
+		}
+	}
 	return result, nil
 }
 
@@ -733,6 +743,106 @@ func buildExecutiveBrief(overview Overview) ExecutiveBrief {
 		})
 	}
 	return ExecutiveBrief{Mode: "deterministic_read_only", Items: items}
+}
+
+func briefInputForOverview(overview Overview) agentkit.BriefInput {
+	input := agentkit.BriefInput{
+		TotalWaybills:  overview.Totals.Waybills,
+		TotalAnomalies: overview.Totals.Anomalies,
+	}
+	if len(overview.AnomalyDistribution) > 0 {
+		top := overview.AnomalyDistribution[0]
+		input.TopAnomalyType = top.Type
+		input.TopAnomalyCount = top.Count
+		input.TopAnomalySharePct = percentage(top.Count, overview.Totals.Anomalies)
+	}
+	if route, ok := hottestRoute(overview.Routes); ok {
+		input.HottestRouteAnomalies = route.Anomalies
+		input.HottestRouteHeatPct = route.DelayHeat
+		input.HottestRouteMaxRisk = route.MaxRisk
+	}
+	if hub, ok := busiestAnomalyHub(overview.Hubs); ok {
+		input.BusiestHubAnomalies = hub.Anomalies
+		input.BusiestHubHandling = hub.Handling
+	}
+	return input
+}
+
+func materializeGeneratedBrief(
+	input agentkit.BriefInput,
+	generated agentkit.GeneratedBrief,
+) (ExecutiveBrief, error) {
+	if len(generated.Items) != 3 {
+		return ExecutiveBrief{}, fmt.Errorf("generated brief requires exactly three items")
+	}
+	anomalyLabel := anomalyTypeLabel(input.TopAnomalyType)
+	if anomalyLabel == "" {
+		anomalyLabel = "异常运单"
+	}
+	ledger := map[string]EvidenceCitation{
+		agentkit.EvidenceFleetScope: {
+			Label:  "授权运单",
+			Value:  fmt.Sprintf("%d 单", input.TotalWaybills),
+			Source: "totals.waybills",
+		},
+		agentkit.EvidenceAnomalyMix: {
+			Label: anomalyLabel,
+			Value: fmt.Sprintf(
+				"%d 单，占异常 %d%%",
+				input.TopAnomalyCount,
+				input.TopAnomalySharePct,
+			),
+			Source: "anomaly_distribution",
+		},
+		agentkit.EvidenceRouteHotspot: {
+			Label: "最高热度线路",
+			Value: fmt.Sprintf(
+				"%d 单异常，热度 %d%%，最高风险 %d",
+				input.HottestRouteAnomalies,
+				input.HottestRouteHeatPct,
+				input.HottestRouteMaxRisk,
+			),
+			Source: "routes",
+		},
+		agentkit.EvidenceHubPressure: {
+			Label: "异常最集中公路港",
+			Value: fmt.Sprintf(
+				"%d 单异常，%d 单处置中",
+				input.BusiestHubAnomalies,
+				input.BusiestHubHandling,
+			),
+			Source: "hubs",
+		},
+	}
+	result := ExecutiveBrief{
+		Mode:  "model_read_only",
+		Items: make([]ExecutiveBriefItem, 0, len(generated.Items)),
+	}
+	for index, item := range generated.Items {
+		if strings.TrimSpace(item.Headline) == "" ||
+			strings.TrimSpace(item.Body) == "" ||
+			len(item.EvidenceIDs) == 0 {
+			return ExecutiveBrief{}, fmt.Errorf("generated brief item %d is incomplete", index)
+		}
+		evidence := make([]EvidenceCitation, 0, len(item.EvidenceIDs))
+		for _, evidenceID := range item.EvidenceIDs {
+			citation, ok := ledger[evidenceID]
+			if !ok {
+				return ExecutiveBrief{}, fmt.Errorf(
+					"generated brief item %d cites unknown evidence",
+					index,
+				)
+			}
+			evidence = append(evidence, citation)
+		}
+		result.Items = append(result.Items, ExecutiveBriefItem{
+			ID:       fmt.Sprintf("model-brief-%d", index+1),
+			Headline: item.Headline,
+			Body:     item.Body,
+			Evidence: evidence,
+		})
+	}
+	return result, nil
 }
 
 func hottestRoute(routes []RouteOverview) (RouteOverview, bool) {

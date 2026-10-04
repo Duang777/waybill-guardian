@@ -2,10 +2,12 @@ package guardian
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
+	agentkit "github.com/Duang777/waybill-guardian/internal/agent"
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/platform"
 	"github.com/Duang777/waybill-guardian/internal/platform/filestore"
@@ -80,6 +82,68 @@ func TestOverviewOnlyAggregatesRequestedWaybillScope(t *testing.T) {
 		if !found {
 			t.Fatalf("overview leaked waybill %q", item.WaybillID)
 		}
+	}
+}
+
+func TestOverviewUsesReadOnlyModelBriefWithServerOwnedCitations(t *testing.T) {
+	generator := &briefGeneratorStub{
+		result: agentkit.GeneratedBrief{Items: []agentkit.GeneratedBriefItem{
+			{
+				Headline:    "治理高频异常",
+				Body:        "建议复盘共性",
+				EvidenceIDs: []string{agentkit.EvidenceAnomalyMix},
+			},
+			{
+				Headline:    "聚焦线路风险",
+				Body:        "建议前置运力",
+				EvidenceIDs: []string{agentkit.EvidenceRouteHotspot},
+			},
+			{
+				Headline:    "平衡节点资源",
+				Body:        "建议调整排班",
+				EvidenceIDs: []string{agentkit.EvidenceHubPressure, agentkit.EvidenceFleetScope},
+			},
+		}},
+	}
+	service, ids := openSimulatedOverviewServiceWithBrief(t, generator)
+
+	overview, err := service.Overview(t.Context(), ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generator.calls != 1 {
+		t.Fatalf("generator calls = %d, want 1", generator.calls)
+	}
+	if overview.Brief.Mode != "model_read_only" || len(overview.Brief.Items) != 3 {
+		t.Fatalf("brief = %+v", overview.Brief)
+	}
+	wantIDs := []string{"model-brief-1", "model-brief-2", "model-brief-3"}
+	for index, item := range overview.Brief.Items {
+		if item.ID != wantIDs[index] {
+			t.Fatalf("item ID = %q", item.ID)
+		}
+		if len(item.Evidence) == 0 {
+			t.Fatalf("item has no evidence: %+v", item)
+		}
+		for _, evidence := range item.Evidence {
+			if evidence.Label == "" || evidence.Value == "" || evidence.Source == "" {
+				t.Fatalf("server citation is incomplete: %+v", evidence)
+			}
+		}
+	}
+}
+
+func TestOverviewFallsBackWhenBriefGenerationFails(t *testing.T) {
+	generator := &briefGeneratorStub{err: errors.New("provider unavailable")}
+	service, ids := openSimulatedOverviewServiceWithBrief(t, generator)
+
+	overview, err := service.Overview(t.Context(), ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Brief.Mode != "deterministic_read_only" ||
+		len(overview.Brief.Items) != 3 {
+		t.Fatalf("fallback brief = %+v", overview.Brief)
 	}
 }
 
@@ -176,6 +240,13 @@ func TestKPIHelpersUseDocumentedArithmetic(t *testing.T) {
 }
 
 func openSimulatedOverviewService(t *testing.T) (*Service, []domain.WaybillID) {
+	return openSimulatedOverviewServiceWithBrief(t, nil)
+}
+
+func openSimulatedOverviewServiceWithBrief(
+	t *testing.T,
+	briefGenerator agentkit.BriefGenerator,
+) (*Service, []domain.WaybillID) {
 	t.Helper()
 	loaded, err := filestore.Load(filepath.Join("..", "..", "data", "simulated", "waybills-v1.json"))
 	if err != nil {
@@ -186,6 +257,7 @@ func openSimulatedOverviewService(t *testing.T) (*Service, []domain.WaybillID) {
 		Reads:               loaded.Reads,
 		ReadSource:          loaded.Source.String(),
 		EvidenceStepMinutes: 8,
+		BriefGenerator:      briefGenerator,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -204,4 +276,20 @@ func openSimulatedOverviewService(t *testing.T) (*Service, []domain.WaybillID) {
 		ids = append(ids, item.WaybillID)
 	}
 	return service, ids
+}
+
+type briefGeneratorStub struct {
+	result agentkit.GeneratedBrief
+	err    error
+	calls  int
+	input  agentkit.BriefInput
+}
+
+func (s *briefGeneratorStub) Generate(
+	_ context.Context,
+	input agentkit.BriefInput,
+) (agentkit.GeneratedBrief, error) {
+	s.calls++
+	s.input = input
+	return s.result, s.err
 }
