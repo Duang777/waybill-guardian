@@ -344,10 +344,12 @@ func newOnlineModel(config ModelConfig) (llm.Provider, error) {
 
 func (e *Engine) Start(ctx context.Context, runContext domain.RunContext) (Outcome, error) {
 	return e.execute(ctx, &agents.AgentInput{
-		Namespace:  Namespace,
-		ThreadID:   string(runContext.RunID),
-		SessionID:  string(runContext.RunID),
-		Message:    history.Message{Messages: []responses.InputMessageUnion{responses.UserMessage("处置演示异常运单")}},
+		Namespace: Namespace,
+		ThreadID:  string(runContext.RunID),
+		SessionID: string(runContext.RunID),
+		Message: history.Message{Messages: []responses.InputMessageUnion{
+			responses.UserMessage(fmt.Sprintf("处置异常运单 %s", runContext.WaybillID)),
+		}},
 		RunContext: contextMap(runContext),
 	})
 }
