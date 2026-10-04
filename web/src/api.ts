@@ -431,6 +431,7 @@ export const preparedProposalSchema = z
     proposal: proposalSchema,
     writes: z.array(approvalItemSchema).min(1),
     writes_digest: z.string().regex(/^[0-9a-f]{64}$/),
+    requested_at: z.string().min(1).optional(),
     expires_at: z.string().min(1),
   })
   .strict();

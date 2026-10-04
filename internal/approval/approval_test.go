@@ -88,6 +88,61 @@ func TestApprovalStateMachineAndRecovery(t *testing.T) {
 	}
 }
 
+func TestIDForPlanIncludesPlanVersionAndNormalizesCallOrder(t *testing.T) {
+	first := IDForPlan("run-versioned", 1, []string{"call-b", "call-a"})
+	reordered := IDForPlan("run-versioned", 1, []string{"call-a", "call-b"})
+	second := IDForPlan("run-versioned", 2, []string{"call-a", "call-b"})
+
+	if first != reordered {
+		t.Fatalf("call order changed approval ID: %q != %q", first, reordered)
+	}
+	if first == second {
+		t.Fatalf("plan versions reused approval ID %q", first)
+	}
+	if first == IDFor("run-versioned", []string{"call-a", "call-b"}) {
+		t.Fatalf("versioned approval ID reused the legacy identity %q", first)
+	}
+}
+
+func TestCreatePreservesExplicitApprovalWindow(t *testing.T) {
+	requestedAt := time.Date(2026, 10, 3, 8, 0, 0, 0, time.UTC)
+	expiresAt := requestedAt.Add(time.Minute)
+	now := expiresAt.Add(time.Hour)
+	journal, err := audit.Open(t.TempDir(), func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	store, err := NewStore(journal, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := testApproval("run-expired-window", "call-expired-window")
+	value.RequestedAt = requestedAt
+	value.ExpiresAt = expiresAt
+
+	created, err := store.Create(t.Context(), value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created.RequestedAt.Equal(requestedAt) || !created.ExpiresAt.Equal(expiresAt) {
+		t.Fatalf(
+			"approval window = %s..%s, want %s..%s",
+			created.RequestedAt,
+			created.ExpiresAt,
+			requestedAt,
+			expiresAt,
+		)
+	}
+	expired, err := store.ExpireDue(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expired) != 1 || expired[0].Status != StatusExpired {
+		t.Fatalf("expired approvals = %+v", expired)
+	}
+}
+
 func TestRejectRequiresReasonAndExpiryDefaultsToReject(t *testing.T) {
 	now := time.Date(2026, 10, 3, 8, 0, 0, 0, time.UTC)
 	journal, err := audit.Open(t.TempDir(), func() time.Time { return now })

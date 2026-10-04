@@ -629,6 +629,15 @@ func TestRecoverUsesPreparedProposalWithoutCallingModelAgain(t *testing.T) {
 				if _, err := reopened.CurrentApproval(run.RunID); !errors.Is(err, approval.ErrNotFound) {
 					t.Fatalf("CurrentApproval error = %v, want ErrNotFound", err)
 				}
+				active, err := reopened.ListActiveRuns(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(active) != 1 ||
+					active[0].RunID != run.RunID ||
+					active[0].Status != domain.RunReviewRequired {
+					t.Fatalf("active review-required runs = %+v", active)
+				}
 				return
 			}
 
@@ -638,12 +647,99 @@ func TestRecoverUsesPreparedProposalWithoutCallingModelAgain(t *testing.T) {
 			}
 			if recovered.ID != expected.ID ||
 				recovered.SDKRunID != expected.SDKRunID ||
+				!recovered.RequestedAt.Equal(expected.RequestedAt) ||
+				!recovered.ExpiresAt.Equal(expected.ExpiresAt) ||
 				recovered.ProposalRef == nil ||
 				recovered.ProposalRef.Digest != expected.ProposalRef.Digest ||
 				len(recovered.Items) != len(expected.Items) {
 				t.Fatalf("recovered approval = %+v, want checkpoint identity %+v", recovered, expected)
 			}
 		})
+	}
+}
+
+func TestRecoverMaterializesExpiredPreparedProposalWithOriginalWindow(t *testing.T) {
+	clients, runtime, err := tools.NewDemoRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := Open(Config{
+		DataDir:      t.TempDir(),
+		Reads:        clients,
+		WriteRuntime: runtime,
+		ApprovalTTL:  time.Hour,
+		StepDelay:    0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := source.StartRun(t.Context(), "YD2026101001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := waitForApproval(t, source, run.RunID)
+	events, err := source.Replay(t.Context(), run.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dataDir := t.TempDir()
+	replayEventPrefix(t, dataDir, events, audit.EventProposalPrepared, true)
+	now := expected.ExpiresAt.Add(time.Second)
+	reopened, err := Open(Config{
+		DataDir:      dataDir,
+		Reads:        clients,
+		WriteRuntime: runtime,
+		Clock:        func() time.Time { return now },
+		ApprovalTTL:  time.Hour,
+		StepDelay:    0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := reopened.Recover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, err := reopened.GetApproval(expected.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != approval.StatusExpired {
+		t.Fatalf("recovered approval status = %q, want expired", recovered.Status)
+	}
+	if !recovered.RequestedAt.Equal(expected.RequestedAt) ||
+		!recovered.ExpiresAt.Equal(expected.ExpiresAt) {
+		t.Fatalf(
+			"recovered approval window = %s..%s, want %s..%s",
+			recovered.RequestedAt,
+			recovered.ExpiresAt,
+			expected.RequestedAt,
+			expected.ExpiresAt,
+		)
+	}
+}
+
+func TestLatestPreparedProposalBackfillsLegacyRequestedAt(t *testing.T) {
+	eventTime := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	prepared, ok, err := latestPreparedProposal([]audit.Event{{
+		EventID: "legacy-proposal",
+		Type:    audit.EventProposalPrepared,
+		TS:      eventTime,
+		Payload: json.RawMessage(`{"plan_version":1}`),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("legacy proposal checkpoint was not found")
+	}
+	if !prepared.RequestedAt.Equal(eventTime) || !prepared.legacyID {
+		t.Fatalf("legacy proposal timing = %+v", prepared)
 	}
 }
 

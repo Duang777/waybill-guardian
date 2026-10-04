@@ -93,7 +93,9 @@ type proposalPreparedPayload struct {
 	Proposal     proposal.Accepted `json:"proposal"`
 	Writes       []approval.Item   `json:"writes"`
 	WritesDigest string            `json:"writes_digest"`
+	RequestedAt  time.Time         `json:"requested_at,omitempty"`
 	ExpiresAt    time.Time         `json:"expires_at"`
+	legacyID     bool
 }
 
 var (
@@ -712,6 +714,13 @@ func latestPreparedProposal(events []audit.Event) (proposalPreparedPayload, bool
 				err,
 			)
 		}
+		if prepared.RequestedAt.IsZero() {
+			prepared.RequestedAt = event.TS.UTC()
+			prepared.legacyID = true
+		} else {
+			prepared.RequestedAt = prepared.RequestedAt.UTC()
+		}
+		prepared.ExpiresAt = prepared.ExpiresAt.UTC()
 		if !found || prepared.PlanVersion >= latest.PlanVersion {
 			latest = prepared
 			found = true
@@ -1327,11 +1336,12 @@ func (s *Service) prepareProposal(
 	for _, item := range items {
 		callIDs = append(callIDs, item.CallID)
 	}
-	approvalID := approval.IDFor(run.RunID, callIDs)
+	approvalID := approval.IDForPlan(run.RunID, planVersion, callIDs)
 	writesDigest, err := approvalItemsDigest(items)
 	if err != nil {
 		return proposalPreparedPayload{}, err
 	}
+	requestedAt := s.clock().UTC()
 	prepared := proposalPreparedPayload{
 		ProposalID:   proposalIDFor(approvalID),
 		ApprovalID:   approvalID,
@@ -1340,7 +1350,8 @@ func (s *Service) prepareProposal(
 		Proposal:     *outcome.Proposal,
 		Writes:       items,
 		WritesDigest: writesDigest,
-		ExpiresAt:    s.clock().UTC().Add(s.ttl),
+		RequestedAt:  requestedAt,
+		ExpiresAt:    requestedAt.Add(s.ttl),
 	}
 	eventID := proposalPreparedEventID(run.RunID, planVersion)
 	event, err := s.journal.Append(ctx, run.RunID, audit.Draft{
@@ -1408,7 +1419,8 @@ func (s *Service) materializePreparedProposal(
 			EventID:    proposalPreparedEventID(run.RunID, prepared.PlanVersion),
 			Digest:     prepared.Proposal.Digest,
 		},
-		ExpiresAt: prepared.ExpiresAt,
+		RequestedAt: prepared.RequestedAt,
+		ExpiresAt:   prepared.ExpiresAt,
 	}
 	created, err := s.approvals.Create(ctx, value)
 	if err != nil {
@@ -1492,10 +1504,17 @@ func (s *Service) validatePreparedProposal(
 		prepared.ApprovalID == "" ||
 		prepared.ProposalID == "" ||
 		len(prepared.Writes) == 0 ||
+		prepared.RequestedAt.IsZero() ||
 		prepared.ExpiresAt.IsZero() {
 		return errors.Join(
 			proposal.ErrReviewRequired,
 			errors.New("proposal checkpoint is incomplete"),
+		)
+	}
+	if !prepared.ExpiresAt.After(prepared.RequestedAt) {
+		return errors.Join(
+			proposal.ErrReviewRequired,
+			errors.New("proposal checkpoint expires_at must be after requested_at"),
 		)
 	}
 	callIDs := make([]string, 0, len(prepared.Writes))
@@ -1509,7 +1528,10 @@ func (s *Service) validatePreparedProposal(
 			Arguments: append(json.RawMessage(nil), item.Params...),
 		})
 	}
-	expectedApprovalID := approval.IDFor(run.RunID, callIDs)
+	expectedApprovalID := approval.IDForPlan(run.RunID, prepared.PlanVersion, callIDs)
+	if prepared.legacyID {
+		expectedApprovalID = approval.IDFor(run.RunID, callIDs)
+	}
 	if prepared.ApprovalID != expectedApprovalID ||
 		prepared.ProposalID != proposalIDFor(expectedApprovalID) {
 		return errors.Join(
@@ -1618,6 +1640,7 @@ func samePreparedProposal(actual, expected proposalPreparedPayload) bool {
 		actual.PlanVersion == expected.PlanVersion &&
 		actual.Proposal.Digest == expected.Proposal.Digest &&
 		actual.WritesDigest == expected.WritesDigest &&
+		actual.RequestedAt.Equal(expected.RequestedAt) &&
 		actual.ExpiresAt.Equal(expected.ExpiresAt)
 }
 

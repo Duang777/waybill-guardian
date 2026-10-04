@@ -349,7 +349,9 @@ func sortRunSummaries(values []RunSummary) {
 }
 
 func isOperationallyActive(status domain.RunStatus) bool {
-	return !isTerminal(status) || status == domain.RunManualReview
+	return !isTerminal(status) ||
+		status == domain.RunReviewRequired ||
+		status == domain.RunManualReview
 }
 
 func projectRuns(events []audit.Event) (map[domain.RunID]RunSummary, error) {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -230,6 +231,26 @@ func IDFor(runID domain.RunID, callIDs []string) domain.ApprovalID {
 	return domain.ApprovalID("APR-" + hex.EncodeToString(hash.Sum(nil)[:8]))
 }
 
+func IDForPlan(
+	runID domain.RunID,
+	planVersion int,
+	callIDs []string,
+) domain.ApprovalID {
+	sorted := append([]string(nil), callIDs...)
+	sort.Strings(sorted)
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("waybill-approval-v2"))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(runID))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(strconv.Itoa(planVersion)))
+	for _, callID := range sorted {
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(callID))
+	}
+	return domain.ApprovalID("APR-" + hex.EncodeToString(hash.Sum(nil)[:8]))
+}
+
 func (s *Store) Create(ctx context.Context, value Approval) (Approval, error) {
 	if value.ID == "" || value.RunID == "" || value.WaybillID == "" || len(value.Items) == 0 {
 		return Approval{}, fmt.Errorf("approval id, run id, waybill id, and items are required")
@@ -247,11 +268,18 @@ func (s *Store) Create(ctx context.Context, value Approval) (Approval, error) {
 	}
 	now := s.clock().UTC()
 	value.Status = StatusPending
-	value.RequestedAt = now
+	if value.RequestedAt.IsZero() {
+		value.RequestedAt = now
+	} else {
+		value.RequestedAt = value.RequestedAt.UTC()
+	}
 	if value.ExpiresAt.IsZero() {
-		value.ExpiresAt = now.Add(10 * time.Minute)
+		value.ExpiresAt = value.RequestedAt.Add(10 * time.Minute)
 	} else {
 		value.ExpiresAt = value.ExpiresAt.UTC()
+	}
+	if !value.ExpiresAt.After(value.RequestedAt) {
+		return Approval{}, errors.New("approval expires_at must be after requested_at")
 	}
 	event, err := s.journal.Append(ctx, value.RunID, audit.Draft{
 		EventID: "approval:" + string(value.ID) + ":requested",
