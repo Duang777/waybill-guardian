@@ -127,6 +127,59 @@ describe("waybill API", () => {
     expect(requestInit?.body).toBe("{}");
   });
 
+  it("parses sourced approval evidence and its proposal reference", () => {
+    const parsed = approvalSchema.safeParse({
+      id: "APR-proposal",
+      run_id: "run-proposal",
+      sdk_run_id: "sdk-proposal",
+      waybill_id: "YD2026101001",
+      plan_version: 1,
+      items: [
+        {
+          call_id: "call-write",
+          action: "tms.reassign",
+          wire_name: "tms_reassign",
+          params: {
+            waybill_id: "YD2026101001",
+            carrier_id: "CARRIER-SW-42",
+          },
+          arguments_hash: "arguments-hash",
+          identity_version: "effect-v1",
+          effect_id: "1fd92e48-c2d3-5654-b9f9-a507a2348354",
+          idempotency_key: "key-1",
+        },
+      ],
+      reason: "司机疲劳与异常停留造成延误风险。",
+      evidence: [
+        {
+          label: "司机连续驾驶时间过长",
+          value: "9",
+          source: {
+            tool_call_id: "call-driver",
+            field_path: "/continuous_drive_hours",
+            source_seq: 13,
+          },
+        },
+      ],
+      proposal_ref: {
+        proposal_id: "proposal:APR-proposal",
+        event_id: "run:run-proposal:proposal:1:prepared",
+        digest: "a".repeat(64),
+      },
+      status: "pending",
+      requested_at: "2026-10-11T13:06:00Z",
+      expires_at: "2026-10-11T13:16:00Z",
+    });
+
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.proposal_ref?.digest).toBe("a".repeat(64));
+      expect(parsed.data.evidence[0]).toMatchObject({
+        source: { source_seq: 13 },
+      });
+    }
+  });
+
   it("parses KPI availability instead of coercing missing values to zero", async () => {
     vi.stubGlobal(
       "fetch",

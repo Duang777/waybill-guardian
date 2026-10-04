@@ -7,7 +7,9 @@ import {
 } from "./api";
 import {
   initialTimelineState,
+  inferenceMode,
   latestApproval,
+  latestProposal,
   playbackCursor,
   runStatus,
   timelineReducer,
@@ -102,6 +104,20 @@ describe("timelineReducer", () => {
     expect(hydrated.playback).toEqual({ kind: "live" });
   });
 
+  it("focuses an evidence source and reveals its event", () => {
+    const events = [
+      event(1, "run_started", {}),
+      event(2, "tool_result", { action: "tms.get_driver" }),
+      event(3, "proposal_prepared", {}),
+    ];
+    const hydrated = timelineReducer(initialTimelineState, { type: "hydrate", events });
+    const focused = timelineReducer(hydrated, { type: "focus_event", seq: 2 });
+
+    expect(focused.focusedSeq).toBe(2);
+    expect(focused.playback).toEqual({ kind: "paused", cursor: 2 });
+    expect(visibleEvents(focused)).toEqual(events.slice(0, 2));
+  });
+
   it("rejects events from another run after hydration", () => {
     const first = event(1, "run_started", {});
     const hydrated = timelineReducer(initialTimelineState, {
@@ -117,6 +133,100 @@ describe("timelineReducer", () => {
     const next = timelineReducer(hydrated, { type: "event_received", event: foreign });
 
     expect(next.events).toEqual([first]);
+  });
+});
+
+describe("model proposal projection", () => {
+  it("reads inference mode and the latest accepted proposal", () => {
+    const started = event(1, "run_started", {
+      incident_id: "incident-1",
+      waybill_id: "YD2026101001",
+      status: "started",
+      inference: {
+        mode: "online",
+        api_style: "chat_completions",
+        model: "deepseek-chat",
+      },
+    });
+    const prepared = event(2, "proposal_prepared", {
+      proposal_id: "proposal:APR-1",
+      approval_id: "APR-1",
+      sdk_run_id: "sdk-1",
+      plan_version: 1,
+      proposal: {
+        schema_version: "proposal.v1",
+        summary: "司机疲劳与异常停留造成延误风险。",
+        confidence_bps: 8600,
+        attribution: [
+          {
+            factor: "司机连续驾驶时间过长",
+            confidence_bps: 9100,
+            evidence: [
+              {
+                tool_call_id: "call-driver",
+                field_path: "/continuous_drive_hours",
+                value: 9,
+                display_value: "9",
+                source_event_id: "tool:call-driver:result",
+                source_seq: 1,
+                source_hash: hash,
+              },
+            ],
+          },
+        ],
+        alternatives: [
+          {
+            carrier_id: "CARRIER-SW-42",
+            reason: "时效和历史履约率更优",
+          },
+        ],
+        expected_impact: {
+          eta_saved_min: {
+            availability: "unavailable",
+            reason: "当前证据没有改派后的到达时间",
+          },
+          cost_delta_cny: {
+            availability: "unavailable",
+            reason: "当前证据没有成本字段",
+          },
+        },
+        digest: "a".repeat(64),
+      },
+      writes: [
+        {
+          call_id: "call-write",
+          action: "tms.reassign",
+          wire_name: "tms_reassign",
+          params: {
+            waybill_id: "YD2026101001",
+            carrier_id: "CARRIER-SW-42",
+          },
+          arguments_hash: "arguments-hash",
+          identity_version: "effect-v1",
+          effect_id: "1fd92e48-c2d3-5654-b9f9-a507a2348354",
+          idempotency_key: "key-1",
+        },
+      ],
+      writes_digest: "b".repeat(64),
+      expires_at: "2026-10-10T01:25:00Z",
+    });
+
+    expect(inferenceMode([started])).toEqual({
+      kind: "online",
+      apiStyle: "chat_completions",
+      model: "deepseek-chat",
+    });
+    expect(latestProposal([started, prepared])?.confidence_bps).toBe(8600);
+    expect(runStatus([started, prepared])).toBe("investigating");
+  });
+
+  it("projects a rejected model proposal to review_required", () => {
+    expect(
+      runStatus([
+        event(1, "run_started", {}),
+        event(2, "run_review_required", { status: "review_required" }),
+      ]),
+    ).toBe("review_required");
   });
 });
 

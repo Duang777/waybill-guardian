@@ -30,6 +30,7 @@ import {
 import {
   initialTimelineState,
   latestApproval,
+  latestProposal,
   runStatus,
   timelineReducer,
   visibleEvents,
@@ -287,7 +288,12 @@ function WaybillWorkbench({
   }, [bootstrap]);
 
   useEffect(() => {
-    if (run === null || timelineAfter === null || run.status === "manual_review") {
+    if (
+      run === null ||
+      timelineAfter === null ||
+      run.status === "manual_review" ||
+      run.status === "review_required"
+    ) {
       return;
     }
     const generation = selectionGeneration.current;
@@ -328,6 +334,7 @@ function WaybillWorkbench({
 
   const projectedEvents = useMemo(() => visibleEvents(timeline), [timeline]);
   const currentApproval = useMemo(() => latestApproval(projectedEvents), [projectedEvents]);
+  const currentProposal = useMemo(() => latestProposal(projectedEvents), [projectedEvents]);
   const currentStatus =
     runStatus(projectedEvents) ??
     (timeline.playback.kind === "live" ? (run?.status ?? null) : null);
@@ -633,8 +640,13 @@ function WaybillWorkbench({
 
             <ApprovalPanel
               approval={currentApproval}
+              proposal={currentProposal}
+              runStatus={currentStatus}
               view={view}
               busy={pendingAction === "confirm" || pendingAction === "reject"}
+              onEvidenceSelect={(sourceSeq) =>
+                dispatch({ type: "focus_event", seq: sourceSeq })
+              }
               onConfirm={confirm}
               onReject={reject}
             />
