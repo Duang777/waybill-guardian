@@ -136,7 +136,16 @@ func TestEffectRecoverySurvivesProcessTermination(t *testing.T) {
 				t.Fatal("crash worker exited successfully instead of being killed")
 			}
 
-			time.Sleep(1200 * time.Millisecond)
+			if err := waitForProcessRecoveryReady(
+				t.Context(),
+				db,
+				tenantID,
+				runID,
+				command.Identity.EffectID,
+				10*time.Second,
+			); err != nil {
+				t.Fatalf("%v:\n%s", err, output.String())
+			}
 			recoveryAdapter := newProcessAdapter(t, server.URL, tenantID)
 			recovery := newProcessRepository(t, db, tenantID, "parent-recovery", recoveryAdapter)
 			defer recovery.Close()
@@ -262,6 +271,42 @@ func waitForCrashBarrier(path string, timeout time.Duration) error {
 	return fmt.Errorf("timed out waiting for crash barrier")
 }
 
+func waitForProcessRecoveryReady(
+	parent context.Context,
+	db *DB,
+	tenantID string,
+	runID domain.RunID,
+	effectID domain.EffectID,
+	timeout time.Duration,
+) error {
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	for {
+		var runLeaseActive bool
+		var effectLeaseActive bool
+		err := db.pool.QueryRow(ctx, `
+			SELECT COALESCE(r.lease_deadline > clock_timestamp(), false),
+			       COALESCE(e.lease_deadline > clock_timestamp(), false)
+			FROM waybill.runs r
+			JOIN waybill.effects e
+			  ON e.tenant_id = r.tenant_id AND e.run_id = r.run_id
+			WHERE r.tenant_id = $1 AND r.run_id = $2 AND e.effect_id = $3
+			FOR UPDATE OF r, e
+		`, tenantID, runID, effectID).Scan(&runLeaseActive, &effectLeaseActive)
+		if err != nil {
+			return fmt.Errorf("wait for terminated worker transaction: %w", err)
+		}
+		if !runLeaseActive && !effectLeaseActive {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for terminated worker leases: %w", ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
 func newProcessAdapter(t *testing.T, baseURL string, tenantID string) *tmssandbox.Adapter {
 	t.Helper()
 	adapter, err := tmssandbox.New(t.Context(), tmssandbox.Config{
@@ -290,8 +335,8 @@ func newProcessRepository(
 	repository, err := NewRepository(db, RepositoryConfig{
 		TenantID:       tenantID,
 		WorkerID:       workerID,
-		LeaseTTL:       300 * time.Millisecond,
-		EffectLeaseTTL: 150 * time.Millisecond,
+		LeaseTTL:       3 * time.Second,
+		EffectLeaseTTL: 3 * time.Second,
 		OutboxLeaseTTL: time.Second,
 		PollInterval:   10 * time.Millisecond,
 		WriteRuntime:   runtime,
