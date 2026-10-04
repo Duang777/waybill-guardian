@@ -12,11 +12,7 @@ import (
 )
 
 func TestFixtureWriteRuntimeDispatchesAndLooksUpByStableKey(t *testing.T) {
-	clients, mock, err := NewDemoClients()
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime, err := NewFixtureWriteRuntime(clients)
+	_, runtime, err := NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,8 +38,8 @@ func TestFixtureWriteRuntimeDispatchesAndLooksUpByStableKey(t *testing.T) {
 		string(first.Response) != string(second.Response) {
 		t.Fatalf("dispatch results = first:%+v second:%+v", first, second)
 	}
-	if mock.WriteCount(domain.ActionReassign) != 1 {
-		t.Fatalf("reassign writes = %d, want 1", mock.WriteCount(domain.ActionReassign))
+	if runtime.WriteCount(domain.ActionReassign) != 1 {
+		t.Fatalf("reassign writes = %d, want 1", runtime.WriteCount(domain.ActionReassign))
 	}
 	lookedUp := runtime.Lookup(context.Background(), binding, key)
 	if lookedUp.Disposition != platform.LookupApplied ||
@@ -53,11 +49,7 @@ func TestFixtureWriteRuntimeDispatchesAndLooksUpByStableKey(t *testing.T) {
 }
 
 func TestFixtureWriteRuntimeTreatsBusinessRejectionAsPermanent(t *testing.T) {
-	clients, mock, err := NewDemoClients()
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime, err := NewFixtureWriteRuntime(clients)
+	_, runtime, err := NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,17 +77,13 @@ func TestFixtureWriteRuntimeTreatsBusinessRejectionAsPermanent(t *testing.T) {
 	if result.Disposition != platform.EffectPermanentFailed {
 		t.Fatalf("dispatch disposition = %q, want permanent_failed", result.Disposition)
 	}
-	if mock.WriteCount(domain.ActionReassign) != 0 {
+	if runtime.WriteCount(domain.ActionReassign) != 0 {
 		t.Fatal("rejected reassign was recorded as a write")
 	}
 }
 
 func TestFixtureWriteRuntimeRejectsIncompleteRecoveryBindings(t *testing.T) {
-	clients, _, err := NewDemoClients()
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime, err := NewFixtureWriteRuntime(clients)
+	_, runtime, err := NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,11 +136,7 @@ func TestFixtureWriteRuntimeRejectsIncompleteRecoveryBindings(t *testing.T) {
 }
 
 func TestFixtureWriteRuntimeReportsAuthoritativeAbsence(t *testing.T) {
-	clients, _, err := NewDemoClients()
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime, err := NewFixtureWriteRuntime(clients)
+	_, runtime, err := NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +160,7 @@ func TestFixtureWriteRuntimeReportsAuthoritativeAbsence(t *testing.T) {
 }
 
 func TestWriteHandlersRequireMiddleware(t *testing.T) {
-	clients, mock, err := NewDemoClients()
+	clients, runtime, err := NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +174,7 @@ func TestWriteHandlersRequireMiddleware(t *testing.T) {
 	}); !errors.Is(err, ErrWriteMiddlewareRequired) {
 		t.Fatalf("Reassign error = %v, want ErrWriteMiddlewareRequired", err)
 	}
-	if mock.WriteCount(domain.ActionReassign) != 0 {
-		t.Fatalf("direct handler dispatched %d writes", mock.WriteCount(domain.ActionReassign))
+	if runtime.WriteCount(domain.ActionReassign) != 0 {
+		t.Fatalf("direct handler dispatched %d writes", runtime.WriteCount(domain.ActionReassign))
 	}
 }

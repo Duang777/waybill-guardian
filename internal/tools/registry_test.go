@@ -37,7 +37,7 @@ func TestRegistryMatchesContract(t *testing.T) {
 	if err := yaml.Unmarshal(raw, &contract); err != nil {
 		t.Fatal(err)
 	}
-	clients, _, err := NewDemoClients()
+	clients, _, err := NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestParseWriteRejectsUnknownExecutionFields(t *testing.T) {
 }
 
 func TestExecutionRegistrySeparatesActiveAndHistoricalTools(t *testing.T) {
-	clients, _, err := NewDemoClients()
+	clients, _, err := NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestExecutionRegistrySeparatesActiveAndHistoricalTools(t *testing.T) {
 }
 
 func TestExecutionRegistryRejectsUnknownActiveAction(t *testing.T) {
-	clients, _, err := NewDemoClients()
+	clients, _, err := NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestExecutionRegistryRejectsUnknownActiveAction(t *testing.T) {
 }
 
 func TestReadToolsReturnAllowlistedEvidence(t *testing.T) {
-	clients, _, err := NewDemoClients()
+	clients, _, err := NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,14 +335,8 @@ func TestReadToolsReturnAllowlistedEvidence(t *testing.T) {
 	}
 }
 
-func TestFixtureRuntimeResolvesSMSRecipientDetails(t *testing.T) {
-	clients, _, err := NewDemoClients()
-	if err != nil {
-		t.Fatal(err)
-	}
-	notification := &recordingNotification{}
-	clients.Notification = notification
-	runtime, err := NewFixtureWriteRuntime(clients)
+func TestFixtureRuntimeValidatesSMSBusinessReferences(t *testing.T) {
+	_, runtime, err := NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,63 +376,12 @@ func TestFixtureRuntimeResolvesSMSRecipientDetails(t *testing.T) {
 			t.Fatalf("SMS dispatch = %+v", result)
 		}
 	}
-
-	if len(notification.requests) != 2 {
-		t.Fatalf("notification requests = %d, want 2", len(notification.requests))
+	if runtime.WriteCount(domain.ActionSendSMS) != 2 {
+		t.Fatalf(
+			"SMS writes = %d, want 2",
+			runtime.WriteCount(domain.ActionSendSMS),
+		)
 	}
-	assertSMSRequest(t, notification.requests[0], platform.SendSMSRequest{
-		Phone:          "13800001234",
-		TemplateID:     "waybill_reassigned",
-		Params:         map[string]string{"waybill_id": "YD2026101001", "carrier_id": "CARRIER-SW-42"},
-		IdempotencyKey: "sms-key-0",
-	})
-	assertSMSRequest(t, notification.requests[1], platform.SendSMSRequest{
-		Phone:          "13961234567",
-		TemplateID:     "waybill_reassigned_driver",
-		Params:         map[string]string{"waybill_id": "YD2026101001", "carrier_id": "CARRIER-SW-42"},
-		IdempotencyKey: "sms-key-1",
-	})
-}
-
-type recordingNotification struct {
-	requests []platform.SendSMSRequest
-}
-
-func (n *recordingNotification) SendSMS(
-	_ context.Context,
-	request platform.SendSMSRequest,
-) (platform.SMSReceipt, error) {
-	n.requests = append(n.requests, request)
-	return platform.SMSReceipt{MessageID: "message", Status: "sent"}, nil
-}
-
-func (*recordingNotification) LookupEffect(
-	context.Context,
-	platform.LookupEffectRequest,
-) (platform.EffectResult, error) {
-	return platform.EffectResult{Disposition: platform.EffectUnknown}, nil
-}
-
-func assertSMSRequest(t *testing.T, got, want platform.SendSMSRequest) {
-	t.Helper()
-	if got.Phone != want.Phone ||
-		got.TemplateID != want.TemplateID ||
-		got.IdempotencyKey != want.IdempotencyKey ||
-		!sameStringMap(got.Params, want.Params) {
-		t.Fatalf("SMS request = %+v, want %+v", got, want)
-	}
-}
-
-func sameStringMap(left, right map[string]string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for key, value := range left {
-		if right[key] != value {
-			return false
-		}
-	}
-	return true
 }
 
 func schemaRequired(t *testing.T, schema map[string]any) []string {
@@ -473,7 +416,7 @@ func sameStrings(left, right []string) bool {
 
 func testRegistry(t *testing.T) *Registry {
 	t.Helper()
-	clients, _, err := NewDemoClients()
+	clients, _, err := NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}

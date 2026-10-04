@@ -12,6 +12,75 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/domain"
 )
 
+type WaybillCatalogItem struct {
+	WaybillID      domain.WaybillID `json:"waybill_id"`
+	Origin         string           `json:"origin"`
+	Destination    string           `json:"destination"`
+	Status         string           `json:"status"`
+	HasAnomaly     bool             `json:"has_anomaly"`
+	AnomalyLabel   string           `json:"anomaly_label,omitempty"`
+	LastRecordedAt string           `json:"last_recorded_at"`
+}
+
+type CarrierDTO struct {
+	ID             domain.CarrierID `json:"carrier_id"`
+	Name           string           `json:"name"`
+	ETAHours       int              `json:"eta_hours"`
+	ReliabilityPct float64          `json:"reliability_pct"`
+}
+
+type WaybillDTO struct {
+	ID                domain.WaybillID `json:"waybill_id"`
+	Origin            string           `json:"origin"`
+	Destination       string           `json:"destination"`
+	Cargo             string           `json:"cargo"`
+	CarrierID         domain.CarrierID `json:"carrier_id"`
+	DriverID          domain.DriverID  `json:"driver_id"`
+	Status            string           `json:"status"`
+	SLAHours          int              `json:"sla_hours"`
+	ShipperPhone      string           `json:"shipper_phone"`
+	CandidateCarriers []CarrierDTO     `json:"candidate_carriers"`
+}
+
+type TrackPointDTO struct {
+	Label      string  `json:"label"`
+	RecordedAt string  `json:"recorded_at"`
+	Longitude  float64 `json:"longitude"`
+	Latitude   float64 `json:"latitude"`
+	SpeedKPH   int     `json:"speed_kph"`
+	StopHours  float64 `json:"stop_hours,omitempty"`
+	Anomaly    bool    `json:"anomaly"`
+}
+
+type DriverDTO struct {
+	ID                 domain.DriverID `json:"driver_id"`
+	Name               string          `json:"name"`
+	Phone              string          `json:"phone"`
+	Plate              string          `json:"plate"`
+	ContinuousDriveHrs float64         `json:"continuous_drive_hours"`
+	FatigueAlert       bool            `json:"fatigue_alert"`
+}
+
+type RoadWeatherDTO struct {
+	Segment    string `json:"segment"`
+	Condition  string `json:"condition"`
+	AlertLevel string `json:"alert_level"`
+}
+
+type RiskScore struct {
+	ETADelay int `json:"eta_delay"`
+	Road     int `json:"road"`
+	Weather  int `json:"weather"`
+}
+
+type WaybillView struct {
+	Waybill  WaybillDTO       `json:"waybill"`
+	Tracking []TrackPointDTO  `json:"tracking"`
+	Driver   DriverDTO        `json:"driver"`
+	Weather  []RoadWeatherDTO `json:"weather"`
+	Risk     RiskScore        `json:"risk"`
+}
+
 type RunSummary struct {
 	RunID      domain.RunID      `json:"run_id"`
 	IncidentID domain.IncidentID `json:"incident_id"`
@@ -33,6 +102,114 @@ type PendingApprovalSummary struct {
 type RunSnapshot struct {
 	Run    RunSummary    `json:"run"`
 	Events []audit.Event `json:"events"`
+}
+
+func (s *Service) ListWaybills(
+	ctx context.Context,
+) ([]WaybillCatalogItem, error) {
+	if err := s.beginOperation(); err != nil {
+		return nil, err
+	}
+	defer s.wg.Done()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	values, err := s.reads.Catalog.ListWaybills(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]WaybillCatalogItem, 0, len(values))
+	for _, value := range values {
+		result = append(result, WaybillCatalogItem{
+			WaybillID:      value.WaybillID,
+			Origin:         value.Origin,
+			Destination:    value.Destination,
+			Status:         value.Status,
+			HasAnomaly:     value.HasAnomaly,
+			AnomalyLabel:   value.AnomalyLabel,
+			LastRecordedAt: value.LastRecordedAt.UTC().Format(time.RFC3339),
+		})
+	}
+	return result, nil
+}
+
+func (s *Service) GetWaybill(
+	ctx context.Context,
+	id domain.WaybillID,
+) (WaybillView, error) {
+	if err := s.beginOperation(); err != nil {
+		return WaybillView{}, err
+	}
+	defer s.wg.Done()
+	if err := ctx.Err(); err != nil {
+		return WaybillView{}, err
+	}
+	if err := domain.ValidateWaybillID(id); err != nil {
+		return WaybillView{}, err
+	}
+	facts, err := s.loadWaybillFacts(ctx, id)
+	if err != nil {
+		return WaybillView{}, err
+	}
+	assessment := deriveAssessment(facts)
+	return mapWaybillView(facts, assessment.Risk), nil
+}
+
+func mapWaybillView(facts waybillFacts, risk RiskScore) WaybillView {
+	carriers := make([]CarrierDTO, 0, len(facts.Waybill.CandidateCarriers))
+	for _, carrier := range facts.Waybill.CandidateCarriers {
+		carriers = append(carriers, CarrierDTO{
+			ID:             carrier.ID,
+			Name:           carrier.Name,
+			ETAHours:       carrier.ETAHours,
+			ReliabilityPct: carrier.ReliabilityPct,
+		})
+	}
+	tracking := make([]TrackPointDTO, 0, len(facts.Tracking))
+	for _, point := range facts.Tracking {
+		tracking = append(tracking, TrackPointDTO{
+			Label:      point.Label,
+			RecordedAt: point.RecordedAt,
+			Longitude:  point.Longitude,
+			Latitude:   point.Latitude,
+			SpeedKPH:   point.SpeedKPH,
+			StopHours:  point.StopHours,
+			Anomaly:    point.Anomaly,
+		})
+	}
+	weather := make([]RoadWeatherDTO, 0, len(facts.Weather))
+	for _, item := range facts.Weather {
+		weather = append(weather, RoadWeatherDTO{
+			Segment:    item.Segment,
+			Condition:  item.Condition,
+			AlertLevel: item.AlertLevel,
+		})
+	}
+	return WaybillView{
+		Waybill: WaybillDTO{
+			ID:                facts.Waybill.ID,
+			Origin:            facts.Waybill.Origin,
+			Destination:       facts.Waybill.Destination,
+			Cargo:             facts.Waybill.Cargo,
+			CarrierID:         facts.Waybill.CarrierID,
+			DriverID:          facts.Waybill.DriverID,
+			Status:            facts.Waybill.Status,
+			SLAHours:          facts.Waybill.SLAHours,
+			ShipperPhone:      audit.MaskPhone(facts.Waybill.ShipperPhone),
+			CandidateCarriers: carriers,
+		},
+		Tracking: tracking,
+		Driver: DriverDTO{
+			ID:                 facts.Driver.ID,
+			Name:               facts.Driver.Name,
+			Phone:              audit.MaskPhone(facts.Driver.Phone),
+			Plate:              audit.MaskPlate(facts.Driver.Plate),
+			ContinuousDriveHrs: facts.Driver.ContinuousDriveHrs,
+			FatigueAlert:       facts.Driver.FatigueAlert,
+		},
+		Weather: weather,
+		Risk:    risk,
+	}
 }
 
 func (s *Service) ListActiveRuns(ctx context.Context) ([]RunSummary, error) {

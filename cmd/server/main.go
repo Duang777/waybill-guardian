@@ -24,6 +24,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/outbox"
 	"github.com/Duang777/waybill-guardian/internal/outboxhttp"
 	"github.com/Duang777/waybill-guardian/internal/platform"
+	"github.com/Duang777/waybill-guardian/internal/platform/filestore"
 	"github.com/Duang777/waybill-guardian/internal/platform/tmssandbox"
 	"github.com/Duang777/waybill-guardian/internal/storage"
 	postgresstore "github.com/Duang777/waybill-guardian/internal/storage/postgres"
@@ -57,7 +58,7 @@ type realPlatformRuntimeConfig struct {
 }
 
 type platformRuntime struct {
-	clients       platform.Clients
+	reads         platform.ReadSet
 	writeRuntime  platform.WriteRuntime
 	activeActions []domain.Action
 	profileID     string
@@ -140,7 +141,8 @@ func run() error {
 	}
 	commonConfig := guardian.Config{
 		DataDir:          envOr("DATA_DIR", "data"),
-		Clients:          runtimeProfile.clients,
+		Reads:            runtimeProfile.reads,
+		WriteRuntime:     runtimeProfile.writeRuntime,
 		ActiveActions:    runtimeProfile.activeActions,
 		PlatformProfile:  runtimeProfile.profileID,
 		ReadSource:       runtimeProfile.readSource,
@@ -374,6 +376,13 @@ func validateRuntimeModes(
 ) error {
 	switch platformMode {
 	case "mock":
+	case "file":
+		if storageMode != storage.ModeJSONL {
+			return fmt.Errorf("PLATFORM=file requires STORAGE=jsonl")
+		}
+		if authMode != httpauth.ModeLocal {
+			return fmt.Errorf("PLATFORM=file requires AUTH_MODE=local")
+		}
 	case "real":
 		if storageMode != storage.ModePostgres {
 			return fmt.Errorf("PLATFORM=real requires STORAGE=postgres")
@@ -382,7 +391,7 @@ func validateRuntimeModes(
 			return fmt.Errorf("PLATFORM=real requires AUTH_MODE=jwt")
 		}
 	default:
-		return fmt.Errorf("PLATFORM must be mock or real")
+		return fmt.Errorf("PLATFORM must be mock, file, or real")
 	}
 	return nil
 }
@@ -609,23 +618,42 @@ func openPlatformRuntime(
 	platformMode string,
 	tenantID httpauth.TenantID,
 ) (platformRuntime, error) {
-	clients, _, err := tools.NewDemoClients()
-	if err != nil {
-		return platformRuntime{}, err
-	}
 	switch strings.ToLower(platformMode) {
 	case "mock":
-		writeRuntime, err := tools.NewFixtureWriteRuntime(clients)
+		reads, writeRuntime, err := tools.NewDemoRuntime()
 		if err != nil {
 			return platformRuntime{}, err
 		}
 		return platformRuntime{
-			clients:      clients,
+			reads:        reads,
 			writeRuntime: writeRuntime,
 			profileID:    tools.FixtureRuntimeAdapterID,
 			readSource:   fixtureReadSource,
 		}, nil
+	case "file":
+		dataFile := strings.TrimSpace(os.Getenv("DATA_FILE"))
+		if dataFile == "" {
+			return platformRuntime{}, fmt.Errorf("DATA_FILE is required for PLATFORM=file")
+		}
+		loaded, err := filestore.Load(dataFile)
+		if err != nil {
+			return platformRuntime{}, err
+		}
+		writeRuntime, err := tools.NewFixtureWriteRuntime(loaded.Reads)
+		if err != nil {
+			return platformRuntime{}, err
+		}
+		return platformRuntime{
+			reads:        loaded.Reads,
+			writeRuntime: writeRuntime,
+			profileID:    tools.FixtureRuntimeAdapterID,
+			readSource:   loaded.Source.String(),
+		}, nil
 	case "real":
+		reads, _, err := tools.NewDemoRuntime()
+		if err != nil {
+			return platformRuntime{}, err
+		}
 		config, err := realPlatformConfigFromEnv(tenantID)
 		if err != nil {
 			return platformRuntime{}, err
@@ -635,7 +663,7 @@ func openPlatformRuntime(
 			return platformRuntime{}, err
 		}
 		return platformRuntime{
-			clients:      clients,
+			reads:        reads,
 			writeRuntime: writeRuntime,
 			activeActions: []domain.Action{
 				domain.ActionGetWaybill,
@@ -649,7 +677,7 @@ func openPlatformRuntime(
 			reconcilePoll: config.reconcilePoll,
 		}, nil
 	default:
-		return platformRuntime{}, errors.New("PLATFORM must be mock or real")
+		return platformRuntime{}, errors.New("PLATFORM must be mock, file, or real")
 	}
 }
 

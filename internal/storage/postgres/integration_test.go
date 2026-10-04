@@ -1496,12 +1496,12 @@ func TestPrepareRecoveryQuarantinesOnlyDamagedRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clients, _, err := guardtools.NewDemoClients()
+	clients, _, err := guardtools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
 	service, err := guardian.OpenDurable(guardian.DurableConfig{
-		Config:      guardian.Config{Clients: clients},
+		Config:      guardian.Config{Reads: clients},
 		Journal:     repository,
 		Effects:     repository,
 		History:     history,
@@ -1571,7 +1571,7 @@ func TestTimelineObservesAnotherRepositoryInstance(t *testing.T) {
 func TestRepositoryValidatesRecoveryCoverage(t *testing.T) {
 	db := openIntegrationDB(t)
 	tenantID := "tenant-" + uuid.NewString()
-	clients, _, err := guardtools.NewDemoClients()
+	clients, _, err := guardtools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1690,7 +1690,7 @@ func TestRepositoryValidatesRecoveryCoverage(t *testing.T) {
 func TestEffectBindingSchemaRejectsMissingV1Fields(t *testing.T) {
 	db := openIntegrationDB(t)
 	tenantID := "tenant-" + uuid.NewString()
-	clients, _, err := guardtools.NewDemoClients()
+	clients, _, err := guardtools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1791,7 +1791,7 @@ func TestEffectBindingSchemaRejectsMissingV1Fields(t *testing.T) {
 func TestRepositoryListsOnlyDueEffectRecoveries(t *testing.T) {
 	db := openIntegrationDB(t)
 	tenantID := "tenant-" + uuid.NewString()
-	clients, _, err := guardtools.NewDemoClients()
+	clients, _, err := guardtools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1878,14 +1878,11 @@ func TestRepositoryListsOnlyDueEffectRecoveries(t *testing.T) {
 func TestRepositoryExecutesAndReplaysApprovedEffect(t *testing.T) {
 	db := openIntegrationDB(t)
 	tenantID := "tenant-" + uuid.NewString()
-	clients, mock, err := guardtools.NewDemoClients()
+	_, mock, err := guardtools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeRuntime, err := guardtools.NewFixtureWriteRuntime(clients)
-	if err != nil {
-		t.Fatal(err)
-	}
+	writeRuntime := mock
 	repository := newIntegrationRepository(t, db, tenantID, "worker-1", writeRuntime)
 	defer repository.Close()
 
@@ -2032,7 +2029,7 @@ func TestRepositoryExecutesAndReplaysApprovedEffect(t *testing.T) {
 func TestRepositoryPersistsBindingBeforeDispatchAndRenewsEffectLease(t *testing.T) {
 	db := openIntegrationDB(t)
 	tenantID := "tenant-" + uuid.NewString()
-	clients, _, err := guardtools.NewDemoClients()
+	clients, _, err := guardtools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2131,7 +2128,7 @@ func TestRepositoryPersistsBindingBeforeDispatchAndRenewsEffectLease(t *testing.
 func TestRepositoryRecoversExpiredDispatchByLookupWithoutMutation(t *testing.T) {
 	db := openIntegrationDB(t)
 	tenantID := "tenant-" + uuid.NewString()
-	clients, _, err := guardtools.NewDemoClients()
+	clients, _, err := guardtools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2519,14 +2516,11 @@ func TestGuardianResumesPostgresHistoryAcrossInstances(t *testing.T) {
 	db := openIntegrationDB(t)
 	tenantID := "tenant-" + uuid.NewString()
 	key := bytes.Repeat([]byte{0x62}, 32)
-	clients, mock, err := guardtools.NewDemoClients()
+	clients, mock, err := guardtools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeRuntime, err := guardtools.NewFixtureWriteRuntime(clients)
-	if err != nil {
-		t.Fatal(err)
-	}
+	writeRuntime := mock
 	openService := func(workerID string) *guardian.Service {
 		repository := newIntegrationRepository(t, db, tenantID, workerID, writeRuntime)
 		persistence, err := NewConversationPersistence(t.Context(), db, HistoryConfig{
@@ -2538,7 +2532,7 @@ func TestGuardianResumesPostgresHistoryAcrossInstances(t *testing.T) {
 			t.Fatal(err)
 		}
 		service, err := guardian.OpenDurable(guardian.DurableConfig{
-			Config:      guardian.Config{Clients: clients},
+			Config:      guardian.Config{Reads: clients},
 			Journal:     repository,
 			Effects:     repository,
 			History:     persistence,
@@ -2551,7 +2545,7 @@ func TestGuardianResumesPostgresHistoryAcrossInstances(t *testing.T) {
 	}
 
 	first := openService("worker-first")
-	run, err := first.StartDemo(t.Context())
+	run, err := first.StartRun(t.Context(), "YD2026101001")
 	if err != nil {
 		t.Fatal(err)
 	}

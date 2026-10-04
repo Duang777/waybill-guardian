@@ -16,16 +16,16 @@ var demoData []byte
 
 var ErrWriteMiddlewareRequired = errors.New("write middleware required")
 
-func NewDemoClients() (platform.Clients, *platform.Mock, error) {
+func NewDemoRuntime() (platform.ReadSet, *FixtureWriteRuntime, error) {
 	loaded, err := filestore.LoadEmbeddedJSON("demo.json", demoData)
 	if err != nil {
-		return platform.Clients{}, nil, err
+		return platform.ReadSet{}, nil, err
 	}
-	mock, err := platform.NewMock(loaded.Reads)
+	writes, err := NewFixtureWriteRuntime(loaded.Reads)
 	if err != nil {
-		return platform.Clients{}, nil, err
+		return platform.ReadSet{}, nil, err
 	}
-	return platform.Clients{TMS: mock, Weather: mock, Notification: mock}, mock, nil
+	return loaded.Reads, writes, nil
 }
 
 type GetWaybillInput struct {
@@ -121,21 +121,21 @@ type SendSMSInput struct {
 type SendSMSOutput = platform.SMSReceipt
 
 type Handlers struct {
-	clients platform.Clients
+	reads platform.ReadSet
 }
 
-func NewHandlers(clients platform.Clients) (*Handlers, error) {
-	if clients.TMS == nil || clients.Weather == nil || clients.Notification == nil {
-		return nil, fmt.Errorf("all platform clients are required")
+func NewHandlers(reads platform.ReadSet) (*Handlers, error) {
+	if reads.TMS == nil || reads.Weather == nil || reads.Catalog == nil {
+		return nil, fmt.Errorf("all platform readers are required")
 	}
-	return &Handlers{clients: clients}, nil
+	return &Handlers{reads: reads}, nil
 }
 
 func (h *Handlers) GetWaybill(ctx context.Context, in GetWaybillInput) (GetWaybillOutput, error) {
 	if err := validateWaybillID(in.WaybillID); err != nil {
 		return GetWaybillOutput{}, err
 	}
-	waybill, err := h.clients.TMS.GetWaybill(ctx, platform.GetWaybillRequest{
+	waybill, err := h.reads.TMS.GetWaybill(ctx, platform.GetWaybillRequest{
 		WaybillID: domain.WaybillID(in.WaybillID),
 	})
 	if err != nil {
@@ -167,7 +167,7 @@ func (h *Handlers) GetTracking(ctx context.Context, in GetTrackingInput) (GetTra
 	if err := validateWaybillID(in.WaybillID); err != nil {
 		return GetTrackingOutput{}, err
 	}
-	points, err := h.clients.TMS.GetTracking(ctx, platform.GetTrackingRequest{
+	points, err := h.reads.TMS.GetTracking(ctx, platform.GetTrackingRequest{
 		WaybillID: domain.WaybillID(in.WaybillID),
 	})
 	if err != nil {
@@ -190,7 +190,7 @@ func (h *Handlers) GetDriver(ctx context.Context, in GetDriverInput) (GetDriverO
 	if in.DriverID == "" {
 		return GetDriverOutput{}, fmt.Errorf("driver_id is required")
 	}
-	driver, err := h.clients.TMS.GetDriver(ctx, platform.GetDriverRequest{
+	driver, err := h.reads.TMS.GetDriver(ctx, platform.GetDriverRequest{
 		DriverID: domain.DriverID(in.DriverID),
 	})
 	if err != nil {
@@ -207,7 +207,7 @@ func (h *Handlers) GetRoadWeather(ctx context.Context, in GetRoadWeatherInput) (
 	if in.Route == "" {
 		return GetRoadWeatherOutput{}, fmt.Errorf("route is required")
 	}
-	segments, err := h.clients.Weather.GetRoadWeather(ctx, platform.GetRoadWeatherRequest{Route: in.Route})
+	segments, err := h.reads.Weather.GetRoadWeather(ctx, platform.GetRoadWeatherRequest{Route: in.Route})
 	if err != nil {
 		return GetRoadWeatherOutput{}, err
 	}
