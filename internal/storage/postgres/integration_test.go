@@ -1567,6 +1567,104 @@ func TestTimelineObservesAnotherRepositoryInstance(t *testing.T) {
 	}
 }
 
+func TestRepositoryValidatesRecoveryCoverage(t *testing.T) {
+	db := openIntegrationDB(t)
+	tenantID := "tenant-" + uuid.NewString()
+	clients, _, err := guardtools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := guardtools.NewFixtureWriteRuntime(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := newIntegrationRepository(t, db, tenantID, "worker-coverage", runtime)
+	defer repository.Close()
+
+	if err := repository.ValidateRecoveryCoverage(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	legacyRunID := domain.RunID(uuid.NewString())
+	_, legacyCommand, _ := prepareApprovedReassignEffect(
+		t,
+		repository,
+		legacyRunID,
+		"CARRIER-SW-42",
+	)
+	if err := repository.ValidateRecoveryCoverage(t.Context()); !errors.Is(
+		err,
+		ErrRecoveryCoverageMissing,
+	) {
+		t.Fatalf("legacy recovery coverage error = %v", err)
+	}
+	if _, err := db.pool.Exec(t.Context(), `
+		UPDATE waybill.effects
+		SET status = 'permanent_failed'
+		WHERE tenant_id = $1 AND effect_id = $2
+	`, tenantID, legacyCommand.Identity.EffectID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.ValidateRecoveryCoverage(t.Context()); err != nil {
+		t.Fatalf("terminal legacy effect blocked recovery coverage: %v", err)
+	}
+
+	boundRunID := domain.RunID(uuid.NewString())
+	_, boundCommand, boundEffect := prepareApprovedReassignEffect(
+		t,
+		repository,
+		boundRunID,
+		"CARRIER-SW-77",
+	)
+	binding, err := runtime.Bind(
+		boundEffect.Request(),
+		boundCommand.Identity.Key,
+		time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.pool.Exec(t.Context(), `
+		UPDATE waybill.effects
+		SET status = 'unknown',
+		    binding_schema_version = $3,
+		    adapter_id = $4,
+		    provider_contract_version = $5,
+		    provider_operation = $6,
+		    provider_scope_digest = $7,
+		    provider_request_hash = $8,
+		    key_created_at = $9,
+		    key_expires_at = $10,
+		    lookup_consistency_window_ms = $11,
+		    dispatch_started_at = clock_timestamp(),
+		    retry_after = clock_timestamp()
+		WHERE tenant_id = $1 AND effect_id = $2
+	`, tenantID, boundCommand.Identity.EffectID, binding.SchemaVersion,
+		binding.AdapterID, binding.ContractVersion, binding.ProviderOperation,
+		binding.ProviderScopeDigest, binding.ProviderRequestHash,
+		binding.KeyCreatedAt, binding.KeyExpiresAt,
+		binding.LookupConsistencyWindow.Milliseconds()); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.ValidateRecoveryCoverage(t.Context()); err != nil {
+		t.Fatalf("supported recovery binding was rejected: %v", err)
+	}
+
+	if _, err := db.pool.Exec(t.Context(), `
+		UPDATE waybill.effects
+		SET provider_contract_version = 'unsupported-v2'
+		WHERE tenant_id = $1 AND effect_id = $2
+	`, tenantID, boundCommand.Identity.EffectID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.ValidateRecoveryCoverage(t.Context()); !errors.Is(
+		err,
+		ErrRecoveryCoverageMissing,
+	) {
+		t.Fatalf("unsupported recovery coverage error = %v", err)
+	}
+}
+
 func TestRepositoryExecutesAndReplaysApprovedEffect(t *testing.T) {
 	db := openIntegrationDB(t)
 	tenantID := "tenant-" + uuid.NewString()

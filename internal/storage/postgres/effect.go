@@ -17,9 +17,10 @@ import (
 )
 
 var (
-	ErrEffectLeaseHeld   = errors.New("effect lease is held by another worker")
-	ErrStaleEffectClaim  = errors.New("effect claim is stale")
-	ErrEffectRuntimeDown = errors.New("effect write runtime is not configured")
+	ErrEffectLeaseHeld         = errors.New("effect lease is held by another worker")
+	ErrStaleEffectClaim        = errors.New("effect claim is stale")
+	ErrEffectRuntimeDown       = errors.New("effect write runtime is not configured")
+	ErrRecoveryCoverageMissing = errors.New("effect recovery coverage is incomplete")
 )
 
 type effectWorkKind uint8
@@ -211,6 +212,83 @@ func (r *Repository) Status(command idempotency.Command) (idempotency.State, boo
 	}
 	state, ok := databaseEffectState(row.status)
 	return state, ok
+}
+
+func (r *Repository) ValidateRecoveryCoverage(ctx context.Context) error {
+	if err := r.checkOpen(); err != nil {
+		return err
+	}
+	if r.writeRuntime == nil {
+		return ErrEffectRuntimeDown
+	}
+	rows, err := r.db.pool.Query(ctx, `
+		SELECT run_id, effect_id, status, action, binding_schema_version,
+		       adapter_id, provider_contract_version, provider_operation,
+		       provider_scope_digest, provider_request_hash, key_created_at,
+		       key_expires_at, lookup_consistency_window_ms
+		FROM waybill.effects
+		WHERE tenant_id = $1
+		  AND status IN (
+		      'prepared',
+		      'dispatching',
+		      'retryable_failed',
+		      'unknown',
+		      'reconciling'
+		  )
+		ORDER BY run_id, effect_id
+	`, r.tenantID)
+	if err != nil {
+		return fmt.Errorf("list PostgreSQL effects for recovery coverage: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var runID domain.RunID
+		var effectID domain.EffectID
+		var row effectRow
+		if err := rows.Scan(
+			&runID,
+			&effectID,
+			&row.status,
+			&row.action,
+			&row.bindingSchemaVersion,
+			&row.adapterID,
+			&row.contractVersion,
+			&row.providerOperation,
+			&row.providerScopeDigest,
+			&row.providerRequestHash,
+			&row.keyCreatedAt,
+			&row.keyExpiresAt,
+			&row.lookupConsistencyWindow,
+		); err != nil {
+			return fmt.Errorf("scan PostgreSQL effect recovery coverage: %w", err)
+		}
+		binding, ok := row.binding()
+		if !ok {
+			return fmt.Errorf(
+				"%w: run %q effect %q status %q has binding schema %d",
+				ErrRecoveryCoverageMissing,
+				runID,
+				effectID,
+				row.status,
+				row.bindingSchemaVersion,
+			)
+		}
+		if !r.writeRuntime.SupportsRecovery(binding) {
+			return fmt.Errorf(
+				"%w: run %q effect %q requires adapter %q contract %q",
+				ErrRecoveryCoverageMissing,
+				runID,
+				effectID,
+				binding.AdapterID,
+				binding.ContractVersion,
+			)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read PostgreSQL effect recovery coverage: %w", err)
+	}
+	return nil
 }
 
 func (r *Repository) acquireDispatch(
