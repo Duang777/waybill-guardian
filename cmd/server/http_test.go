@@ -21,6 +21,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/guardian"
 	"github.com/Duang777/waybill-guardian/internal/httpauth"
 	"github.com/Duang777/waybill-guardian/internal/platform"
+	"github.com/Duang777/waybill-guardian/internal/platform/tmssandbox"
 	"github.com/Duang777/waybill-guardian/internal/storage"
 	"github.com/Duang777/waybill-guardian/internal/tools"
 )
@@ -496,6 +497,82 @@ func TestRealPlatformFailsFast(t *testing.T) {
 	}
 }
 
+func TestRealPlatformConfigFromEnv(t *testing.T) {
+	setValidRealPlatformEnv(t)
+	t.Setenv("PLATFORM_REQUEST_TIMEOUT", "4s")
+	t.Setenv("PLATFORM_STARTUP_TIMEOUT", "6s")
+	t.Setenv("EFFECT_RECONCILE_HORIZON", "48h")
+	t.Setenv("PLATFORM_MAX_LOOKUP_CONSISTENCY_WINDOW", "45s")
+
+	config, err := realPlatformConfigFromEnv("tenant-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.profileID != tmssandbox.ProfileID ||
+		config.readSource != "fixture-v1" ||
+		config.adapter.BaseURL != "https://sandbox.example.test" ||
+		config.adapter.Token != "secret-token" ||
+		config.adapter.Account != "tenant-a" ||
+		config.adapter.RequestTimeout != 4*time.Second ||
+		config.adapter.StartupTimeout != 6*time.Second ||
+		config.adapter.ReconciliationHorizon != 48*time.Hour ||
+		config.adapter.MaxConsistencyWindow != 45*time.Second ||
+		config.adapter.Clock == nil {
+		t.Fatalf("real platform config = %+v", config)
+	}
+}
+
+func TestRealPlatformConfigRejectsIncompleteOrCrossTenantProfile(t *testing.T) {
+	tests := []struct {
+		name     string
+		key      string
+		value    string
+		tenantID httpauth.TenantID
+	}{
+		{
+			name:     "missing profile",
+			key:      "REAL_PLATFORM_PROFILE",
+			tenantID: "tenant-a",
+		},
+		{
+			name:     "implicit reads",
+			key:      "REAL_READ_SOURCE",
+			tenantID: "tenant-a",
+		},
+		{
+			name:     "missing URL",
+			key:      "TMS_SANDBOX_BASE_URL",
+			tenantID: "tenant-a",
+		},
+		{
+			name:     "missing token",
+			key:      "TMS_SANDBOX_TOKEN",
+			tenantID: "tenant-a",
+		},
+		{
+			name:     "account mismatch",
+			tenantID: "tenant-b",
+		},
+		{
+			name:     "invalid timeout",
+			key:      "PLATFORM_REQUEST_TIMEOUT",
+			value:    "0s",
+			tenantID: "tenant-a",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setValidRealPlatformEnv(t)
+			if test.key != "" {
+				t.Setenv(test.key, test.value)
+			}
+			if _, err := realPlatformConfigFromEnv(test.tenantID); err == nil {
+				t.Fatal("invalid real platform configuration was accepted")
+			}
+		})
+	}
+}
+
 func TestRuntimeStorageConfiguration(t *testing.T) {
 	if err := validateRuntimeModes("mock", "jsonl", httpauth.ModeLocal); err != nil {
 		t.Fatal(err)
@@ -511,6 +588,23 @@ func TestRuntimeStorageConfiguration(t *testing.T) {
 	}
 	if err := validateRuntimeModes("unknown", "jsonl", httpauth.ModeLocal); err == nil {
 		t.Fatal("unknown platform mode was accepted")
+	}
+}
+
+func setValidRealPlatformEnv(t *testing.T) {
+	t.Helper()
+	for name, value := range map[string]string{
+		"REAL_PLATFORM_PROFILE":                  tmssandbox.ProfileID,
+		"REAL_READ_SOURCE":                       "fixture-v1",
+		"TMS_SANDBOX_BASE_URL":                   "https://sandbox.example.test",
+		"TMS_SANDBOX_TOKEN":                      "secret-token",
+		"TMS_SANDBOX_ACCOUNT":                    "tenant-a",
+		"PLATFORM_REQUEST_TIMEOUT":               "",
+		"PLATFORM_STARTUP_TIMEOUT":               "",
+		"EFFECT_RECONCILE_HORIZON":               "",
+		"PLATFORM_MAX_LOOKUP_CONSISTENCY_WINDOW": "",
+	} {
+		t.Setenv(name, value)
 	}
 }
 

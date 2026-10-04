@@ -24,6 +24,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/outbox"
 	"github.com/Duang777/waybill-guardian/internal/outboxhttp"
 	"github.com/Duang777/waybill-guardian/internal/platform"
+	"github.com/Duang777/waybill-guardian/internal/platform/tmssandbox"
 	"github.com/Duang777/waybill-guardian/internal/storage"
 	postgresstore "github.com/Duang777/waybill-guardian/internal/storage/postgres"
 	"github.com/Duang777/waybill-guardian/internal/tools"
@@ -43,6 +44,12 @@ type eventRuntimeConfig struct {
 	outboxStatsPoll time.Duration
 	outboxTimeout   time.Duration
 	metricsAddr     string
+}
+
+type realPlatformRuntimeConfig struct {
+	profileID  string
+	readSource string
+	adapter    tmssandbox.Config
 }
 
 func main() {
@@ -580,6 +587,73 @@ func platformClients() (platform.Clients, error) {
 	default:
 		return platform.Clients{}, errors.New("PLATFORM must be mock or real")
 	}
+}
+
+func realPlatformConfigFromEnv(
+	tenantID httpauth.TenantID,
+) (realPlatformRuntimeConfig, error) {
+	profileID := strings.TrimSpace(os.Getenv("REAL_PLATFORM_PROFILE"))
+	if profileID != tmssandbox.ProfileID {
+		return realPlatformRuntimeConfig{}, fmt.Errorf(
+			"REAL_PLATFORM_PROFILE must be %s",
+			tmssandbox.ProfileID,
+		)
+	}
+	readSource := strings.TrimSpace(os.Getenv("REAL_READ_SOURCE"))
+	if readSource != "fixture-v1" {
+		return realPlatformRuntimeConfig{}, fmt.Errorf(
+			"REAL_READ_SOURCE must be fixture-v1",
+		)
+	}
+	baseURL := strings.TrimSpace(os.Getenv("TMS_SANDBOX_BASE_URL"))
+	token := strings.TrimSpace(os.Getenv("TMS_SANDBOX_TOKEN"))
+	account := strings.TrimSpace(os.Getenv("TMS_SANDBOX_ACCOUNT"))
+	if baseURL == "" || token == "" || account == "" {
+		return realPlatformRuntimeConfig{}, fmt.Errorf(
+			"TMS_SANDBOX_BASE_URL, TMS_SANDBOX_TOKEN, and TMS_SANDBOX_ACCOUNT are required",
+		)
+	}
+	if account != string(tenantID) {
+		return realPlatformRuntimeConfig{}, fmt.Errorf(
+			"TMS_SANDBOX_ACCOUNT must match TENANT_ID",
+		)
+	}
+	requestTimeout, err := strictDurationEnv("PLATFORM_REQUEST_TIMEOUT", 3*time.Second)
+	if err != nil {
+		return realPlatformRuntimeConfig{}, err
+	}
+	startupTimeout, err := strictDurationEnv("PLATFORM_STARTUP_TIMEOUT", 5*time.Second)
+	if err != nil {
+		return realPlatformRuntimeConfig{}, err
+	}
+	reconciliationHorizon, err := strictDurationEnv(
+		"EFFECT_RECONCILE_HORIZON",
+		24*time.Hour,
+	)
+	if err != nil {
+		return realPlatformRuntimeConfig{}, err
+	}
+	maxConsistencyWindow, err := strictDurationEnv(
+		"PLATFORM_MAX_LOOKUP_CONSISTENCY_WINDOW",
+		30*time.Second,
+	)
+	if err != nil {
+		return realPlatformRuntimeConfig{}, err
+	}
+	return realPlatformRuntimeConfig{
+		profileID:  profileID,
+		readSource: readSource,
+		adapter: tmssandbox.Config{
+			BaseURL:               baseURL,
+			Token:                 token,
+			Account:               account,
+			RequestTimeout:        requestTimeout,
+			StartupTimeout:        startupTimeout,
+			ReconciliationHorizon: reconciliationHorizon,
+			MaxConsistencyWindow:  maxConsistencyWindow,
+			Clock:                 time.Now,
+		},
+	}, nil
 }
 
 func envOr(name, fallback string) string {
