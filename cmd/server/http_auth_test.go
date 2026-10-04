@@ -176,7 +176,7 @@ func TestJWTHandlerEnforcesTenantRoleAndWaybillScope(t *testing.T) {
 		http.MethodPost,
 		server.URL+"/api/approvals/"+string(pending.ID)+"/confirm",
 		wrongWaybill,
-		nil,
+		strings.NewReader(`{}`),
 	)
 	assertProblem(t, response, http.StatusForbidden, "forbidden")
 	if mock.WriteCount(domain.ActionReassign) != 0 {
@@ -261,12 +261,13 @@ func TestJWTHandlerUsesVerifiedSubjectForApproval(t *testing.T) {
 	request, err := http.NewRequest(
 		http.MethodPost,
 		server.URL+"/api/approvals/"+string(pending.ID)+"/confirm",
-		http.NoBody,
+		strings.NewReader(`{}`),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Actor", "forged-reviewer")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
@@ -308,7 +309,7 @@ func TestJWTHandlerRequiresRunCreationRole(t *testing.T) {
 		http.MethodPost,
 		server.URL+"/api/demo/trigger",
 		dispatcher,
-		nil,
+		strings.NewReader(`{}`),
 	)
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusAccepted {

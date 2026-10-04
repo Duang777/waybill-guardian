@@ -45,7 +45,11 @@ func TestHTTPDemoFlowAndSSECursor(t *testing.T) {
 	server := httptest.NewServer(newHandler(service, newLocalAccess(t)))
 	defer server.Close()
 
-	response, err := http.Post(server.URL+"/api/demo/trigger", "application/json", http.NoBody)
+	response, err := http.Post(
+		server.URL+"/api/demo/trigger",
+		"application/json",
+		strings.NewReader(`{}`),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,12 +82,13 @@ func TestHTTPDemoFlowAndSSECursor(t *testing.T) {
 	confirmRequest, err := http.NewRequest(
 		http.MethodPost,
 		server.URL+"/api/approvals/"+string(pending.ID)+"/confirm",
-		http.NoBody,
+		strings.NewReader(`{}`),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	confirmRequest.Header.Set("X-Actor", "forged-reviewer")
+	confirmRequest.Header.Set("Content-Type", "application/json")
 	confirmResponse, err := http.DefaultClient.Do(confirmRequest)
 	if err != nil {
 		t.Fatal(err)
@@ -142,6 +147,147 @@ func TestHTTPDemoFlowAndSSECursor(t *testing.T) {
 	cancel()
 	if receivedID != strconv.FormatUint(uint64(cursor+1), 10) {
 		t.Fatalf("resumed SSE id = %q, want %d", receivedID, cursor+1)
+	}
+}
+
+func TestCrossOriginApprovalRequestsDoNotChangeState(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers map[string]string
+	}{
+		{
+			name: "cross-site fetch metadata",
+			headers: map[string]string{
+				"Sec-Fetch-Site": "cross-site",
+			},
+		},
+		{
+			name:    "mismatched origin without fetch metadata",
+			headers: map[string]string{"Origin": "https://evil.example"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service, writes, server, pending := newPendingApprovalHTTPServer(t, "")
+
+			response := postApprovalConfirmation(t, server.URL, pending.ID, test.headers)
+			assertProblem(t, response, http.StatusForbidden, "cross_origin_denied")
+
+			current, err := service.GetApproval(pending.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if current.Status != approval.StatusPending {
+				t.Fatalf("approval status = %q, want pending", current.Status)
+			}
+			if writes.WriteCount(domain.ActionReassign) != 0 {
+				t.Fatal("cross-origin approval executed a platform write")
+			}
+		})
+	}
+}
+
+func TestCrossOriginApprovalAllowsSupportedClients(t *testing.T) {
+	tests := []struct {
+		name           string
+		allowedOrigins string
+		headers        func(string) map[string]string
+	}{
+		{
+			name: "non-browser client",
+			headers: func(string) map[string]string {
+				return nil
+			},
+		},
+		{
+			name: "same-origin browser",
+			headers: func(serverURL string) map[string]string {
+				return map[string]string{
+					"Origin":         serverURL,
+					"Sec-Fetch-Site": "same-origin",
+				}
+			},
+		},
+		{
+			name:           "configured trusted origin",
+			allowedOrigins: "https://console.example",
+			headers: func(string) map[string]string {
+				return map[string]string{
+					"Origin":         "https://console.example",
+					"Sec-Fetch-Site": "cross-site",
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, server, pending := newPendingApprovalHTTPServer(t, test.allowedOrigins)
+
+			response := postApprovalConfirmation(
+				t,
+				server.URL,
+				pending.ID,
+				test.headers(server.URL),
+			)
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusAccepted {
+				body, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want 202; body=%s", response.StatusCode, body)
+			}
+			var confirmed approval.Approval
+			if err := json.NewDecoder(response.Body).Decode(&confirmed); err != nil {
+				t.Fatal(err)
+			}
+			if confirmed.Status != approval.StatusExecuted {
+				t.Fatalf("approval status = %q, want executed", confirmed.Status)
+			}
+		})
+	}
+}
+
+func TestMutationEndpointsRequireJSONContentType(t *testing.T) {
+	service, _, server, pending := newPendingApprovalHTTPServer(t, "")
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "demo trigger", path: "/api/demo/trigger", body: `{}`},
+		{
+			name: "approval confirmation",
+			path: "/api/approvals/" + string(pending.ID) + "/confirm",
+			body: `{}`,
+		},
+		{
+			name: "approval rejection",
+			path: "/api/approvals/" + string(pending.ID) + "/reject",
+			body: `{"reason":"manual review"}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := http.NewRequest(
+				http.MethodPost,
+				server.URL+test.path,
+				strings.NewReader(test.body),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertProblem(t, response, http.StatusUnsupportedMediaType, "invalid_content_type")
+		})
+	}
+
+	current, err := service.GetApproval(pending.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != approval.StatusPending {
+		t.Fatalf("approval status = %q, want pending", current.Status)
 	}
 }
 
@@ -1061,6 +1207,20 @@ func TestValidateHTTPAddrAllowsOnlyExplicitLoopback(t *testing.T) {
 	}
 }
 
+func TestCrossOriginProtectionRejectsInvalidConfiguration(t *testing.T) {
+	for _, value := range []string{
+		"https://console.example,",
+		"console.example",
+		"https://console.example/path",
+	} {
+		t.Run(value, func(t *testing.T) {
+			if _, err := crossOriginProtection(value); err == nil {
+				t.Fatalf("ALLOWED_ORIGINS=%q was accepted", value)
+			}
+		})
+	}
+}
+
 func TestHandlerRejectsNonLoopbackHost(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "http://attacker.example/healthz", nil)
 	response := httptest.NewRecorder()
@@ -1100,7 +1260,15 @@ func TestHandlerServesConfiguredFrontendWithoutShadowingHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := newHandlerWithFrontend(nil, newLocalAccess(t), nil, nil, frontend, nil)
+	handler := newHandlerWithFrontend(
+		nil,
+		newLocalAccess(t),
+		nil,
+		nil,
+		frontend,
+		nil,
+		defaultCrossOriginProtection(),
+	)
 
 	pageRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/", nil)
 	pageResponse := httptest.NewRecorder()
@@ -1147,7 +1315,15 @@ func TestStaticFileHandlerRequiresIndex(t *testing.T) {
 
 func TestHandlerChecksRemoteAddressForContainerLocalMode(t *testing.T) {
 	trusted := netip.MustParseAddr("192.0.2.10")
-	handler := newHandlerWithFrontend(nil, newLocalAccess(t), nil, nil, nil, []netip.Addr{trusted})
+	handler := newHandlerWithFrontend(
+		nil,
+		newLocalAccess(t),
+		nil,
+		nil,
+		nil,
+		[]netip.Addr{trusted},
+		defaultCrossOriginProtection(),
+	)
 
 	untrustedRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/healthz", nil)
 	untrustedRequest.RemoteAddr = "192.0.2.11:41000"
@@ -1381,6 +1557,59 @@ func (w *cancelOnFlushWriter) Flush() {
 
 func (*cancelOnFlushWriter) SetWriteDeadline(time.Time) error {
 	return nil
+}
+
+func newPendingApprovalHTTPServer(
+	t *testing.T,
+	allowedOrigins string,
+) (*guardian.Service, *tools.FixtureWriteRuntime, *httptest.Server, approval.Approval) {
+	t.Helper()
+	service, writes := newHTTPAuthService(t)
+	protection, err := crossOriginProtection(allowedOrigins)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(newHandlerWithFrontend(
+		service,
+		newLocalAccess(t),
+		nil,
+		nil,
+		nil,
+		nil,
+		protection,
+	))
+	t.Cleanup(server.Close)
+	run, err := service.StartRun(context.Background(), "YD2026101001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service, writes, server, waitForHTTPApproval(t, service, run.RunID)
+}
+
+func postApprovalConfirmation(
+	t *testing.T,
+	serverURL string,
+	id domain.ApprovalID,
+	headers map[string]string,
+) *http.Response {
+	t.Helper()
+	request, err := http.NewRequest(
+		http.MethodPost,
+		serverURL+"/api/approvals/"+string(id)+"/confirm",
+		strings.NewReader(`{}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	for name, value := range headers {
+		request.Header.Set(name, value)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
 }
 
 func waitForHTTPApproval(

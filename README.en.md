@@ -223,7 +223,7 @@ browser E2E suites and upload `web/artifacts/*.png`.
 
 ## Configuration
 
-`./scripts/demo.sh` sets the first four variables below. Every other variable is inherited from the shell. `go run ./cmd/server` listens on `HTTP_ADDR`, default `127.0.0.1:8080`.
+`./scripts/demo.sh` reads the first four variables below and derives `ALLOWED_ORIGINS` from the web URL by default. Every other variable is inherited from the shell. `go run ./cmd/server` listens on `HTTP_ADDR`, default `127.0.0.1:8080`.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -232,6 +232,7 @@ browser E2E suites and upload `web/artifacts/*.png`.
 | `WEB_HOST` | `127.0.0.1` | Web host, used by `demo.sh` |
 | `WEB_PORT` | `5173` | Web port, used by `demo.sh` |
 | `HTTP_ADDR` | `127.0.0.1:8080` | Server listen address. Local mode requires a loopback IP |
+| `ALLOWED_ORIGINS` | empty | Comma-separated trusted browser origins in exact `scheme://host[:port]` form. Configure only for cross-origin deployments |
 | `WEB_STATIC_DIR` | empty | Frontend build directory served by Go. The container uses `/app/web` |
 | `ALLOW_NON_LOOPBACK_LOCAL` | `false` | Allow local mode to listen on a non-loopback IP, only for a container published on host loopback |
 | `LOCAL_TRUSTED_REMOTE` | empty | Required with the previous option. The TCP peer must match this IP, hostname, or `container-gateway` |
@@ -423,7 +424,11 @@ peer with `LOCAL_TRUSTED_REMOTE=container-gateway`, and publishes the Compose po
 loopback. The approval subject is fixed as `local-demo-reviewer`. A client-supplied `Authorization`
 header or `X-Actor` header does not choose the identity.
 
-Non-GET routes do not yet check `Origin` or `Sec-Fetch-Site`. See [issue 64](https://github.com/Duang777/waybill-guardian/issues/64).
+Go's standard `CrossOriginProtection` checks `Sec-Fetch-Site` and `Origin` on unsafe API methods.
+Same-origin requests, exact origins in `ALLOWED_ORIGINS`, and CLI or service requests without browser
+origin headers are allowed. Other cross-site browser requests receive 403. Approval confirmation,
+rejection, and the demo trigger also require `Content-Type: application/json`; requests without
+parameters send `{}`.
 
 ## Open source
 

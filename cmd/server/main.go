@@ -94,6 +94,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	crossOrigin, err := crossOriginProtection(os.Getenv("ALLOWED_ORIGINS"))
+	if err != nil {
+		return err
+	}
 	frontend, err := staticFileHandler(os.Getenv("WEB_STATIC_DIR"))
 	if err != nil {
 		return err
@@ -313,6 +317,7 @@ func run() error {
 			recorder,
 			frontend,
 			trustedLocalRemotes,
+			crossOrigin,
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 		BaseContext: func(net.Listener) context.Context {
