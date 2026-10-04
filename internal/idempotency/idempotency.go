@@ -228,16 +228,24 @@ func Generate(action domain.Action, waybillID domain.WaybillID, businessWindow s
 }
 
 func ArgumentsHash(raw string) (string, error) {
-	var value any
-	if err := json.Unmarshal([]byte(raw), &value); err != nil {
-		return "", fmt.Errorf("decode tool arguments: %w", err)
-	}
-	canonical, err := json.Marshal(value)
+	canonical, err := canonicalArguments(json.RawMessage(raw))
 	if err != nil {
-		return "", fmt.Errorf("canonicalize tool arguments: %w", err)
+		return "", err
 	}
 	sum := sha256.Sum256(canonical)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func canonicalArguments(raw json.RawMessage) (json.RawMessage, error) {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("decode tool arguments: %w", err)
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("canonicalize tool arguments: %w", err)
+	}
+	return canonical, nil
 }
 
 func (s *Store) Execute(
