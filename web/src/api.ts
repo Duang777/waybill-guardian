@@ -46,9 +46,13 @@ const waybillCatalogItemSchema = z
     waybill_id: waybillIdSchema,
     origin: z.string().min(1),
     destination: z.string().min(1),
+    origin_hub_id: z.string().min(1).optional(),
+    destination_hub_id: z.string().min(1).optional(),
+    route_id: z.string().min(1).optional(),
     status: z.string().min(1),
     has_anomaly: z.boolean(),
     anomaly_label: z.string().min(1).optional(),
+    anomaly_type: z.string().min(1).optional(),
     last_recorded_at: z.string().min(1),
   })
   .strict();
@@ -69,6 +73,10 @@ const waybillSchema = z
     waybill_id: waybillIdSchema,
     origin: z.string().min(1),
     destination: z.string().min(1),
+    origin_hub_id: z.string().min(1).optional(),
+    destination_hub_id: z.string().min(1).optional(),
+    route_id: z.string().min(1).optional(),
+    vehicle_id: z.string().min(1).optional(),
     cargo: z.string().min(1),
     carrier_id: z.string().min(1),
     driver_id: z.string().min(1),
@@ -88,6 +96,7 @@ export const trackPointSchema = z
     speed_kph: z.number().int().nonnegative(),
     stop_hours: z.number().nonnegative().optional(),
     anomaly: z.boolean(),
+    anomaly_type: z.string().min(1).optional(),
   })
   .strict();
 

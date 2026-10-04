@@ -277,6 +277,21 @@ docker compose up --build
 
 `PLATFORM=file` 还要求 `STORAGE=jsonl` 和 `AUTH_MODE=local`。服务启动时一次性加载完整文件。语法、引用、坐标或时间顺序错误会在监听端口前失败。运行期间不会热更新，替换文件后需要重启。字段和校验规则见 [`docs/file-data-source-design.md`](docs/file-data-source-design.md)。页面上的运单选择器列出文件中的运单。
 
+仓库还提供固定生成规则的非官方仿真数据，包含 72 个公路港、72 条线路、200 台车辆、200 张运单和 5 类异常：
+
+```bash
+env -u GOROOT go run ./cmd/datagenerate \
+  --output ./data/simulated/waybills-v1.json \
+  --waybills 200
+
+env -u GOROOT go run ./cmd/dataimport validate \
+  --data ./data/simulated/waybills-v1.json
+```
+
+`hubs`、`vehicles`、`routes` 以及运单上的港口、线路、车辆引用是 v1 的可选网络扩展。
+一旦文件提供任一网络实体，校验器会要求三类实体和全部引用同时完整，避免聚合视图读取到
+半套拓扑。仿真数据只用于产品演示和容量验证，不代表真实经营数据。
+
 ### 在线模型
 
 ```bash

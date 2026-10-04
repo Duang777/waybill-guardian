@@ -23,7 +23,7 @@ func TestRunValidatesTemplate(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code = %d, stderr = %s", code, stderr.String())
 	}
-	const want = "valid dataset=template-v1 format=csv waybills=1 anomalies=1\n"
+	const want = "valid dataset=template-v1 format=csv waybills=1 anomalies=1 hubs=0 vehicles=0 routes=0\n"
 	if stdout.String() != want {
 		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
 	}

@@ -10,16 +10,21 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/approval"
 	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/platform"
 )
 
 type WaybillCatalogItem struct {
-	WaybillID      domain.WaybillID `json:"waybill_id"`
-	Origin         string           `json:"origin"`
-	Destination    string           `json:"destination"`
-	Status         string           `json:"status"`
-	HasAnomaly     bool             `json:"has_anomaly"`
-	AnomalyLabel   string           `json:"anomaly_label,omitempty"`
-	LastRecordedAt string           `json:"last_recorded_at"`
+	WaybillID        domain.WaybillID `json:"waybill_id"`
+	Origin           string           `json:"origin"`
+	Destination      string           `json:"destination"`
+	OriginHubID      platform.HubID   `json:"origin_hub_id,omitempty"`
+	DestinationHubID platform.HubID   `json:"destination_hub_id,omitempty"`
+	RouteID          platform.RouteID `json:"route_id,omitempty"`
+	Status           string           `json:"status"`
+	HasAnomaly       bool             `json:"has_anomaly"`
+	AnomalyLabel     string           `json:"anomaly_label,omitempty"`
+	AnomalyType      string           `json:"anomaly_type,omitempty"`
+	LastRecordedAt   string           `json:"last_recorded_at"`
 }
 
 type CarrierDTO struct {
@@ -30,26 +35,31 @@ type CarrierDTO struct {
 }
 
 type WaybillDTO struct {
-	ID                domain.WaybillID `json:"waybill_id"`
-	Origin            string           `json:"origin"`
-	Destination       string           `json:"destination"`
-	Cargo             string           `json:"cargo"`
-	CarrierID         domain.CarrierID `json:"carrier_id"`
-	DriverID          domain.DriverID  `json:"driver_id"`
-	Status            string           `json:"status"`
-	SLAHours          int              `json:"sla_hours"`
-	ShipperPhone      string           `json:"shipper_phone"`
-	CandidateCarriers []CarrierDTO     `json:"candidate_carriers"`
+	ID                domain.WaybillID   `json:"waybill_id"`
+	Origin            string             `json:"origin"`
+	Destination       string             `json:"destination"`
+	OriginHubID       platform.HubID     `json:"origin_hub_id,omitempty"`
+	DestinationHubID  platform.HubID     `json:"destination_hub_id,omitempty"`
+	RouteID           platform.RouteID   `json:"route_id,omitempty"`
+	VehicleID         platform.VehicleID `json:"vehicle_id,omitempty"`
+	Cargo             string             `json:"cargo"`
+	CarrierID         domain.CarrierID   `json:"carrier_id"`
+	DriverID          domain.DriverID    `json:"driver_id"`
+	Status            string             `json:"status"`
+	SLAHours          int                `json:"sla_hours"`
+	ShipperPhone      string             `json:"shipper_phone"`
+	CandidateCarriers []CarrierDTO       `json:"candidate_carriers"`
 }
 
 type TrackPointDTO struct {
-	Label      string  `json:"label"`
-	RecordedAt string  `json:"recorded_at"`
-	Longitude  float64 `json:"longitude"`
-	Latitude   float64 `json:"latitude"`
-	SpeedKPH   int     `json:"speed_kph"`
-	StopHours  float64 `json:"stop_hours,omitempty"`
-	Anomaly    bool    `json:"anomaly"`
+	Label       string  `json:"label"`
+	RecordedAt  string  `json:"recorded_at"`
+	Longitude   float64 `json:"longitude"`
+	Latitude    float64 `json:"latitude"`
+	SpeedKPH    int     `json:"speed_kph"`
+	StopHours   float64 `json:"stop_hours,omitempty"`
+	Anomaly     bool    `json:"anomaly"`
+	AnomalyType string  `json:"anomaly_type,omitempty"`
 }
 
 type DriverDTO struct {
@@ -121,13 +131,17 @@ func (s *Service) ListWaybills(
 	result := make([]WaybillCatalogItem, 0, len(values))
 	for _, value := range values {
 		result = append(result, WaybillCatalogItem{
-			WaybillID:      value.WaybillID,
-			Origin:         value.Origin,
-			Destination:    value.Destination,
-			Status:         value.Status,
-			HasAnomaly:     value.HasAnomaly,
-			AnomalyLabel:   value.AnomalyLabel,
-			LastRecordedAt: value.LastRecordedAt.UTC().Format(time.RFC3339),
+			WaybillID:        value.WaybillID,
+			Origin:           value.Origin,
+			Destination:      value.Destination,
+			OriginHubID:      value.OriginHubID,
+			DestinationHubID: value.DestinationHubID,
+			RouteID:          value.RouteID,
+			Status:           value.Status,
+			HasAnomaly:       value.HasAnomaly,
+			AnomalyLabel:     value.AnomalyLabel,
+			AnomalyType:      value.AnomalyType,
+			LastRecordedAt:   value.LastRecordedAt.UTC().Format(time.RFC3339),
 		})
 	}
 	return result, nil
@@ -168,13 +182,14 @@ func mapWaybillView(facts waybillFacts, risk RiskScore) WaybillView {
 	tracking := make([]TrackPointDTO, 0, len(facts.Tracking))
 	for _, point := range facts.Tracking {
 		tracking = append(tracking, TrackPointDTO{
-			Label:      point.Label,
-			RecordedAt: point.RecordedAt,
-			Longitude:  point.Longitude,
-			Latitude:   point.Latitude,
-			SpeedKPH:   point.SpeedKPH,
-			StopHours:  point.StopHours,
-			Anomaly:    point.Anomaly,
+			Label:       point.Label,
+			RecordedAt:  point.RecordedAt,
+			Longitude:   point.Longitude,
+			Latitude:    point.Latitude,
+			SpeedKPH:    point.SpeedKPH,
+			StopHours:   point.StopHours,
+			Anomaly:     point.Anomaly,
+			AnomalyType: point.AnomalyType,
 		})
 	}
 	weather := make([]RoadWeatherDTO, 0, len(facts.Weather))
@@ -190,6 +205,10 @@ func mapWaybillView(facts waybillFacts, risk RiskScore) WaybillView {
 			ID:                facts.Waybill.ID,
 			Origin:            facts.Waybill.Origin,
 			Destination:       facts.Waybill.Destination,
+			OriginHubID:       facts.Waybill.OriginHubID,
+			DestinationHubID:  facts.Waybill.DestinationHubID,
+			RouteID:           facts.Waybill.RouteID,
+			VehicleID:         facts.Waybill.VehicleID,
 			Cargo:             facts.Waybill.Cargo,
 			CarrierID:         facts.Waybill.CarrierID,
 			DriverID:          facts.Waybill.DriverID,

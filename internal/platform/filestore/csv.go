@@ -46,6 +46,21 @@ var csvColumns = []string{
 	"segment",
 	"condition",
 	"alert_level",
+	"origin_hub_id",
+	"destination_hub_id",
+	"route_id",
+	"vehicle_id",
+	"hub_id",
+	"hub_name",
+	"province",
+	"city",
+	"daily_capacity",
+	"vehicle_plate",
+	"vehicle_type",
+	"load_capacity_tons",
+	"distance_km",
+	"standard_hours",
+	"anomaly_type",
 }
 
 var csvFieldsByRecord = map[string]map[string]bool{
@@ -53,10 +68,36 @@ var csvFieldsByRecord = map[string]map[string]bool{
 		"schema_version",
 		"dataset_id",
 	),
+	"hub": fieldSet(
+		"hub_id",
+		"hub_name",
+		"province",
+		"city",
+		"longitude",
+		"latitude",
+		"daily_capacity",
+	),
+	"vehicle": fieldSet(
+		"vehicle_id",
+		"vehicle_plate",
+		"vehicle_type",
+		"load_capacity_tons",
+	),
+	"route": fieldSet(
+		"route_id",
+		"origin_hub_id",
+		"destination_hub_id",
+		"distance_km",
+		"standard_hours",
+	),
 	"waybill": fieldSet(
 		"waybill_id",
 		"origin",
 		"destination",
+		"origin_hub_id",
+		"destination_hub_id",
+		"route_id",
+		"vehicle_id",
 		"cargo",
 		"current_carrier_id",
 		"driver_id",
@@ -90,16 +131,45 @@ var csvFieldsByRecord = map[string]map[string]bool{
 		"speed_kph",
 		"stop_hours",
 		"anomaly",
+		"anomaly_type",
 	),
 	"weather": fieldSet(
 		"origin",
 		"destination",
+		"route_id",
 		"weather_sequence",
 		"segment",
 		"condition",
 		"alert_level",
 	),
 }
+
+var csvOptionalFields = fieldSet(
+	"stop_hours",
+	"origin_hub_id",
+	"destination_hub_id",
+	"route_id",
+	"vehicle_id",
+	"anomaly_type",
+)
+
+var csvExtensionFields = fieldSet(
+	"origin_hub_id",
+	"destination_hub_id",
+	"route_id",
+	"vehicle_id",
+	"hub_id",
+	"hub_name",
+	"province",
+	"city",
+	"daily_capacity",
+	"vehicle_plate",
+	"vehicle_type",
+	"load_capacity_tons",
+	"distance_km",
+	"standard_hours",
+	"anomaly_type",
+)
 
 func parseCSV(raw []byte) (datasetDraft, error) {
 	if len(bytes.TrimSpace(raw)) == 0 {
@@ -170,11 +240,43 @@ func parseCSV(raw []byte) (datasetDraft, error) {
 				draft.SchemaVersion = values["schema_version"]
 				draft.DatasetID = values["dataset_id"]
 			}
+		case "hub":
+			draft.Hubs = append(draft.Hubs, hubDraft{
+				HubID:         values["hub_id"],
+				Name:          values["hub_name"],
+				Province:      values["province"],
+				City:          values["city"],
+				Longitude:     parseCSVFloat(&collector, location, "longitude", values["longitude"]),
+				Latitude:      parseCSVFloat(&collector, location, "latitude", values["latitude"]),
+				DailyCapacity: parseCSVInt(&collector, location, "daily_capacity", values["daily_capacity"]),
+				sourceRef:     ref,
+			})
+		case "vehicle":
+			draft.Vehicles = append(draft.Vehicles, vehicleDraft{
+				VehicleID:        values["vehicle_id"],
+				MaskedPlate:      values["vehicle_plate"],
+				Type:             values["vehicle_type"],
+				LoadCapacityTons: parseCSVFloat(&collector, location, "load_capacity_tons", values["load_capacity_tons"]),
+				sourceRef:        ref,
+			})
+		case "route":
+			draft.Routes = append(draft.Routes, routeDraft{
+				RouteID:          values["route_id"],
+				OriginHubID:      values["origin_hub_id"],
+				DestinationHubID: values["destination_hub_id"],
+				DistanceKM:       parseCSVInt(&collector, location, "distance_km", values["distance_km"]),
+				StandardHours:    parseCSVInt(&collector, location, "standard_hours", values["standard_hours"]),
+				sourceRef:        ref,
+			})
 		case "waybill":
 			draft.Waybills = append(draft.Waybills, waybillDraft{
 				WaybillID:        values["waybill_id"],
 				Origin:           values["origin"],
 				Destination:      values["destination"],
+				OriginHubID:      values["origin_hub_id"],
+				DestinationHubID: values["destination_hub_id"],
+				RouteID:          values["route_id"],
+				VehicleID:        values["vehicle_id"],
 				Cargo:            values["cargo"],
 				CurrentCarrierID: values["current_carrier_id"],
 				DriverID:         values["driver_id"],
@@ -205,19 +307,21 @@ func parseCSV(raw []byte) (datasetDraft, error) {
 			})
 		case "tracking":
 			draft.Tracking = append(draft.Tracking, trackingDraft{
-				WaybillID:  values["waybill_id"],
-				Sequence:   parseCSVInt(&collector, location, "tracking_sequence", values["tracking_sequence"]),
-				Label:      values["label"],
-				RecordedAt: values["recorded_at"],
-				Longitude:  parseCSVFloat(&collector, location, "longitude", values["longitude"]),
-				Latitude:   parseCSVFloat(&collector, location, "latitude", values["latitude"]),
-				SpeedKPH:   parseCSVInt(&collector, location, "speed_kph", values["speed_kph"]),
-				StopHours:  parseCSVOptionalFloat(&collector, location, "stop_hours", values["stop_hours"]),
-				Anomaly:    parseCSVBool(&collector, location, "anomaly", values["anomaly"]),
-				sourceRef:  ref,
+				WaybillID:   values["waybill_id"],
+				Sequence:    parseCSVInt(&collector, location, "tracking_sequence", values["tracking_sequence"]),
+				Label:       values["label"],
+				RecordedAt:  values["recorded_at"],
+				Longitude:   parseCSVFloat(&collector, location, "longitude", values["longitude"]),
+				Latitude:    parseCSVFloat(&collector, location, "latitude", values["latitude"]),
+				SpeedKPH:    parseCSVInt(&collector, location, "speed_kph", values["speed_kph"]),
+				StopHours:   parseCSVOptionalFloat(&collector, location, "stop_hours", values["stop_hours"]),
+				Anomaly:     parseCSVBool(&collector, location, "anomaly", values["anomaly"]),
+				AnomalyType: values["anomaly_type"],
+				sourceRef:   ref,
 			})
 		case "weather":
 			draft.Weather = append(draft.Weather, weatherDraft{
+				RouteID:     values["route_id"],
 				Origin:      values["origin"],
 				Destination: values["destination"],
 				Sequence:    parseCSVInt(&collector, location, "weather_sequence", values["weather_sequence"]),
@@ -244,7 +348,7 @@ func parseCSV(raw []byte) (datasetDraft, error) {
 }
 
 func validateCSVHeader(header []string) (map[string]int, error) {
-	required := fieldSet(csvColumns...)
+	known := fieldSet(csvColumns...)
 	index := make(map[string]int, len(header))
 	var collector issueCollector
 	for position, field := range header {
@@ -257,12 +361,12 @@ func validateCSVHeader(header []string) (map[string]int, error) {
 			continue
 		}
 		index[field] = position
-		if !required[field] {
+		if !known[field] {
 			collector.add("header", field, "unknown_column", "unknown column")
 		}
 	}
 	for _, field := range csvColumns {
-		if _, exists := index[field]; !exists {
+		if _, exists := index[field]; !exists && !csvExtensionFields[field] {
 			collector.add("header", field, "missing_column", "missing required column")
 		}
 	}
@@ -284,7 +388,7 @@ func validateCSVRowShape(
 		}
 		value := values[field]
 		if fields[field] {
-			if value == "" && field != "stop_hours" {
+			if value == "" && !csvOptionalFields[field] {
 				collector.add(location, field, "required", "is required")
 			}
 			continue

@@ -17,6 +17,9 @@ type snapshot struct {
 	weather     map[routeKey][]platform.RoadWeather
 	routeLookup map[string]routeKey
 	catalog     []platform.WaybillSummary
+	hubs        []platform.Hub
+	vehicles    []platform.Vehicle
+	routes      []platform.Route
 }
 
 func buildSnapshot(draft datasetDraft) (*snapshot, Stats) {
@@ -27,6 +30,43 @@ func buildSnapshot(draft datasetDraft) (*snapshot, Stats) {
 		weather:     make(map[routeKey][]platform.RoadWeather),
 		routeLookup: make(map[string]routeKey),
 	}
+	for _, hub := range draft.Hubs {
+		result.hubs = append(result.hubs, platform.Hub{
+			ID:            platform.HubID(hub.HubID),
+			Name:          hub.Name,
+			Province:      hub.Province,
+			City:          hub.City,
+			Longitude:     hub.Longitude,
+			Latitude:      hub.Latitude,
+			DailyCapacity: hub.DailyCapacity,
+		})
+	}
+	sort.Slice(result.hubs, func(left, right int) bool {
+		return result.hubs[left].ID < result.hubs[right].ID
+	})
+	for _, vehicle := range draft.Vehicles {
+		result.vehicles = append(result.vehicles, platform.Vehicle{
+			ID:               platform.VehicleID(vehicle.VehicleID),
+			MaskedPlate:      vehicle.MaskedPlate,
+			Type:             vehicle.Type,
+			LoadCapacityTons: vehicle.LoadCapacityTons,
+		})
+	}
+	sort.Slice(result.vehicles, func(left, right int) bool {
+		return result.vehicles[left].ID < result.vehicles[right].ID
+	})
+	for _, route := range draft.Routes {
+		result.routes = append(result.routes, platform.Route{
+			ID:               platform.RouteID(route.RouteID),
+			OriginHubID:      platform.HubID(route.OriginHubID),
+			DestinationHubID: platform.HubID(route.DestinationHubID),
+			DistanceKM:       route.DistanceKM,
+			StandardHours:    route.StandardHours,
+		})
+	}
+	sort.Slice(result.routes, func(left, right int) bool {
+		return result.routes[left].ID < result.routes[right].ID
+	})
 	for _, driver := range draft.Drivers {
 		id := domain.DriverID(driver.DriverID)
 		result.drivers[id] = platform.Driver{
@@ -67,6 +107,10 @@ func buildSnapshot(draft datasetDraft) (*snapshot, Stats) {
 			ID:                id,
 			Origin:            waybill.Origin,
 			Destination:       waybill.Destination,
+			OriginHubID:       platform.HubID(waybill.OriginHubID),
+			DestinationHubID:  platform.HubID(waybill.DestinationHubID),
+			RouteID:           platform.RouteID(waybill.RouteID),
+			VehicleID:         platform.VehicleID(waybill.VehicleID),
 			Cargo:             waybill.Cargo,
 			CarrierID:         domain.CarrierID(waybill.CurrentCarrierID),
 			DriverID:          domain.DriverID(waybill.DriverID),
@@ -89,10 +133,13 @@ func buildSnapshot(draft datasetDraft) (*snapshot, Stats) {
 		})
 		converted := make([]platform.TrackPoint, 0, len(points))
 		summary := platform.WaybillSummary{
-			WaybillID:   domain.WaybillID(waybill.WaybillID),
-			Origin:      waybill.Origin,
-			Destination: waybill.Destination,
-			Status:      waybill.Status,
+			WaybillID:        domain.WaybillID(waybill.WaybillID),
+			Origin:           waybill.Origin,
+			Destination:      waybill.Destination,
+			OriginHubID:      platform.HubID(waybill.OriginHubID),
+			DestinationHubID: platform.HubID(waybill.DestinationHubID),
+			RouteID:          platform.RouteID(waybill.RouteID),
+			Status:           waybill.Status,
 		}
 		for _, point := range points {
 			stopHours := 0.0
@@ -100,19 +147,21 @@ func buildSnapshot(draft datasetDraft) (*snapshot, Stats) {
 				stopHours = *point.StopHours
 			}
 			converted = append(converted, platform.TrackPoint{
-				Label:      point.Label,
-				RecordedAt: point.RecordedAt,
-				Longitude:  point.Longitude,
-				Latitude:   point.Latitude,
-				SpeedKPH:   point.SpeedKPH,
-				StopHours:  stopHours,
-				Anomaly:    point.Anomaly,
+				Label:       point.Label,
+				RecordedAt:  point.RecordedAt,
+				Longitude:   point.Longitude,
+				Latitude:    point.Latitude,
+				SpeedKPH:    point.SpeedKPH,
+				StopHours:   stopHours,
+				Anomaly:     point.Anomaly,
+				AnomalyType: point.AnomalyType,
 			})
 			recordedAt, _ := time.Parse(time.RFC3339, point.RecordedAt)
 			summary.LastRecordedAt = recordedAt
 			if point.Anomaly && !summary.HasAnomaly {
 				summary.HasAnomaly = true
 				summary.AnomalyLabel = point.Label
+				summary.AnomalyType = point.AnomalyType
 			}
 		}
 		if summary.HasAnomaly {
@@ -145,6 +194,9 @@ func buildSnapshot(draft datasetDraft) (*snapshot, Stats) {
 		result.weather[key] = converted
 		result.routeLookup[routeAlias(key)] = key
 	}
+	stats.Hubs = len(result.hubs)
+	stats.Vehicles = len(result.vehicles)
+	stats.Routes = len(result.routes)
 	return result, stats
 }
 
@@ -153,6 +205,7 @@ func (s *snapshot) readSet() platform.ReadSet {
 		TMS:     s,
 		Weather: s,
 		Catalog: s,
+		Network: s,
 	}
 }
 
@@ -238,6 +291,27 @@ func (s *snapshot) ListWaybills(
 	return append([]platform.WaybillSummary(nil), s.catalog...), nil
 }
 
+func (s *snapshot) ListHubs(ctx context.Context) ([]platform.Hub, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return append([]platform.Hub(nil), s.hubs...), nil
+}
+
+func (s *snapshot) ListVehicles(ctx context.Context) ([]platform.Vehicle, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return append([]platform.Vehicle(nil), s.vehicles...), nil
+}
+
+func (s *snapshot) ListRoutes(ctx context.Context) ([]platform.Route, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return append([]platform.Route(nil), s.routes...), nil
+}
+
 func routeAlias(key routeKey) string {
 	return key.origin + "-" + key.destination
 }
@@ -254,4 +328,5 @@ var (
 	_ platform.TMSReader      = (*snapshot)(nil)
 	_ platform.WeatherReader  = (*snapshot)(nil)
 	_ platform.WaybillCatalog = (*snapshot)(nil)
+	_ platform.NetworkCatalog = (*snapshot)(nil)
 )
