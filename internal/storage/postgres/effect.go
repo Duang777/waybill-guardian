@@ -222,13 +222,18 @@ func (r *Repository) ValidateRecoveryCoverage(ctx context.Context) error {
 		return ErrEffectRuntimeDown
 	}
 	rows, err := r.db.pool.Query(ctx, `
-		SELECT run_id, effect_id, status, action, binding_schema_version,
-		       adapter_id, provider_contract_version, provider_operation,
-		       provider_scope_digest, provider_request_hash, key_created_at,
-		       key_expires_at, lookup_consistency_window_ms
-		FROM waybill.effects
-		WHERE tenant_id = $1
-		  AND status IN (
+		SELECT e.run_id, e.effect_id, e.status, e.action, e.binding_schema_version,
+		       e.adapter_id, e.provider_contract_version, e.provider_operation,
+		       e.provider_scope_digest, e.provider_request_hash, e.key_created_at,
+		       e.key_expires_at, e.lookup_consistency_window_ms
+		FROM waybill.effects e
+		JOIN waybill.approval_effects ae
+		  ON ae.tenant_id = e.tenant_id AND ae.effect_id = e.effect_id
+		JOIN waybill.approvals a
+		  ON a.tenant_id = ae.tenant_id AND a.approval_id = ae.approval_id
+		WHERE e.tenant_id = $1
+		  AND a.status IN ('pending', 'confirmed', 'reconciliation_required')
+		  AND e.status IN (
 		      'prepared',
 		      'dispatching',
 		      'retryable_failed',

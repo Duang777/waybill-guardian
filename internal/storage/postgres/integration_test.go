@@ -1614,14 +1614,21 @@ func TestRepositoryValidatesRecoveryCoverage(t *testing.T) {
 		t.Fatalf("unsupported prepared effect recovery coverage error = %v", err)
 	}
 	if _, err := db.pool.Exec(t.Context(), `
-		UPDATE waybill.effects
-		SET status = 'permanent_failed'
-		WHERE tenant_id = $1 AND effect_id = $2
+		UPDATE waybill.approvals a
+		SET status = 'rejected',
+		    decided_by = 'reviewer',
+		    decided_at = clock_timestamp(),
+		    reject_reason = 'not needed'
+		FROM waybill.approval_effects ae
+		WHERE a.tenant_id = ae.tenant_id
+		  AND a.approval_id = ae.approval_id
+		  AND ae.tenant_id = $1
+		  AND ae.effect_id = $2
 	`, tenantID, legacyCommand.Identity.EffectID); err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.ValidateRecoveryCoverage(t.Context()); err != nil {
-		t.Fatalf("terminal legacy effect blocked recovery coverage: %v", err)
+	if err := restricted.ValidateRecoveryCoverage(t.Context()); err != nil {
+		t.Fatalf("terminal approval blocked recovery coverage: %v", err)
 	}
 
 	boundRunID := domain.RunID(uuid.NewString())
