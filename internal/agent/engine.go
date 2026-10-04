@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,7 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/proposal"
 	guardtools "github.com/Duang777/waybill-guardian/internal/tools"
 	"github.com/google/uuid"
 	hastekit "github.com/hastekit/agent-sdk-go"
@@ -27,16 +30,16 @@ const Namespace = "waybill-demo"
 var ErrEngineClosed = errors.New("agent engine is closed")
 
 const (
-	ModeDemo   = "demo"
-	ModeOnline = "online"
+	ModeOffline = "offline"
+	ModeDemo    = "demo"
+	ModeOnline  = "online"
 
 	APIStyleResponses       = "responses"
 	APIStyleChatCompletions = "chat_completions"
 )
 
-const SystemPrompt = `你是物流异常处置专家。先读取运单、轨迹、司机和天气，再形成证据链。
-写操作只提交业务参数，并等待人工审批；不要生成 effect_id 或 idempotency_key。一次只提出一个审批批次。
-如果首个改派方案被驳回，使用第二候选运力提出替代方案。`
+//go:embed prompts/system.md
+var SystemPrompt string
 
 type ModelConfig struct {
 	Mode     string
@@ -59,13 +62,16 @@ type Outcome struct {
 	Interrupts []Interrupt
 	Text       string
 	Chunks     []string
+	Proposal   *proposal.Accepted
 }
 
 type Engine struct {
-	agent    *agents.Agent
-	registry *guardtools.Registry
-	history  *history.CommonConversationManager
-	tools    *toolCallTracker
+	agent     *agents.Agent
+	registry  *guardtools.Registry
+	history   *history.CommonConversationManager
+	tools     *toolCallTracker
+	proposals *ProposalBoundary
+	inference InferenceDescriptor
 
 	mu        sync.Mutex
 	handles   map[*agents.AgentHandle]struct{}
@@ -121,7 +127,7 @@ func NewEngine(
 	modelConfig ModelConfig,
 	historyPolicies ...HistoryPolicy,
 ) (*Engine, error) {
-	mode, onlineModel, err := prepareModel(modelConfig)
+	inference, onlineModel, err := prepareModel(modelConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +145,24 @@ func NewEngine(
 	if err != nil {
 		return nil, fmt.Errorf("open hastekit history: %w", err)
 	}
-	return newEngine(fileHistory, registry, middlewares, stepDelay, mode, onlineModel), nil
+	boundary, err := proposalBoundaryFor(middlewares, registry, inference)
+	if err != nil {
+		_ = fileHistory.Close()
+		return nil, err
+	}
+	if inference.Mode == ModeOnline && boundary == nil {
+		_ = fileHistory.Close()
+		return nil, fmt.Errorf("online mode requires audit middleware")
+	}
+	return newEngine(
+		fileHistory,
+		registry,
+		middlewares,
+		stepDelay,
+		inference,
+		onlineModel,
+		boundary,
+	), nil
 }
 
 func NewEngineWithPersistence(
@@ -155,27 +178,51 @@ func NewEngineWithPersistence(
 	if registry == nil {
 		return nil, fmt.Errorf("tool registry is required")
 	}
-	mode, onlineModel, err := prepareModel(modelConfig)
+	inference, onlineModel, err := prepareModel(modelConfig)
 	if err != nil {
 		return nil, err
 	}
 	manager := history.NewConversationManager(guardHistoryPersistence(persistence))
-	return newEngine(manager, registry, middlewares, stepDelay, mode, onlineModel), nil
+	boundary, err := proposalBoundaryFor(middlewares, registry, inference)
+	if err != nil {
+		return nil, err
+	}
+	if inference.Mode == ModeOnline && boundary == nil {
+		_ = manager.Close()
+		return nil, fmt.Errorf("online mode requires audit middleware")
+	}
+	return newEngine(
+		manager,
+		registry,
+		middlewares,
+		stepDelay,
+		inference,
+		onlineModel,
+		boundary,
+	), nil
 }
 
-func prepareModel(modelConfig ModelConfig) (string, llm.Provider, error) {
+func prepareModel(modelConfig ModelConfig) (InferenceDescriptor, llm.Provider, error) {
 	mode := strings.ToLower(strings.TrimSpace(modelConfig.Mode))
-	if mode == "" {
-		mode = ModeDemo
+	if mode == "" || mode == ModeDemo {
+		mode = ModeOffline
 	}
 	if mode == ModeOnline {
 		onlineModel, err := newOnlineModel(modelConfig)
-		return mode, onlineModel, err
+		apiStyle := strings.ToLower(strings.TrimSpace(modelConfig.APIStyle))
+		if apiStyle == "" {
+			apiStyle = APIStyleResponses
+		}
+		return InferenceDescriptor{
+			Mode:     mode,
+			APIStyle: apiStyle,
+			Model:    strings.TrimSpace(modelConfig.Model),
+		}, onlineModel, err
 	}
-	if mode != ModeDemo {
-		return "", nil, fmt.Errorf("AGENT_MODE must be demo or online")
+	if mode != ModeOffline {
+		return InferenceDescriptor{}, nil, fmt.Errorf("AGENT_MODE must be offline, demo, or online")
 	}
-	return mode, nil, nil
+	return InferenceDescriptor{Mode: mode}, nil, nil
 }
 
 func newEngine(
@@ -183,8 +230,9 @@ func newEngine(
 	registry *guardtools.Registry,
 	middlewares []agents.Middleware,
 	stepDelay time.Duration,
-	mode string,
+	inference InferenceDescriptor,
 	onlineModel llm.Provider,
+	proposalBoundary *ProposalBoundary,
 ) *Engine {
 	toolCalls := &toolCallTracker{}
 	middlewares = append([]agents.Middleware{toolCalls}, middlewares...)
@@ -197,7 +245,10 @@ func newEngine(
 		MaxLoops:    &maxLoops,
 	}
 	var sdkAgent *agents.Agent
-	if mode == ModeOnline {
+	if proposalBoundary != nil {
+		middlewares = append(middlewares, proposalBoundary)
+	}
+	if inference.Mode == ModeOnline {
 		options.LLM = onlineModel
 		middlewares = append(
 			middlewares,
@@ -206,7 +257,7 @@ func newEngine(
 	}
 	middlewares = append(middlewares, NewCapabilityModelMiddleware(registry))
 	options.Middlewares = protectModelBoundary(middlewares)
-	if mode == ModeOnline {
+	if inference.Mode == ModeOnline {
 		sdkAgent = agents.NewAgent(options)
 	} else {
 		sdkAgent = agents.NewAgent(options).WithLLM(NewScenarioModel(registry, stepDelay))
@@ -216,9 +267,26 @@ func newEngine(
 		registry:  registry,
 		history:   conversationHistory,
 		tools:     toolCalls,
+		proposals: proposalBoundary,
+		inference: inference,
 		handles:   make(map[*agents.AgentHandle]struct{}),
 		closeDone: make(chan struct{}),
 	}
+}
+
+func proposalBoundaryFor(
+	middlewares []agents.Middleware,
+	registry *guardtools.Registry,
+	inference InferenceDescriptor,
+) (*ProposalBoundary, error) {
+	for _, middleware := range middlewares {
+		source, ok := middleware.(interface{ Journal() audit.Journal })
+		if !ok {
+			continue
+		}
+		return NewProposalBoundary(source.Journal(), registry, inference, time.Now)
+	}
+	return nil, nil
 }
 
 func protectModelBoundary(middlewares []agents.Middleware) []agents.Middleware {
@@ -419,7 +487,18 @@ func (e *Engine) execute(ctx context.Context, input *agents.AgentInput) (Outcome
 			Arguments: json.RawMessage(value.FunctionCallMessage.Arguments),
 		})
 	}
+	if len(outcome.Interrupts) > 0 && e.proposals != nil {
+		accepted, ok := e.proposals.Accepted(result.RunID)
+		if !ok {
+			return Outcome{}, fmt.Errorf("paused agent run has no accepted proposal")
+		}
+		outcome.Proposal = &accepted
+	}
 	return outcome, nil
+}
+
+func (e *Engine) Inference() InferenceDescriptor {
+	return e.inference
 }
 
 func contextMap(value domain.RunContext) map[string]any {

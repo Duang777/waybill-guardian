@@ -77,6 +77,10 @@ func TestScenarioAgentPausesThenExecutesApprovedWrites(t *testing.T) {
 	if len(outcome.Interrupts) != 3 {
 		t.Fatalf("interrupts = %d, want 3", len(outcome.Interrupts))
 	}
+	if outcome.Proposal == nil || outcome.Proposal.Digest == "" ||
+		len(outcome.Proposal.Attribution) == 0 {
+		t.Fatalf("accepted proposal = %+v", outcome.Proposal)
+	}
 	if mock.WriteCount(domain.ActionReassign) != 0 || mock.WriteCount(domain.ActionSendSMS) != 0 {
 		t.Fatal("write tools ran before approval")
 	}
@@ -260,6 +264,19 @@ func TestOnlineModelRejectsIncompleteOrEndpointURL(t *testing.T) {
 	for _, config := range tests {
 		if _, err := newOnlineModel(config); err == nil {
 			t.Fatalf("newOnlineModel(%+v) accepted invalid config", config)
+		}
+	}
+}
+
+func TestPrepareModelNormalizesOfflineAlias(t *testing.T) {
+	for _, mode := range []string{"", ModeDemo, ModeOffline} {
+		inference, provider, err := prepareModel(ModelConfig{Mode: mode})
+		if err != nil {
+			t.Fatalf("prepareModel(%q): %v", mode, err)
+		}
+		if inference.Mode != ModeOffline || inference.APIStyle != "" ||
+			inference.Model != "" || provider != nil {
+			t.Fatalf("prepareModel(%q) = %+v, provider %v", mode, inference, provider)
 		}
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/platform"
 	guardtools "github.com/Duang777/waybill-guardian/internal/tools"
 	"github.com/hastekit/agent-sdk-go/pkg/agents"
+	"github.com/hastekit/agent-sdk-go/pkg/gateway/llm/responses"
 )
 
 type AuditMiddleware struct {
@@ -64,16 +65,52 @@ func (m *AuditMiddleware) WrapToolCall(next agents.ToolCallFunc) agents.ToolCall
 			}
 			payload["result"] = output
 		}
-		if _, err := m.journal.Append(ctx, runID, audit.Draft{
+		event, err := m.journal.Append(ctx, runID, audit.Draft{
 			EventID: "tool:" + call.CallID + ":result",
 			Actor:   audit.ActorSystem,
 			Type:    audit.EventToolResult,
 			Payload: payload,
-		}); err != nil {
+		})
+		if err != nil {
 			return nil, err
+		}
+		if callErr == nil {
+			result, err = resultFromAuditedEvent(result, event)
+			if err != nil {
+				return nil, err
+			}
 		}
 		return result, callErr
 	}
+}
+
+func (m *AuditMiddleware) Journal() audit.Journal {
+	return m.journal
+}
+
+func resultFromAuditedEvent(
+	result *agents.ToolCallResponse,
+	event audit.Event,
+) (*agents.ToolCallResponse, error) {
+	if result == nil || result.FunctionCallOutputMessage == nil ||
+		result.Output.OfString == nil {
+		return result, nil
+	}
+	var payload struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return nil, fmt.Errorf("decode audited tool result: %w", err)
+	}
+	if len(payload.Result) == 0 {
+		return nil, fmt.Errorf("audited tool result is missing result")
+	}
+	canonical := string(payload.Result)
+	cloned := *result
+	message := *result.FunctionCallOutputMessage
+	message.Output = responses.FunctionCallOutputContentUnion{OfString: &canonical}
+	cloned.FunctionCallOutputMessage = &message
+	return &cloned, nil
 }
 
 type WriteEffectMiddleware struct {

@@ -15,6 +15,74 @@ import (
 	"github.com/hastekit/agent-sdk-go/pkg/gateway/llm/responses"
 )
 
+func TestAuditMiddlewareReturnsCanonicalRedactedResult(t *testing.T) {
+	journal, err := audit.Open(t.TempDir(), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+
+	middleware := NewAuditMiddleware(journal)
+	tool := &agents.BaseTool{Meta: map[string]any{
+		guardtools.MetaAccess:       guardtools.AccessRead,
+		guardtools.MetaContractName: string(domain.ActionGetDriver),
+	}}
+	call := &agents.ToolCall{
+		FunctionCallMessage: &responses.FunctionCallMessage{
+			ID:        "fc-canonical",
+			CallID:    "call-canonical",
+			Name:      "tms_get_driver",
+			Arguments: `{"driver_id":"DRV-1"}`,
+		},
+		RunContext: map[string]any{"run_id": "run-canonical"},
+	}
+	original := agents.ToolCallResult(
+		call,
+		`{"phone":"13912345678","driver_id":"DRV-1","nested":{"plate":"川A8X6Q2"}}`,
+	)
+	original.StateUpdates = map[string]string{"state": "preserved"}
+	execute := middleware.WrapToolCall(func(
+		context.Context,
+		*agents.BaseTool,
+		*agents.ToolCall,
+	) (*agents.ToolCallResponse, error) {
+		return original, nil
+	})
+
+	result, err := execute(t.Context(), tool, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == original || result.FunctionCallOutputMessage == original.FunctionCallOutputMessage {
+		t.Fatal("middleware mutated or returned the tool-owned response")
+	}
+	if result.StateUpdates["state"] != "preserved" {
+		t.Fatalf("state updates = %+v", result.StateUpdates)
+	}
+	got := *result.Output.OfString
+	want := `{"driver_id":"DRV-1","nested":{"plate":"川A****2"},"phone":"139****5678"}`
+	if got != want {
+		t.Fatalf("model result = %s, want %s", got, want)
+	}
+	if *original.Output.OfString == got {
+		t.Fatal("original tool response was mutated")
+	}
+
+	events, err := journal.Replay(t.Context(), "run-canonical", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(events[1].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if string(payload.Result) != got {
+		t.Fatalf("audited result = %s, model result = %s", payload.Result, got)
+	}
+}
+
 func TestWriteEffectMiddlewareSeparatesSameActionEffects(t *testing.T) {
 	journal, err := audit.Open(t.TempDir(), time.Now)
 	if err != nil {

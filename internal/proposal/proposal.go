@@ -27,6 +27,7 @@ const (
 	maxAttributions           = 8
 	maxEvidenceRefs           = 8
 	maxAlternatives           = 8
+	maxProposalBytes          = 32 << 10
 )
 
 type IssueCode string
@@ -161,6 +162,13 @@ func NewCompiler(journal audit.Journal) (*Compiler, error) {
 }
 
 func Decode(raw []byte) (Draft, error) {
+	if len(raw) == 0 || len(raw) > maxProposalBytes {
+		return Draft{}, validationError(
+			IssueInvalidJSON,
+			"",
+			fmt.Errorf("proposal must contain between 1 and %d bytes", maxProposalBytes),
+		)
+	}
 	if err := rejectDuplicateKeys(raw); err != nil {
 		return Draft{}, validationError(IssueInvalidJSON, "", err)
 	}
