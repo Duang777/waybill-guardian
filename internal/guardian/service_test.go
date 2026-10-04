@@ -83,6 +83,44 @@ func TestDemoConfirmCompletesExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestRunStartedAuditRecordsPlatformSources(t *testing.T) {
+	clients, _, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := Open(Config{
+		DataDir:         t.TempDir(),
+		Clients:         clients,
+		PlatformProfile: "tms-reassign-sandbox-v1",
+		ReadSource:      "fixture-v1",
+		StepDelay:       0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+
+	run, err := service.StartDemo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := service.Replay(context.Background(), run.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 || events[0].Type != audit.EventRunStarted {
+		t.Fatalf("first audit event = %+v", events)
+	}
+	var payload runStartedPayload
+	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Profile != "tms-reassign-sandbox-v1" ||
+		payload.ReadSource != "fixture-v1" {
+		t.Fatalf("run platform sources = %+v", payload)
+	}
+}
+
 func TestDiscoveryAndSnapshotUseDurableEventPrefix(t *testing.T) {
 	clients, _, err := tools.NewDemoClients()
 	if err != nil {

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	agentkit "github.com/Duang777/waybill-guardian/internal/agent"
+	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
 	"github.com/Duang777/waybill-guardian/internal/httpauth"
 	"github.com/Duang777/waybill-guardian/internal/metrics"
@@ -30,7 +31,10 @@ import (
 	"github.com/google/uuid"
 )
 
-const defaultHTTPAddr = "127.0.0.1:8080"
+const (
+	defaultHTTPAddr   = "127.0.0.1:8080"
+	fixtureReadSource = "fixture-v1"
+)
 
 type eventRuntimeConfig struct {
 	outboxEnabled   bool
@@ -49,6 +53,14 @@ type realPlatformRuntimeConfig struct {
 	profileID  string
 	readSource string
 	adapter    tmssandbox.Config
+}
+
+type platformRuntime struct {
+	clients       platform.Clients
+	writeRuntime  platform.WriteRuntime
+	activeActions []domain.Action
+	profileID     string
+	readSource    string
 }
 
 func main() {
@@ -112,11 +124,11 @@ func run() error {
 		}
 		defer database.Close()
 	}
-	clients, err := platformClients()
-	if err != nil {
-		return err
-	}
-	writeRuntime, err := tools.NewFixtureWriteRuntime(clients)
+	runtimeProfile, err := openPlatformRuntime(
+		context.Background(),
+		platformMode,
+		tenantID,
+	)
 	if err != nil {
 		return err
 	}
@@ -126,7 +138,10 @@ func run() error {
 	}
 	commonConfig := guardian.Config{
 		DataDir:          envOr("DATA_DIR", "data"),
-		Clients:          clients,
+		Clients:          runtimeProfile.clients,
+		ActiveActions:    runtimeProfile.activeActions,
+		PlatformProfile:  runtimeProfile.profileID,
+		ReadSource:       runtimeProfile.readSource,
 		ApprovalTTL:      durationEnv("APPROVAL_TTL", 10*time.Minute),
 		HistoryRetention: historyRetention,
 		StepDelay:        durationEnv("DEMO_STEP_DELAY", 220*time.Millisecond),
@@ -152,11 +167,22 @@ func run() error {
 				LeaseTTL:       durationEnv("RUN_LEASE_TTL", 30*time.Second),
 				EffectLeaseTTL: durationEnv("EFFECT_LEASE_TTL", 15*time.Second),
 				OutboxLeaseTTL: eventConfig.outboxLeaseTTL,
-				WriteRuntime:   writeRuntime,
+				WriteRuntime:   runtimeProfile.writeRuntime,
 			},
 		)
 		if err != nil {
 			return err
+		}
+		if platformMode == "real" {
+			coverageCtx, cancelCoverage := context.WithTimeout(
+				context.Background(),
+				databaseConfig.StartupTimeout,
+			)
+			coverageErr := repository.ValidateRecoveryCoverage(coverageCtx)
+			cancelCoverage()
+			if coverageErr != nil {
+				return coverageErr
+			}
 		}
 		historyCtx, cancelHistory := context.WithTimeout(
 			context.Background(),
@@ -189,6 +215,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	slog.Info(
+		"platform runtime configured",
+		"mode", platformMode,
+		"profile", runtimeProfile.profileID,
+		"read_source", runtimeProfile.readSource,
+		"write_actions", runtimeProfile.writeRuntime.AdvertisedActions(),
+	)
 	defer service.Close()
 	if err := service.Recover(context.Background()); err != nil {
 		return err
@@ -563,15 +596,51 @@ func validateRequestHost(value string) error {
 	return nil
 }
 
-func platformClients() (platform.Clients, error) {
-	switch strings.ToLower(envOr("PLATFORM", "mock")) {
+func openPlatformRuntime(
+	ctx context.Context,
+	platformMode string,
+	tenantID httpauth.TenantID,
+) (platformRuntime, error) {
+	clients, _, err := tools.NewDemoClients()
+	if err != nil {
+		return platformRuntime{}, err
+	}
+	switch strings.ToLower(platformMode) {
 	case "mock":
-		clients, _, err := tools.NewDemoClients()
-		return clients, err
+		writeRuntime, err := tools.NewFixtureWriteRuntime(clients)
+		if err != nil {
+			return platformRuntime{}, err
+		}
+		return platformRuntime{
+			clients:      clients,
+			writeRuntime: writeRuntime,
+			profileID:    tools.FixtureRuntimeAdapterID,
+			readSource:   fixtureReadSource,
+		}, nil
 	case "real":
-		return platform.Clients{}, platform.ErrNotImplemented
+		config, err := realPlatformConfigFromEnv(tenantID)
+		if err != nil {
+			return platformRuntime{}, err
+		}
+		writeRuntime, err := tmssandbox.New(ctx, config.adapter)
+		if err != nil {
+			return platformRuntime{}, err
+		}
+		return platformRuntime{
+			clients:      clients,
+			writeRuntime: writeRuntime,
+			activeActions: []domain.Action{
+				domain.ActionGetWaybill,
+				domain.ActionGetTracking,
+				domain.ActionGetDriver,
+				domain.ActionGetRoadWeather,
+				domain.ActionReassign,
+			},
+			profileID:  config.profileID,
+			readSource: config.readSource,
+		}, nil
 	default:
-		return platform.Clients{}, errors.New("PLATFORM must be mock or real")
+		return platformRuntime{}, errors.New("PLATFORM must be mock or real")
 	}
 }
 
@@ -586,9 +655,10 @@ func realPlatformConfigFromEnv(
 		)
 	}
 	readSource := strings.TrimSpace(os.Getenv("REAL_READ_SOURCE"))
-	if readSource != "fixture-v1" {
+	if readSource != fixtureReadSource {
 		return realPlatformRuntimeConfig{}, fmt.Errorf(
-			"REAL_READ_SOURCE must be fixture-v1",
+			"REAL_READ_SOURCE must be %s",
+			fixtureReadSource,
 		)
 	}
 	baseURL := strings.TrimSpace(os.Getenv("TMS_SANDBOX_BASE_URL"))

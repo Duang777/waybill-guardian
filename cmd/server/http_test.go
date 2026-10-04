@@ -20,7 +20,6 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
 	"github.com/Duang777/waybill-guardian/internal/httpauth"
-	"github.com/Duang777/waybill-guardian/internal/platform"
 	"github.com/Duang777/waybill-guardian/internal/platform/tmssandbox"
 	"github.com/Duang777/waybill-guardian/internal/storage"
 	"github.com/Duang777/waybill-guardian/internal/tools"
@@ -490,10 +489,60 @@ func TestParseTimelineCursorPrefersLastEventID(t *testing.T) {
 	}
 }
 
-func TestRealPlatformFailsFast(t *testing.T) {
-	t.Setenv("PLATFORM", "real")
-	if _, err := platformClients(); !errors.Is(err, platform.ErrNotImplemented) {
-		t.Fatalf("platformClients error = %v, want ErrNotImplemented", err)
+func TestOpenRealPlatformRuntime(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/.well-known/waybill-capabilities" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, `{
+			"adapter_id":"tms-reassign-sandbox-v1",
+			"contract_version":"v1",
+			"environment":"sandbox",
+			"capabilities":[{
+				"action":"tms.reassign",
+				"operation":"reassignments",
+				"key_scope":"tenant+operation",
+				"key_retention_seconds":604800,
+				"lookup_consistency_window_seconds":1,
+				"same_request_replays":true,
+				"mismatched_request_rejects":true,
+				"lookup_by_key":true
+			}]
+		}`)
+	}))
+	defer server.Close()
+	setValidRealPlatformEnv(t)
+	t.Setenv("TMS_SANDBOX_BASE_URL", server.URL)
+
+	runtime, err := openPlatformRuntime(t.Context(), "real", "tenant-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.profileID != tmssandbox.ProfileID ||
+		runtime.readSource != fixtureReadSource ||
+		runtime.clients.TMS == nil ||
+		runtime.clients.Weather == nil ||
+		runtime.clients.Notification == nil {
+		t.Fatalf("real platform runtime = %+v", runtime)
+	}
+	if _, ok := runtime.writeRuntime.(*tmssandbox.Adapter); !ok {
+		t.Fatalf("write runtime = %T, want TMS sandbox adapter", runtime.writeRuntime)
+	}
+	expected := []domain.Action{
+		domain.ActionGetWaybill,
+		domain.ActionGetTracking,
+		domain.ActionGetDriver,
+		domain.ActionGetRoadWeather,
+		domain.ActionReassign,
+	}
+	if len(runtime.activeActions) != len(expected) {
+		t.Fatalf("active actions = %v", runtime.activeActions)
+	}
+	for index, action := range expected {
+		if runtime.activeActions[index] != action {
+			t.Fatalf("active actions = %v", runtime.activeActions)
+		}
 	}
 }
 

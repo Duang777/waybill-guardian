@@ -26,6 +26,8 @@ type Config struct {
 	DataDir          string
 	Clients          platform.Clients
 	ActiveActions    []domain.Action
+	PlatformProfile  string
+	ReadSource       string
 	Clock            func() time.Time
 	ApprovalTTL      time.Duration
 	HistoryRetention time.Duration
@@ -80,6 +82,8 @@ type runStartedPayload struct {
 	IncidentID domain.IncidentID `json:"incident_id"`
 	WaybillID  domain.WaybillID  `json:"waybill_id"`
 	Status     domain.RunStatus  `json:"status"`
+	Profile    string            `json:"platform_profile,omitempty"`
+	ReadSource string            `json:"read_source,omitempty"`
 }
 
 var ErrServiceClosed = errors.New("guardian service is closed")
@@ -92,14 +96,16 @@ type Service struct {
 	clock  func() time.Time
 	ttl    time.Duration
 
-	clients     platform.Clients
-	journal     audit.Journal
-	approvals   *approval.Store
-	effects     idempotency.Executor
-	registry    *guardtools.Registry
-	engine      *agentkit.Engine
-	coordinator RunCoordinator
-	recovery    audit.RecoveryJournal
+	clients         platform.Clients
+	platformProfile string
+	readSource      string
+	journal         audit.Journal
+	approvals       *approval.Store
+	effects         idempotency.Executor
+	registry        *guardtools.Registry
+	engine          *agentkit.Engine
+	coordinator     RunCoordinator
+	recovery        audit.RecoveryJournal
 
 	mu        sync.Mutex
 	runs      map[domain.RunID]RunView
@@ -218,22 +224,24 @@ func openService(
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &Service{
-		ctx:         ctx,
-		cancel:      cancel,
-		clock:       config.Clock,
-		ttl:         config.ApprovalTTL,
-		clients:     config.Clients,
-		journal:     journal,
-		approvals:   approvals,
-		effects:     effects,
-		registry:    registry,
-		engine:      engine,
-		coordinator: coordinator,
-		recovery:    recovery,
-		runs:        make(map[domain.RunID]RunView),
-		locks:       make(map[domain.RunID]*sync.Mutex),
-		timers:      make(map[domain.ApprovalID]chan struct{}),
-		closeDone:   make(chan struct{}),
+		ctx:             ctx,
+		cancel:          cancel,
+		clock:           config.Clock,
+		ttl:             config.ApprovalTTL,
+		clients:         config.Clients,
+		platformProfile: config.PlatformProfile,
+		readSource:      config.ReadSource,
+		journal:         journal,
+		approvals:       approvals,
+		effects:         effects,
+		registry:        registry,
+		engine:          engine,
+		coordinator:     coordinator,
+		recovery:        recovery,
+		runs:            make(map[domain.RunID]RunView),
+		locks:           make(map[domain.RunID]*sync.Mutex),
+		timers:          make(map[domain.ApprovalID]chan struct{}),
+		closeDone:       make(chan struct{}),
 	}
 	if err := service.rebuildRuns(); err != nil {
 		cancel()
@@ -291,6 +299,8 @@ func (s *Service) StartDemo(ctx context.Context) (RunView, error) {
 			IncidentID: run.IncidentID,
 			WaybillID:  run.WaybillID,
 			Status:     run.Status,
+			Profile:    s.platformProfile,
+			ReadSource: s.readSource,
 		},
 	})
 	if err != nil {
