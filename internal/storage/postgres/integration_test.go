@@ -131,6 +131,30 @@ func TestMigrationsAgainstPostgreSQL(t *testing.T) {
 	}
 }
 
+func TestRepositoryPreservesAuditHashAcrossTimestampRoundTrip(t *testing.T) {
+	db := openIntegrationDB(t)
+	repository := newIntegrationRepository(
+		t,
+		db,
+		"tenant-"+uuid.NewString(),
+		"worker-timestamp",
+	)
+	defer repository.Close()
+
+	runID := domain.RunID(uuid.NewString())
+	appendStarted(t, repository, runID)
+	if err := repository.Verify(runID); err != nil {
+		t.Fatalf("verify after PostgreSQL timestamp round trip: %v", err)
+	}
+	events, err := repository.Replay(t.Context(), runID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].TS.Nanosecond()%1_000 != 0 {
+		t.Fatalf("persisted event timestamp = %v, want microsecond precision", events)
+	}
+}
+
 func TestIngestEventConcurrentDuplicates(t *testing.T) {
 	db := openIntegrationDB(t)
 	tenantID := "tenant-" + uuid.NewString()

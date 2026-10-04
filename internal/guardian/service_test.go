@@ -548,6 +548,69 @@ func TestRecoverReplaysConfirmedApproval(t *testing.T) {
 	}
 }
 
+func TestRecoverRejectsChangedReadSource(t *testing.T) {
+	dataDir := t.TempDir()
+	reads, _, err := tools.NewDemoRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRuntime, err := tools.NewFixtureWriteRuntimeForSource(reads, "dataset-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := Open(Config{
+		DataDir:      dataDir,
+		Reads:        reads,
+		WriteRuntime: firstRuntime,
+		ReadSource:   "dataset-a",
+		StepDelay:    0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := first.StartRun(t.Context(), "YD2026101001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := waitForApproval(t, first, run.RunID)
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	secondRuntime, err := tools.NewFixtureWriteRuntimeForSource(reads, "dataset-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(Config{
+		DataDir:      dataDir,
+		Reads:        reads,
+		WriteRuntime: secondRuntime,
+		ReadSource:   "dataset-b",
+		StepDelay:    0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := reopened.Recover(t.Context()); !errors.Is(
+		err,
+		ErrRecoveryReadSourceMismatch,
+	) {
+		t.Fatalf("Recover error = %v, want ErrRecoveryReadSourceMismatch", err)
+	}
+	recovered, err := reopened.GetApproval(pending.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != approval.StatusPending {
+		t.Fatalf("approval status = %q, want pending", recovered.Status)
+	}
+	if secondRuntime.WriteCount(domain.ActionReassign) != 0 ||
+		secondRuntime.WriteCount(domain.ActionSendSMS) != 0 {
+		t.Fatal("source mismatch executed writes")
+	}
+}
+
 func TestEffectReconcilerResumesDuePreparedApproval(t *testing.T) {
 	clients, runtime, err := tools.NewDemoRuntime()
 	if err != nil {

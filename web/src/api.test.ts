@@ -5,6 +5,7 @@ import {
   startBatch,
   startRun,
   waybillIdSchema,
+  waybillViewSchema,
 } from "./api";
 
 afterEach(() => {
@@ -185,6 +186,52 @@ describe("waybill API", () => {
     expect(requestInit?.body).toBe(JSON.stringify({ waybill_ids: ids }));
     expect(response.accepted).toBe(1);
     expect(response.results[1]?.error?.code).toBe("run_capacity_reached");
+  });
+
+  it("accepts the zero-hour SLA allowed by the file contract", () => {
+    const parsed = waybillViewSchema.parse({
+      waybill: {
+        waybill_id: "YD2026101042",
+        origin: "宁波",
+        destination: "西安",
+        cargo: "工业传感器",
+        carrier_id: "CARRIER-EAST-08",
+        driver_id: "DRIVER-42",
+        status: "delayed",
+        sla_hours: 0,
+        shipper_phone: "138****2468",
+        candidate_carriers: [{
+          carrier_id: "CARRIER-NW-11",
+          name: "秦岭货运",
+          eta_hours: 10,
+          reliability_pct: 97,
+        }],
+      },
+      tracking: [{
+        label: "宁波集散中心",
+        recorded_at: "2026-10-11T01:00:00Z",
+        longitude: 121.55,
+        latitude: 29.87,
+        speed_kph: 0,
+        anomaly: false,
+      }],
+      driver: {
+        driver_id: "DRIVER-42",
+        name: "李师傅",
+        phone: "139****5678",
+        plate: "浙B***42",
+        continuous_drive_hours: 0,
+        fatigue_alert: false,
+      },
+      weather: [{
+        segment: "宁波-西安",
+        condition: "晴",
+        alert_level: "none",
+      }],
+      risk: { eta_delay: 0, road: 0, weather: 0 },
+    });
+
+    expect(parsed.waybill.sla_hours).toBe(0);
   });
 });
 

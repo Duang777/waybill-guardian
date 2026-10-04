@@ -77,6 +77,23 @@ func TestAppendReplayVerifyAndRedact(t *testing.T) {
 	}
 }
 
+func TestBuildEventNormalizesTimestampToPostgresPrecision(t *testing.T) {
+	now := time.Date(2026, 10, 4, 12, 0, 0, 123456789, time.FixedZone("test", 8*60*60))
+	event, err := BuildEvent("run-time", 1, GenesisHash, now, Draft{
+		EventID: "event-time",
+		Actor:   ActorSystem,
+		Type:    EventRunStarted,
+		Payload: map[string]string{"status": "started"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 10, 4, 4, 0, 0, 123456000, time.UTC)
+	if !event.TS.Equal(want) || event.TS.Location() != time.UTC {
+		t.Fatalf("event timestamp = %s, want %s in UTC", event.TS, want)
+	}
+}
+
 func TestOpenTruncatesIncompleteTail(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, time.Now)

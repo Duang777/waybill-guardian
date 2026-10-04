@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1029,7 +1031,7 @@ func TestValidateHTTPAddrAllowsOnlyExplicitLoopback(t *testing.T) {
 		"[::1]:8080",
 	}
 	for _, addr := range allowed {
-		if err := validateHTTPAddr(addr, httpauth.ModeLocal); err != nil {
+		if err := validateHTTPAddr(addr, httpauth.ModeLocal, false); err != nil {
 			t.Errorf("validateHTTPAddr(%q) = %v", addr, err)
 		}
 	}
@@ -1044,12 +1046,18 @@ func TestValidateHTTPAddrAllowsOnlyExplicitLoopback(t *testing.T) {
 		"127.0.0.1",
 	}
 	for _, addr := range rejected {
-		if err := validateHTTPAddr(addr, httpauth.ModeLocal); err == nil {
+		if err := validateHTTPAddr(addr, httpauth.ModeLocal, false); err == nil {
 			t.Errorf("validateHTTPAddr(%q) unexpectedly succeeded", addr)
 		}
 	}
-	if err := validateHTTPAddr("0.0.0.0:8080", httpauth.ModeJWT); err != nil {
+	if err := validateHTTPAddr("0.0.0.0:8080", httpauth.ModeJWT, false); err != nil {
 		t.Fatalf("JWT listener was rejected: %v", err)
+	}
+	if err := validateHTTPAddr("0.0.0.0:8080", httpauth.ModeLocal, true); err != nil {
+		t.Fatalf("explicit local container listener was rejected: %v", err)
+	}
+	if err := validateHTTPAddr("not-an-address", httpauth.ModeLocal, true); err == nil {
+		t.Fatal("invalid listener was accepted with ALLOW_NON_LOOPBACK_LOCAL")
 	}
 }
 
@@ -1079,6 +1087,117 @@ func TestHandlerAcceptsLoopbackHostWithoutPort(t *testing.T) {
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", response.Code)
+	}
+}
+
+func TestHandlerServesConfiguredFrontendWithoutShadowingHealth(t *testing.T) {
+	staticDir := t.TempDir()
+	const index = "<!doctype html><title>waybill frontend</title>"
+	if err := os.WriteFile(filepath.Join(staticDir, "index.html"), []byte(index), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	frontend, err := staticFileHandler(staticDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := newHandlerWithFrontend(nil, newLocalAccess(t), nil, nil, frontend, nil)
+
+	pageRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/", nil)
+	pageResponse := httptest.NewRecorder()
+	handler.ServeHTTP(pageResponse, pageRequest)
+	if pageResponse.Code != http.StatusOK {
+		t.Fatalf("frontend status = %d, want 200", pageResponse.Code)
+	}
+	if pageResponse.Body.String() != index {
+		t.Fatalf("frontend body = %q, want %q", pageResponse.Body.String(), index)
+	}
+
+	healthRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/healthz", nil)
+	healthResponse := httptest.NewRecorder()
+	handler.ServeHTTP(healthResponse, healthRequest)
+	if healthResponse.Code != http.StatusOK {
+		t.Fatalf("health status = %d, want 200", healthResponse.Code)
+	}
+	if strings.Contains(healthResponse.Body.String(), "waybill frontend") {
+		t.Fatal("frontend handler shadowed /healthz")
+	}
+
+	for _, path := range []string{"/", "/healthz"} {
+		request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1"+path, nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusMethodNotAllowed {
+			t.Errorf("POST %s status = %d, want 405", path, response.Code)
+		}
+	}
+}
+
+func TestStaticFileHandlerRequiresIndex(t *testing.T) {
+	handler, err := staticFileHandler("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handler != nil {
+		t.Fatal("empty WEB_STATIC_DIR created a handler")
+	}
+	if _, err := staticFileHandler(t.TempDir()); err == nil {
+		t.Fatal("WEB_STATIC_DIR without index.html was accepted")
+	}
+}
+
+func TestHandlerChecksRemoteAddressForContainerLocalMode(t *testing.T) {
+	trusted := netip.MustParseAddr("192.0.2.10")
+	handler := newHandlerWithFrontend(nil, newLocalAccess(t), nil, nil, nil, []netip.Addr{trusted})
+
+	untrustedRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/healthz", nil)
+	untrustedRequest.RemoteAddr = "192.0.2.11:41000"
+	untrustedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(untrustedResponse, untrustedRequest)
+	if untrustedResponse.Code != http.StatusForbidden {
+		t.Fatalf("untrusted status = %d, want 403", untrustedResponse.Code)
+	}
+
+	trustedRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/healthz", nil)
+	trustedRequest.RemoteAddr = "192.0.2.10:41000"
+	trustedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(trustedResponse, trustedRequest)
+	if trustedResponse.Code != http.StatusOK {
+		t.Fatalf("trusted status = %d, want 200", trustedResponse.Code)
+	}
+}
+
+func TestLocalTrustedRemotesRequiresSpecificAddress(t *testing.T) {
+	t.Setenv("LOCAL_TRUSTED_REMOTE", "")
+	if _, err := localTrustedRemotes("0.0.0.0:8080", httpauth.ModeLocal, true); err == nil {
+		t.Fatal("non-loopback local listener without trusted remote was accepted")
+	}
+
+	t.Setenv("LOCAL_TRUSTED_REMOTE", "0.0.0.0")
+	if _, err := localTrustedRemotes("0.0.0.0:8080", httpauth.ModeLocal, true); err == nil {
+		t.Fatal("unspecified trusted remote was accepted")
+	}
+
+	t.Setenv("LOCAL_TRUSTED_REMOTE", "192.0.2.10")
+	addresses, err := localTrustedRemotes("0.0.0.0:8080", httpauth.ModeLocal, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(addresses) != 1 || addresses[0] != netip.MustParseAddr("192.0.2.10") {
+		t.Fatalf("trusted addresses = %v", addresses)
+	}
+}
+
+func TestParseDefaultIPv4Gateway(t *testing.T) {
+	const routes = `Iface	Destination	Gateway	Flags	RefCnt	Use	Metric	Mask	MTU	Window	IRTT
+eth0	00000000	01E4A8C0	0003	0	0	0	00000000	0	0	0
+eth0	00E4A8C0	00000000	0001	0	0	0	00FFFFFF	0	0	0
+`
+	address, err := parseDefaultIPv4Gateway(routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := netip.MustParseAddr("192.168.228.1"); address != want {
+		t.Fatalf("gateway = %s, want %s", address, want)
 	}
 }
 

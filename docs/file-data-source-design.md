@@ -284,10 +284,12 @@ CSV 校验：
 运行审计继续记录 `platform_profile` 和 `read_source`。文件来源使用以下格式：
 
 ```text
-file:csv:v1:<dataset_id>:<raw_sha256_prefix>
+file:csv:v1:<dataset_id>:<raw_sha256>
 ```
 
 该值不包含绝对路径、联系方式、车牌或坐标。digest 固定一次进程使用的精确输入。
+非终态 run 恢复时必须与当前 `read_source` 完全一致，fixture effect binding 的 provider
+scope 也使用同一完整 digest；切换文件后旧审批不会在新数据集上继续执行。
 `Load` 只在错误中使用 `filepath.Base(path)`；底层打开和 stat 错误包装为稳定错误码，不直接
 透传含绝对路径的 `PathError`。
 

@@ -40,7 +40,12 @@ try {
     },
   });
   processes.push(backendProcess);
-  await waitForHTTP(`${backendURL}/healthz`, backendProcess, processes);
+  await waitForHTTP(
+    `${backendURL}/healthz`,
+    backendProcess,
+    processes,
+    /waybill guardian listening/,
+  );
 
   const webProcess = startProcess(
     "npm",
@@ -63,13 +68,53 @@ try {
     },
   );
   processes.push(webProcess);
-  await waitForHTTP(webURL, webProcess, processes);
+  await waitForHTTP(webURL, webProcess, processes, /Local:/);
 
   browser = await chromium.launch({
     executablePath: await findChrome(),
     headless: true,
   });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("waybill-stale-response-tested") === "true") {
+      return;
+    }
+    const originalFetch = window.fetch.bind(window);
+    let targetRequests = 0;
+    window.__staleWaybillJSONReady = false;
+    window.__staleWaybillJSONSettled = false;
+    window.fetch = async (input, init) => {
+      const response = await originalFetch(input, init);
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof Request
+            ? input.url
+            : input.toString();
+      if (!url.endsWith("/api/waybills/YD2026101042")) {
+        return response;
+      }
+      targetRequests += 1;
+      if (targetRequests !== 1) {
+        return response;
+      }
+      const originalJSON = response.json.bind(response);
+      response.json = async () => {
+        const data = await originalJSON();
+        window.__staleWaybillJSONReady = true;
+        await new Promise((release) => {
+          window.__releaseStaleWaybillJSON = release;
+        });
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            window.__staleWaybillJSONSettled = true;
+          });
+        });
+        return data;
+      };
+      return response;
+    };
+  });
   const runRequests = [];
   page.on("request", (request) => {
     if (request.method() === "POST" && request.url().endsWith("/api/runs")) {
@@ -85,30 +130,23 @@ try {
     "file catalog did not expose both waybills",
   );
 
-  let delayedRequests = 0;
-  let finishDelayedRequest = () => {};
-  const delayedRequestFinished = new Promise((resolve) => {
-    finishDelayedRequest = resolve;
-  });
-  await page.route("**/api/waybills/YD2026101042", async (route) => {
-    delayedRequests += 1;
-    const isDelayedRequest = delayedRequests === 1;
-    if (isDelayedRequest) {
-      await delay(500);
-    }
-    await route.continue().catch(() => undefined);
-    if (isDelayedRequest) {
-      finishDelayedRequest();
-    }
-  });
   await selector.selectOption("YD2026101042");
+  await page.waitForFunction(() => window.__staleWaybillJSONReady === true);
   await selector.selectOption("YD2026101041");
-  await delayedRequestFinished;
+  await page.getByText("医疗器械", { exact: true }).waitFor();
+  await page.evaluate(() => window.__releaseStaleWaybillJSON());
+  await page.waitForFunction(() => window.__staleWaybillJSONSettled === true);
   assert(
     (await selector.inputValue()) === "YD2026101041",
     "a stale detail response replaced the latest waybill selection",
   );
-  await page.getByText("医疗器械", { exact: true }).waitFor();
+  assert(
+    (await page.getByText("医疗器械", { exact: true }).count()) === 1,
+    "the stale response replaced the latest waybill details",
+  );
+  await page.evaluate(() => {
+    sessionStorage.setItem("waybill-stale-response-tested", "true");
+  });
 
   await selector.selectOption("YD2026101042");
   await page.getByText("宁波 → 西安", { exact: true }).waitFor();
@@ -239,10 +277,6 @@ async function undersizedButtons(page) {
       })
       .map((button) => button.getAttribute("aria-label") ?? button.textContent?.trim() ?? "button"),
   );
-}
-
-function delay(milliseconds) {
-  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 }
 
 function assert(condition, message) {
