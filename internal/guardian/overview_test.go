@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/platform"
 	"github.com/Duang777/waybill-guardian/internal/platform/filestore"
 )
 
@@ -82,7 +83,7 @@ func TestOverviewOnlyAggregatesRequestedWaybillScope(t *testing.T) {
 	}
 }
 
-func TestKPIsExposeFormulasWithoutInventingMissingValueData(t *testing.T) {
+func TestKPIsCalculateSimulationImpactFromCompleteWindowData(t *testing.T) {
 	service, ids := openSimulatedOverviewService(t)
 
 	report, err := service.KPIs(context.Background(), ids, 24*time.Hour)
@@ -107,14 +108,52 @@ func TestKPIsExposeFormulasWithoutInventingMissingValueData(t *testing.T) {
 	}
 	for _, key := range []string{"time_recovered_hours", "cost_impact_cny"} {
 		metric := metrics[key]
-		if metric.Availability != "unavailable" || metric.Value != nil || metric.Reason == "" {
-			t.Fatalf("metric %q invented a value: %+v", key, metric)
+		if metric.Availability != "available" || metric.Value == nil || *metric.Value <= 0 {
+			t.Fatalf("metric %q is not calculated: %+v", key, metric)
 		}
 	}
 	for _, key := range []string{"labor_saved_hours", "anomaly_closure_rate_pct"} {
 		metric := metrics[key]
 		if metric.Availability != "available" || metric.Value == nil {
 			t.Fatalf("metric %q is unavailable: %+v", key, metric)
+		}
+	}
+}
+
+func TestSimulationImpactMetricsRequireACompletePopulation(t *testing.T) {
+	complete := []platform.WaybillSummary{
+		{
+			Impact: &platform.SimulationImpact{
+				NoActionETAHours:    12,
+				PostActionETAHours:  8.5,
+				AvoidedPenaltyCents: 120_000,
+				ReassignDeltaCents:  20_000,
+				HandlingCostCents:   5_000,
+			},
+		},
+		{
+			Impact: &platform.SimulationImpact{
+				NoActionETAHours:    20,
+				PostActionETAHours:  15,
+				AvoidedPenaltyCents: 80_000,
+				ReassignDeltaCents:  12_000,
+				HandlingCostCents:   3_000,
+			},
+		},
+	}
+	timeMetric, costMetric := simulationImpactMetrics(complete)
+	if timeMetric.Value == nil || *timeMetric.Value != 8.5 {
+		t.Fatalf("time recovered = %+v", timeMetric)
+	}
+	if costMetric.Value == nil || *costMetric.Value != 1600 {
+		t.Fatalf("cost impact = %+v", costMetric)
+	}
+
+	complete = append(complete, platform.WaybillSummary{})
+	timeMetric, costMetric = simulationImpactMetrics(complete)
+	for _, metric := range []KPIMetric{timeMetric, costMetric} {
+		if metric.Availability != "unavailable" || metric.Value != nil || metric.Reason == "" {
+			t.Fatalf("incomplete population metric = %+v", metric)
 		}
 	}
 }

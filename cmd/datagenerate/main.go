@@ -62,19 +62,28 @@ type routeRecord struct {
 }
 
 type waybillRecord struct {
-	WaybillID        string `json:"waybill_id"`
-	Origin           string `json:"origin"`
-	Destination      string `json:"destination"`
-	OriginHubID      string `json:"origin_hub_id"`
-	DestinationHubID string `json:"destination_hub_id"`
-	RouteID          string `json:"route_id"`
-	VehicleID        string `json:"vehicle_id"`
-	Cargo            string `json:"cargo"`
-	CurrentCarrierID string `json:"current_carrier_id"`
-	DriverID         string `json:"driver_id"`
-	Status           string `json:"status"`
-	SLAHours         int    `json:"sla_hours"`
-	ShipperPhone     string `json:"shipper_phone"`
+	WaybillID        string        `json:"waybill_id"`
+	Origin           string        `json:"origin"`
+	Destination      string        `json:"destination"`
+	OriginHubID      string        `json:"origin_hub_id"`
+	DestinationHubID string        `json:"destination_hub_id"`
+	RouteID          string        `json:"route_id"`
+	VehicleID        string        `json:"vehicle_id"`
+	Cargo            string        `json:"cargo"`
+	CurrentCarrierID string        `json:"current_carrier_id"`
+	DriverID         string        `json:"driver_id"`
+	Status           string        `json:"status"`
+	SLAHours         int           `json:"sla_hours"`
+	ShipperPhone     string        `json:"shipper_phone"`
+	Impact           *impactRecord `json:"impact,omitempty"`
+}
+
+type impactRecord struct {
+	NoActionETAHours    float64 `json:"no_action_eta_hours"`
+	PostActionETAHours  float64 `json:"post_action_eta_hours"`
+	AvoidedPenaltyCents int64   `json:"avoided_penalty_cents"`
+	ReassignDeltaCents  int64   `json:"reassign_delta_cents"`
+	HandlingCostCents   int64   `json:"handling_cost_cents"`
 }
 
 type driverRecord struct {
@@ -234,6 +243,7 @@ func generate(waybillCount int) dataset {
 		}
 		fatigue := anomalyType == "fatigue" || index%13 == 0
 		continuousHours := 4.5 + float64(index%9)/2
+		stopHours := 1.0 + float64(index%8)/2
 		result.Vehicles = append(result.Vehicles, vehicleRecord{
 			VehicleID:        vehicleID,
 			MaskedPlate:      fmt.Sprintf("仿%c****%02d", 'A'+rune(index%24), number%100),
@@ -262,6 +272,12 @@ func generate(waybillCount int) dataset {
 			Status:           status,
 			SLAHours:         route.StandardHours + 6,
 			ShipperPhone:     fmt.Sprintf("13877%06d", number),
+			Impact: simulationImpact(
+				anomalous,
+				index,
+				route.StandardHours,
+				stopHours,
+			),
 		})
 		for priority := 1; priority <= 2; priority++ {
 			carrierNumber := (index + priority*7) % 24
@@ -278,7 +294,6 @@ func generate(waybillCount int) dataset {
 			)
 		}
 		start := baseTime.Add(time.Duration(index) * 7 * time.Minute)
-		stopHours := 1.0 + float64(index%8)/2
 		result.Tracking = append(
 			result.Tracking,
 			trackingRecord{
@@ -323,6 +338,24 @@ func optionalStop(anomalous bool, value float64) *float64 {
 		return nil
 	}
 	return &value
+}
+
+func simulationImpact(
+	anomalous bool,
+	index int,
+	standardHours int,
+	stopHours float64,
+) *impactRecord {
+	if !anomalous {
+		return nil
+	}
+	return &impactRecord{
+		NoActionETAHours:    float64(standardHours) + 8 + stopHours,
+		PostActionETAHours:  float64(standardHours) + 2 + float64(index%3)/2,
+		AvoidedPenaltyCents: int64(120_000 + index%7*8_000),
+		ReassignDeltaCents:  int64(18_000 + index%5*3_000),
+		HandlingCostCents:   int64(5_000 + index%4*1_000),
+	}
 }
 
 func routeMidpointLabel(origin, destination hubRecord) string {

@@ -140,6 +140,7 @@ func buildSnapshot(draft datasetDraft) (*snapshot, Stats) {
 			DestinationHubID: platform.HubID(waybill.DestinationHubID),
 			RouteID:          platform.RouteID(waybill.RouteID),
 			Status:           waybill.Status,
+			Impact:           convertSimulationImpact(waybill.Impact),
 		}
 		for _, point := range points {
 			stopHours := 0.0
@@ -288,7 +289,12 @@ func (s *snapshot) ListWaybills(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return append([]platform.WaybillSummary(nil), s.catalog...), nil
+	result := make([]platform.WaybillSummary, len(s.catalog))
+	for index, summary := range s.catalog {
+		result[index] = summary
+		result[index].Impact = cloneSimulationImpact(summary.Impact)
+	}
+	return result, nil
 }
 
 func (s *snapshot) ListHubs(ctx context.Context) ([]platform.Hub, error) {
@@ -322,6 +328,27 @@ func cloneWaybill(waybill platform.Waybill) platform.Waybill {
 		waybill.CandidateCarriers...,
 	)
 	return waybill
+}
+
+func convertSimulationImpact(impact *impactDraft) *platform.SimulationImpact {
+	if impact == nil {
+		return nil
+	}
+	return &platform.SimulationImpact{
+		NoActionETAHours:    impact.NoActionETAHours,
+		PostActionETAHours:  impact.PostActionETAHours,
+		AvoidedPenaltyCents: impact.AvoidedPenaltyCents,
+		ReassignDeltaCents:  impact.ReassignDeltaCents,
+		HandlingCostCents:   impact.HandlingCostCents,
+	}
+}
+
+func cloneSimulationImpact(impact *platform.SimulationImpact) *platform.SimulationImpact {
+	if impact == nil {
+		return nil
+	}
+	cloned := *impact
+	return &cloned
 }
 
 var (

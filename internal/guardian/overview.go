@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"sort"
 	"strings"
 	"time"
@@ -327,6 +328,7 @@ func (s *Service) KPIs(
 	anomalies := 0
 	observed := 0
 	closed := 0
+	impactPopulation := make([]platform.WaybillSummary, 0)
 	latest := latestRunMap(runs, allowed)
 	for _, item := range catalog {
 		if item.LastRecordedAt.Before(windowStart) || item.LastRecordedAt.After(asOf) {
@@ -337,6 +339,7 @@ func (s *Service) KPIs(
 			continue
 		}
 		anomalies++
+		impactPopulation = append(impactPopulation, item)
 		status := latest[item.WaybillID].Status
 		if status == domain.RunCompleted || status == domain.RunRejected {
 			closed++
@@ -394,6 +397,7 @@ func (s *Service) KPIs(
 		}
 	}
 
+	timeRecovered, costImpact := simulationImpactMetrics(impactPopulation)
 	report := KPIReport{
 		Window: window.String(),
 		AsOf:   asOf,
@@ -401,20 +405,8 @@ func (s *Service) KPIs(
 			EvidenceStepMinutes: s.evidenceStepMinutes,
 		},
 		Metrics: []KPIMetric{
-			unavailableMetric(
-				"time_recovered_hours",
-				"时效挽回",
-				"小时",
-				"sum(不处置预测 ETA - 处置后 ETA)",
-				"数据源未提供不处置预测 ETA 与处置后 ETA",
-			),
-			unavailableMetric(
-				"cost_impact_cny",
-				"成本影响",
-				"元",
-				"sum(避免违约金 - 改派差价 - 处置成本)",
-				"数据源未提供改派价格、违约金与处置成本",
-			),
+			timeRecovered,
+			costImpact,
 			availableMetric(
 				"labor_saved_hours",
 				"人力节省",
@@ -441,6 +433,61 @@ func (s *Service) KPIs(
 		},
 	}
 	return report, nil
+}
+
+func simulationImpactMetrics(
+	items []platform.WaybillSummary,
+) (KPIMetric, KPIMetric) {
+	const (
+		timeFormula = "sum(不处置预测 ETA - 处置后 ETA)"
+		costFormula = "sum(避免违约金 - 改派差价 - 处置成本)"
+	)
+	for _, item := range items {
+		if item.Impact == nil {
+			reason := "窗口内至少一张异常运单缺少完整仿真影响数据"
+			return unavailableMetric(
+					"time_recovered_hours",
+					"时效挽回",
+					"小时",
+					timeFormula,
+					reason,
+				),
+				unavailableMetric(
+					"cost_impact_cny",
+					"成本影响",
+					"元",
+					costFormula,
+					reason,
+				)
+		}
+	}
+
+	recoveredHours := 0.0
+	var costCents big.Int
+	for _, item := range items {
+		impact := item.Impact
+		recoveredHours += impact.NoActionETAHours - impact.PostActionETAHours
+		costCents.Add(&costCents, big.NewInt(impact.AvoidedPenaltyCents))
+		costCents.Sub(&costCents, big.NewInt(impact.ReassignDeltaCents))
+		costCents.Sub(&costCents, big.NewInt(impact.HandlingCostCents))
+	}
+	costCNY, _ := new(big.Rat).
+		SetFrac(&costCents, big.NewInt(100)).
+		Float64()
+	return availableMetric(
+			"time_recovered_hours",
+			"时效挽回",
+			recoveredHours,
+			"小时",
+			timeFormula,
+		),
+		availableMetric(
+			"cost_impact_cny",
+			"成本影响",
+			costCNY,
+			"元",
+			costFormula,
+		)
 }
 
 func (s *Service) scopedCatalog(

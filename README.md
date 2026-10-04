@@ -310,15 +310,17 @@ run 使用独立的 `run_id`、审批记录和 SSE 时间线。
 
 | KPI | 公式 | 数据不足时的结果 |
 |---|---|---|
-| 时效挽回 | `sum(不处置预测 ETA - 处置后 ETA)` | 缺少两个 ETA 字段时返回 `unavailable` |
-| 成本影响 | `sum(避免违约金 - 改派差价 - 处置成本)` | 缺少价格和成本字段时返回 `unavailable` |
+| 时效挽回 | `sum(no_action_eta_hours - post_action_eta_hours)` | 窗口内任一异常运单缺少完整影响数据时返回 `unavailable` |
+| 成本影响 | `sum(avoided_penalty_cents - reassign_delta_cents - handling_cost_cents) / 100` | 窗口内任一异常运单缺少完整影响数据时返回 `unavailable` |
 | 人力节省 | `成功自动证据采集步数 * EVIDENCE_STEP_MINUTES / 60` | 没有采集事件时返回 `0` 小时 |
 | 异常闭环率 | `已完成或已驳回处置的异常运单数 / 窗口内异常运单数 * 100%` | 没有异常运单时返回 `0%` |
 | 平均处置时长 | `sum(终态时间 - 启动时间) / 窗口内闭环 run 数` | 没有闭环 run 时返回 `unavailable` |
 | 人工审批通过率 | `人工确认数 / 人工决定数 * 100%` | 没有人工决定时返回 `unavailable` |
 
-时效挽回和成本影响不会用仿真假设补值。接入正式数据后，adapter 必须提供计算公式所需的
-基线、结果和成本字段。
+JSON 运单可选提供完整 `impact` 对象；CSV 可选提供同名的五列扩展。五个值必须整组出现。
+ETA 使用小时，金额使用整数分，服务先以整数分求和，最后统一换算为元。仿真数据为异常
+运单提供可复现的演示值；正式 adapter 必须提供同一口径的基线、结果和成本事实，服务不会
+用均值或默认值补齐缺失记录。窗口内没有异常时，两项指标均为可用的零值。
 
 ### 在线模型
 
@@ -445,7 +447,7 @@ hastekit `agent-sdk-go` v0.0.24 以 Go module 引入，许可证是 Apache-2.0�
 |---|---|
 | [59](https://github.com/Duang777/waybill-guardian/issues/59) | 演示改为真实模型推理，补结构化证据引用 |
 | [60](https://github.com/Duang777/waybill-guardian/issues/60) | 已关闭。启动时加载 JSON 或 CSV v1，并在页面上选择运单 |
-| [61](https://github.com/Duang777/waybill-guardian/issues/61) | 已完成。多公路港总览、KPI、异常队列和批量启动 |
+| [61](https://github.com/Duang777/waybill-guardian/issues/61) | 补齐中。总览、批量启动已交付，正在补齐价值 KPI 与只读模型简报 |
 | [62](https://github.com/Duang777/waybill-guardian/issues/62) | 已完成。Apache-2.0、传递依赖清单和 `.mailmap` |
 | [64](https://github.com/Duang777/waybill-guardian/issues/64) | 非 GET 请求的 CSRF 检查 |
 | [65](https://github.com/Duang777/waybill-guardian/issues/65) | 已完成。单容器镜像和 Docker Compose |
