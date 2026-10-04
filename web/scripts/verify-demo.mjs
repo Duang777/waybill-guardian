@@ -30,6 +30,7 @@ try {
       cwd: repoDir,
       env: {
         ...goEnvironment,
+        AGENT_MODE: "offline",
         DATA_DIR: dataDir,
         HTTP_ADDR: `127.0.0.1:${backendPort}`,
         DEMO_STEP_DELAY: "25ms",

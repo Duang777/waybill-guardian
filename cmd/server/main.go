@@ -180,7 +180,7 @@ func run() error {
 		MaxConcurrentRuns:   maxConcurrentRuns,
 		EvidenceStepMinutes: evidenceStepMinutes,
 		Model: agentkit.ModelConfig{
-			Mode:     envOr("AGENT_MODE", agentkit.ModeDemo),
+			Mode:     envOr("AGENT_MODE", agentkit.ModeOffline),
 			APIStyle: envOr("LLM_API_STYLE", agentkit.APIStyleResponses),
 			BaseURL:  strings.TrimSpace(os.Getenv("LLM_BASE_URL")),
 			APIKey:   strings.TrimSpace(os.Getenv("LLM_API_KEY")),

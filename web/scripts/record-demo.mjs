@@ -17,6 +17,8 @@ const artifactDir = join(webDir, "artifacts");
 const outputPath = resolve(
   process.env.RECORD_OUTPUT ?? join(artifactDir, "waybill-guardian-demo.mp4"),
 );
+const agentMode = process.env.AGENT_MODE?.trim().toLowerCase() || "online";
+requireOnlineModelConfig(agentMode, process.env);
 const dataDir = await mkdtemp(join(tmpdir(), "waybill-guardian-recording-"));
 const rawVideoDir = join(dataDir, "video");
 const backendPort = await availablePort(process.env.RECORD_BACKEND_PORT);
@@ -42,6 +44,7 @@ try {
     cwd: repoDir,
     env: {
       ...goEnvironment,
+      AGENT_MODE: agentMode,
       DATA_DIR: dataDir,
       HTTP_ADDR: `127.0.0.1:${backendPort}`,
       DEMO_STEP_DELAY: "120ms",
@@ -228,6 +231,23 @@ try {
   await browser?.close();
   stopProcesses(processes);
   await rm(dataDir, { recursive: true, force: true });
+}
+
+function requireOnlineModelConfig(mode, environment) {
+  if (mode !== "online") {
+    return;
+  }
+  const requiredVariables = ["LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"];
+  const missingVariables = requiredVariables.filter(
+    (name) => !environment[name]?.trim(),
+  );
+  if (missingVariables.length === 0) {
+    return;
+  }
+  throw new Error(
+    `AGENT_MODE=online requires: ${missingVariables.join(" ")}. ` +
+      "Set the model configuration, or run AGENT_MODE=offline npm run record:demo.",
+  );
 }
 
 async function installCaption(page) {
