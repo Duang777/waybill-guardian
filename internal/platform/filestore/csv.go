@@ -61,6 +61,19 @@ var csvColumns = []string{
 	"distance_km",
 	"standard_hours",
 	"anomaly_type",
+	"no_action_eta_hours",
+	"post_action_eta_hours",
+	"avoided_penalty_cents",
+	"reassign_delta_cents",
+	"handling_cost_cents",
+}
+
+var csvImpactColumns = []string{
+	"no_action_eta_hours",
+	"post_action_eta_hours",
+	"avoided_penalty_cents",
+	"reassign_delta_cents",
+	"handling_cost_cents",
 }
 
 var csvFieldsByRecord = map[string]map[string]bool{
@@ -104,6 +117,11 @@ var csvFieldsByRecord = map[string]map[string]bool{
 		"status",
 		"sla_hours",
 		"shipper_phone",
+		"no_action_eta_hours",
+		"post_action_eta_hours",
+		"avoided_penalty_cents",
+		"reassign_delta_cents",
+		"handling_cost_cents",
 	),
 	"driver": fieldSet(
 		"driver_id",
@@ -151,6 +169,11 @@ var csvOptionalFields = fieldSet(
 	"route_id",
 	"vehicle_id",
 	"anomaly_type",
+	"no_action_eta_hours",
+	"post_action_eta_hours",
+	"avoided_penalty_cents",
+	"reassign_delta_cents",
+	"handling_cost_cents",
 )
 
 var csvExtensionFields = fieldSet(
@@ -169,6 +192,11 @@ var csvExtensionFields = fieldSet(
 	"distance_km",
 	"standard_hours",
 	"anomaly_type",
+	"no_action_eta_hours",
+	"post_action_eta_hours",
+	"avoided_penalty_cents",
+	"reassign_delta_cents",
+	"handling_cost_cents",
 )
 
 func parseCSV(raw []byte) (datasetDraft, error) {
@@ -283,6 +311,7 @@ func parseCSV(raw []byte) (datasetDraft, error) {
 				Status:           values["status"],
 				SLAHours:         parseCSVInt(&collector, location, "sla_hours", values["sla_hours"]),
 				ShipperPhone:     values["shipper_phone"],
+				Impact:           parseCSVImpact(&collector, location, values),
 				sourceRef:        ref,
 			})
 		case "driver":
@@ -370,6 +399,20 @@ func validateCSVHeader(header []string) (map[string]int, error) {
 			collector.add("header", field, "missing_column", "missing required column")
 		}
 	}
+	impactColumns := 0
+	for _, field := range csvImpactColumns {
+		if _, exists := index[field]; exists {
+			impactColumns++
+		}
+	}
+	if impactColumns != 0 && impactColumns != len(csvImpactColumns) {
+		collector.add(
+			"header",
+			"simulation_impact",
+			"incomplete_extension",
+			"requires all five simulation impact columns",
+		)
+	}
 	if err := collector.err(); err != nil {
 		return nil, err
 	}
@@ -449,6 +492,79 @@ func parseCSVOptionalFloat(
 	}
 	parsed := parseCSVFloat(collector, location, field, value)
 	return &parsed
+}
+
+func parseCSVImpact(
+	collector *issueCollector,
+	location string,
+	values map[string]string,
+) *impactDraft {
+	present := 0
+	for _, field := range csvImpactColumns {
+		if values[field] != "" {
+			present++
+		}
+	}
+	if present == 0 {
+		return nil
+	}
+	if present != len(csvImpactColumns) {
+		collector.add(
+			location,
+			"simulation_impact",
+			"incomplete_group",
+			"requires all five simulation impact values",
+		)
+	}
+	return &impactDraft{
+		NoActionETAHours: parseCSVFloat(
+			collector,
+			location,
+			"no_action_eta_hours",
+			values["no_action_eta_hours"],
+		),
+		PostActionETAHours: parseCSVFloat(
+			collector,
+			location,
+			"post_action_eta_hours",
+			values["post_action_eta_hours"],
+		),
+		AvoidedPenaltyCents: parseCSVInt64(
+			collector,
+			location,
+			"avoided_penalty_cents",
+			values["avoided_penalty_cents"],
+		),
+		ReassignDeltaCents: parseCSVInt64(
+			collector,
+			location,
+			"reassign_delta_cents",
+			values["reassign_delta_cents"],
+		),
+		HandlingCostCents: parseCSVInt64(
+			collector,
+			location,
+			"handling_cost_cents",
+			values["handling_cost_cents"],
+		),
+	}
+}
+
+func parseCSVInt64(
+	collector *issueCollector,
+	location string,
+	field string,
+	value string,
+) int64 {
+	if value == "" {
+		return 0
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		collector.add(location, field, "invalid_integer", "must be an integer")
+		return 0
+	}
+	return parsed
 }
 
 func parseCSVBool(

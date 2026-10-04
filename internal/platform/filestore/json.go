@@ -172,6 +172,14 @@ var requiredJSONFields = map[string][]string{
 	},
 }
 
+var requiredImpactJSONFields = []string{
+	"no_action_eta_hours",
+	"post_action_eta_hours",
+	"avoided_penalty_cents",
+	"reassign_delta_cents",
+	"handling_cost_cents",
+}
+
 func rejectMissingRequiredFields(raw []byte) error {
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &root); err != nil {
@@ -203,9 +211,31 @@ func rejectMissingRequiredFields(raw []byte) error {
 					collector.add(location, field, "required", "is required")
 				}
 			}
+			if collection == "waybills" {
+				validateRequiredImpactJSONFields(&collector, location, record["impact"])
+			}
 		}
 	}
 	return collector.err()
+}
+
+func validateRequiredImpactJSONFields(
+	collector *issueCollector,
+	location string,
+	raw json.RawMessage,
+) {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return
+	}
+	var impact map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &impact); err != nil {
+		return
+	}
+	for _, field := range requiredImpactJSONFields {
+		if missingJSONField(impact, field) {
+			collector.add(location+".impact", field, "required", "is required")
+		}
+	}
 }
 
 func missingJSONField(

@@ -2,11 +2,14 @@ package guardian
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
+	agentkit "github.com/Duang777/waybill-guardian/internal/agent"
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/platform"
 	"github.com/Duang777/waybill-guardian/internal/platform/filestore"
 )
 
@@ -82,7 +85,69 @@ func TestOverviewOnlyAggregatesRequestedWaybillScope(t *testing.T) {
 	}
 }
 
-func TestKPIsExposeFormulasWithoutInventingMissingValueData(t *testing.T) {
+func TestOverviewUsesReadOnlyModelBriefWithServerOwnedCitations(t *testing.T) {
+	generator := &briefGeneratorStub{
+		result: agentkit.GeneratedBrief{Items: []agentkit.GeneratedBriefItem{
+			{
+				Headline:    "治理高频异常",
+				Body:        "建议复盘共性",
+				EvidenceIDs: []string{agentkit.EvidenceAnomalyMix},
+			},
+			{
+				Headline:    "聚焦线路风险",
+				Body:        "建议前置运力",
+				EvidenceIDs: []string{agentkit.EvidenceRouteHotspot},
+			},
+			{
+				Headline:    "平衡节点资源",
+				Body:        "建议调整排班",
+				EvidenceIDs: []string{agentkit.EvidenceHubPressure, agentkit.EvidenceFleetScope},
+			},
+		}},
+	}
+	service, ids := openSimulatedOverviewServiceWithBrief(t, generator)
+
+	overview, err := service.Overview(t.Context(), ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generator.calls != 1 {
+		t.Fatalf("generator calls = %d, want 1", generator.calls)
+	}
+	if overview.Brief.Mode != "model_read_only" || len(overview.Brief.Items) != 3 {
+		t.Fatalf("brief = %+v", overview.Brief)
+	}
+	wantIDs := []string{"model-brief-1", "model-brief-2", "model-brief-3"}
+	for index, item := range overview.Brief.Items {
+		if item.ID != wantIDs[index] {
+			t.Fatalf("item ID = %q", item.ID)
+		}
+		if len(item.Evidence) == 0 {
+			t.Fatalf("item has no evidence: %+v", item)
+		}
+		for _, evidence := range item.Evidence {
+			if evidence.Label == "" || evidence.Value == "" || evidence.Source == "" {
+				t.Fatalf("server citation is incomplete: %+v", evidence)
+			}
+		}
+	}
+}
+
+func TestOverviewFallsBackWhenBriefGenerationFails(t *testing.T) {
+	generator := &briefGeneratorStub{err: errors.New("provider unavailable")}
+	service, ids := openSimulatedOverviewServiceWithBrief(t, generator)
+
+	overview, err := service.Overview(t.Context(), ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Brief.Mode != "deterministic_read_only" ||
+		len(overview.Brief.Items) != 3 {
+		t.Fatalf("fallback brief = %+v", overview.Brief)
+	}
+}
+
+func TestKPIsCalculateSimulationImpactFromCompleteWindowData(t *testing.T) {
 	service, ids := openSimulatedOverviewService(t)
 
 	report, err := service.KPIs(context.Background(), ids, 24*time.Hour)
@@ -107,14 +172,52 @@ func TestKPIsExposeFormulasWithoutInventingMissingValueData(t *testing.T) {
 	}
 	for _, key := range []string{"time_recovered_hours", "cost_impact_cny"} {
 		metric := metrics[key]
-		if metric.Availability != "unavailable" || metric.Value != nil || metric.Reason == "" {
-			t.Fatalf("metric %q invented a value: %+v", key, metric)
+		if metric.Availability != "available" || metric.Value == nil || *metric.Value <= 0 {
+			t.Fatalf("metric %q is not calculated: %+v", key, metric)
 		}
 	}
 	for _, key := range []string{"labor_saved_hours", "anomaly_closure_rate_pct"} {
 		metric := metrics[key]
 		if metric.Availability != "available" || metric.Value == nil {
 			t.Fatalf("metric %q is unavailable: %+v", key, metric)
+		}
+	}
+}
+
+func TestSimulationImpactMetricsRequireACompletePopulation(t *testing.T) {
+	complete := []platform.WaybillSummary{
+		{
+			Impact: &platform.SimulationImpact{
+				NoActionETAHours:    12,
+				PostActionETAHours:  8.5,
+				AvoidedPenaltyCents: 120_000,
+				ReassignDeltaCents:  20_000,
+				HandlingCostCents:   5_000,
+			},
+		},
+		{
+			Impact: &platform.SimulationImpact{
+				NoActionETAHours:    20,
+				PostActionETAHours:  15,
+				AvoidedPenaltyCents: 80_000,
+				ReassignDeltaCents:  12_000,
+				HandlingCostCents:   3_000,
+			},
+		},
+	}
+	timeMetric, costMetric := simulationImpactMetrics(complete)
+	if timeMetric.Value == nil || *timeMetric.Value != 8.5 {
+		t.Fatalf("time recovered = %+v", timeMetric)
+	}
+	if costMetric.Value == nil || *costMetric.Value != 1600 {
+		t.Fatalf("cost impact = %+v", costMetric)
+	}
+
+	complete = append(complete, platform.WaybillSummary{})
+	timeMetric, costMetric = simulationImpactMetrics(complete)
+	for _, metric := range []KPIMetric{timeMetric, costMetric} {
+		if metric.Availability != "unavailable" || metric.Value != nil || metric.Reason == "" {
+			t.Fatalf("incomplete population metric = %+v", metric)
 		}
 	}
 }
@@ -137,6 +240,13 @@ func TestKPIHelpersUseDocumentedArithmetic(t *testing.T) {
 }
 
 func openSimulatedOverviewService(t *testing.T) (*Service, []domain.WaybillID) {
+	return openSimulatedOverviewServiceWithBrief(t, nil)
+}
+
+func openSimulatedOverviewServiceWithBrief(
+	t *testing.T,
+	briefGenerator agentkit.BriefGenerator,
+) (*Service, []domain.WaybillID) {
 	t.Helper()
 	loaded, err := filestore.Load(filepath.Join("..", "..", "data", "simulated", "waybills-v1.json"))
 	if err != nil {
@@ -147,6 +257,7 @@ func openSimulatedOverviewService(t *testing.T) (*Service, []domain.WaybillID) {
 		Reads:               loaded.Reads,
 		ReadSource:          loaded.Source.String(),
 		EvidenceStepMinutes: 8,
+		BriefGenerator:      briefGenerator,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -165,4 +276,20 @@ func openSimulatedOverviewService(t *testing.T) (*Service, []domain.WaybillID) {
 		ids = append(ids, item.WaybillID)
 	}
 	return service, ids
+}
+
+type briefGeneratorStub struct {
+	result agentkit.GeneratedBrief
+	err    error
+	calls  int
+	input  agentkit.BriefInput
+}
+
+func (s *briefGeneratorStub) Generate(
+	_ context.Context,
+	input agentkit.BriefInput,
+) (agentkit.GeneratedBrief, error) {
+	s.calls++
+	s.input = input
+	return s.result, s.err
 }
