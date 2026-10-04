@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
@@ -103,7 +104,7 @@ func (r *FixtureWriteRuntime) Dispatch(
 	}
 	if err != nil {
 		return platform.DispatchResult{
-			Disposition: platform.EffectDispositionOf(err),
+			Disposition: fixtureErrorDisposition(err),
 			ErrorCode:   "fixture_dispatch_failed",
 		}
 	}
@@ -179,8 +180,30 @@ func (r *FixtureWriteRuntime) SupportsRecovery(binding platform.EffectBinding) b
 		binding.ContractVersion == fixtureRuntimeContractVersion &&
 		binding.ProviderOperation == string(binding.Action) &&
 		binding.ProviderScopeDigest == fixtureDigest([]byte(FixtureRuntimeAdapterID)) &&
+		validFixtureDigest(binding.ProviderRequestHash) &&
+		!binding.KeyCreatedAt.IsZero() &&
 		binding.KeyExpiresAt.Equal(binding.KeyCreatedAt.Add(fixtureRuntimeKeyRetention)) &&
 		binding.LookupConsistencyWindow == 0
+}
+
+func fixtureErrorDisposition(err error) platform.EffectDisposition {
+	var effectErr *platform.EffectError
+	if errors.As(err, &effectErr) {
+		return platform.EffectDispositionOf(err)
+	}
+	if errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return platform.EffectUnknown
+	}
+	return platform.EffectPermanentFailed
+}
+
+func validFixtureDigest(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func (r *FixtureWriteRuntime) validateRequest(

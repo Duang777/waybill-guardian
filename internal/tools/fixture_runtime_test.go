@@ -52,6 +52,101 @@ func TestFixtureWriteRuntimeDispatchesAndLooksUpByStableKey(t *testing.T) {
 	}
 }
 
+func TestFixtureWriteRuntimeTreatsBusinessRejectionAsPermanent(t *testing.T) {
+	clients, mock, err := NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := NewFixtureWriteRuntime(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := platform.EffectRequest{
+		Action: domain.ActionReassign,
+		Arguments: json.RawMessage(
+			`{"carrier_id":"CARRIER-NOT-CANDIDATE","waybill_id":"YD2026101001"}`,
+		),
+		ArgumentsHash: "arguments-hash",
+	}
+	binding, err := runtime.Bind(
+		request,
+		"rejected-fixture-effect",
+		time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := runtime.Dispatch(
+		t.Context(),
+		binding,
+		request,
+		"rejected-fixture-effect",
+	)
+	if result.Disposition != platform.EffectPermanentFailed {
+		t.Fatalf("dispatch disposition = %q, want permanent_failed", result.Disposition)
+	}
+	if mock.WriteCount(domain.ActionReassign) != 0 {
+		t.Fatal("rejected reassign was recorded as a write")
+	}
+}
+
+func TestFixtureWriteRuntimeRejectsIncompleteRecoveryBindings(t *testing.T) {
+	clients, _, err := NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := NewFixtureWriteRuntime(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := platform.EffectRequest{
+		Action:        domain.ActionReassign,
+		Arguments:     json.RawMessage(`{"carrier_id":"CARRIER-SW-42","waybill_id":"YD2026101001"}`),
+		ArgumentsHash: "arguments-hash",
+	}
+	binding, err := runtime.Bind(
+		request,
+		"fixture-effect-key",
+		time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		change func(*platform.EffectBinding)
+	}{
+		{
+			name: "missing request hash",
+			change: func(value *platform.EffectBinding) {
+				value.ProviderRequestHash = ""
+			},
+		},
+		{
+			name: "invalid request hash",
+			change: func(value *platform.EffectBinding) {
+				value.ProviderRequestHash = "not-a-digest"
+			},
+		},
+		{
+			name: "missing creation time",
+			change: func(value *platform.EffectBinding) {
+				value.KeyCreatedAt = time.Time{}
+				value.KeyExpiresAt = value.KeyCreatedAt.Add(fixtureRuntimeKeyRetention)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			changed := binding
+			test.change(&changed)
+			if runtime.SupportsRecovery(changed) {
+				t.Fatalf("runtime accepted incomplete binding %+v", changed)
+			}
+		})
+	}
+}
+
 func TestFixtureWriteRuntimeReportsAuthoritativeAbsence(t *testing.T) {
 	clients, _, err := NewDemoClients()
 	if err != nil {
