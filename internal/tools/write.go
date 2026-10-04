@@ -47,8 +47,28 @@ func (write CanonicalWrite) ValidateRunContext(runContext domain.RunContext) err
 	return nil
 }
 
-func (r *Registry) ParseWrite(wireName string, raw json.RawMessage) (CanonicalWrite, error) {
-	definition, ok := r.ByWireName(wireName)
+func (r *ExecutionRegistry) ParseWrite(
+	wireName string,
+	raw json.RawMessage,
+) (CanonicalWrite, error) {
+	return r.catalog.ParseWrite(wireName, raw)
+}
+
+func (r *ExecutionRegistry) ParseActiveWrite(
+	wireName string,
+	raw json.RawMessage,
+) (CanonicalWrite, error) {
+	if !r.IsActiveWireName(wireName) {
+		return CanonicalWrite{}, fmt.Errorf("%w: %q", ErrCapabilityUnavailable, wireName)
+	}
+	return r.catalog.ParseWrite(wireName, raw)
+}
+
+func (c *ContractCatalog) ParseWrite(
+	wireName string,
+	raw json.RawMessage,
+) (CanonicalWrite, error) {
+	definition, ok := c.ByWireName(wireName)
 	if !ok || definition.Access != AccessWrite {
 		return CanonicalWrite{}, fmt.Errorf("write tool %q is not registered", wireName)
 	}

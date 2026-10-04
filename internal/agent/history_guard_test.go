@@ -19,6 +19,20 @@ func TestHistoryGuardRejectsProhibitedData(t *testing.T) {
 		{name: "mobile number", value: map[string]any{"text": "contact 13800138000"}},
 		{name: "hyphenated mobile number", value: map[string]any{"text": "contact 138-0013-8000"}},
 		{name: "spaced mobile number", value: map[string]any{"text": "contact 138 0013 8000"}},
+		{
+			name: "mobile number hidden in prefixed UUID",
+			value: map[string]any{
+				"customer_id": "customer-13800138-000a-4abc-8def-123456789abc",
+			},
+		},
+		{
+			name:  "mobile number hidden in opaque-looking text",
+			value: map[string]any{"text": "SMS-13800138000a"},
+		},
+		{
+			name:  "mobile number under id-suffixed ordinary field",
+			value: map[string]any{"valid": "SMS-13800138000a"},
+		},
 		{name: "license plate", value: map[string]any{"text": "vehicle 浙A12345"}},
 		{name: "dotted license plate", value: map[string]any{"text": "vehicle 浙A·12345"}},
 		{name: "hyphenated license plate", value: map[string]any{"text": "vehicle 浙A-12345"}},
@@ -35,6 +49,33 @@ func TestHistoryGuardRejectsProhibitedData(t *testing.T) {
 				t.Fatalf("error = %v, want ErrUnsafeHistory", err)
 			}
 		})
+	}
+}
+
+func TestHistoryGuardAllowsOpaqueUUIDIdentifiers(t *testing.T) {
+	const phoneLikeUUID = "13800138-000a-4abc-8def-123456789abc"
+	safe := map[string]any{
+		"id":          phoneLikeUUID,
+		"message_id":  "msg_" + phoneLikeUUID,
+		"incident_id": "delay-" + phoneLikeUUID,
+		"output_id":   "msg_13800138000a1234",
+		"tool_output": `{"order_id":"RA-13800138000a","message_id":"SMS-13800138000a"}`,
+		"text":        "safe",
+	}
+	if err := validateHistoryValue("test value", safe); err != nil {
+		t.Fatalf("opaque identifiers were rejected: %v", err)
+	}
+	if err := validateHistoryValue(
+		"test value",
+		map[string]any{"id": "13800138000"},
+	); !errors.Is(err, ErrUnsafeHistory) {
+		t.Fatalf("phone-valued identifier error = %v, want ErrUnsafeHistory", err)
+	}
+	if err := validateHistoryValue(
+		"test value",
+		map[string]any{"text": "contact msg_13800138000a1234"},
+	); !errors.Is(err, ErrUnsafeHistory) {
+		t.Fatalf("phone-like text error = %v, want ErrUnsafeHistory", err)
 	}
 }
 

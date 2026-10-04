@@ -13,6 +13,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/approval"
 	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/idempotency"
 	"github.com/Duang777/waybill-guardian/internal/platform"
 	"github.com/Duang777/waybill-guardian/internal/tools"
 )
@@ -80,6 +81,44 @@ func TestDemoConfirmCompletesExactlyOnce(t *testing.T) {
 	}
 	if mock.WriteCount(domain.ActionReassign) != 1 || mock.WriteCount(domain.ActionSendSMS) != 2 {
 		t.Fatal("repeated confirmation executed writes again")
+	}
+}
+
+func TestRunStartedAuditRecordsPlatformSources(t *testing.T) {
+	clients, _, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := Open(Config{
+		DataDir:         t.TempDir(),
+		Clients:         clients,
+		PlatformProfile: "tms-reassign-sandbox-v1",
+		ReadSource:      "fixture-v1",
+		StepDelay:       0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+
+	run, err := service.StartDemo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := service.Replay(context.Background(), run.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 || events[0].Type != audit.EventRunStarted {
+		t.Fatalf("first audit event = %+v", events)
+	}
+	var payload runStartedPayload
+	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Profile != "tms-reassign-sandbox-v1" ||
+		payload.ReadSource != "fixture-v1" {
+		t.Fatalf("run platform sources = %+v", payload)
 	}
 }
 
@@ -498,6 +537,163 @@ func TestRecoverReplaysConfirmedApproval(t *testing.T) {
 	}
 }
 
+func TestEffectReconcilerResumesDuePreparedApproval(t *testing.T) {
+	clients, mock, err := tools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := Open(Config{DataDir: t.TempDir(), Clients: clients, StepDelay: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+
+	run, err := service.StartDemo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := waitForApproval(t, service, run.RunID)
+	confirmed, err := service.approvals.Decide(context.Background(), pending.ID, approval.Decision{
+		Kind:      approval.DecisionConfirm,
+		DecidedBy: "reconciler-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := confirmed.Items[0].Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.effects = &scheduledRecoveryExecutor{
+		Executor: service.effects,
+		command: idempotency.Command{
+			RunID:    confirmed.RunID,
+			CallID:   confirmed.Items[0].CallID,
+			Identity: identity,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- service.RunEffectReconciler(ctx, 5*time.Millisecond)
+	}()
+	waitForRunStatus(t, service, run.RunID, domain.RunCompleted)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("effect reconciler did not stop")
+	}
+
+	recovered, err := service.GetApproval(confirmed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != approval.StatusExecuted {
+		t.Fatalf("approval status = %q, want executed", recovered.Status)
+	}
+	if mock.WriteCount(domain.ActionReassign) != 1 ||
+		mock.WriteCount(domain.ActionSendSMS) != 2 {
+		t.Fatalf(
+			"writes = reassign:%d sms:%d",
+			mock.WriteCount(domain.ActionReassign),
+			mock.WriteCount(domain.ActionSendSMS),
+		)
+	}
+}
+
+func TestEffectReconcilerKeepsBusyAndPendingEffectsPaused(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome idempotency.RecoveryOutcome
+	}{
+		{
+			name: "busy",
+			outcome: idempotency.RecoveryOutcome{
+				Decision: idempotency.RecoveryBusy,
+				State:    idempotency.StateStarted,
+			},
+		},
+		{
+			name: "pending",
+			outcome: idempotency.RecoveryOutcome{
+				Decision: idempotency.RecoveryPending,
+				State:    idempotency.StateUnknown,
+				RetryAt:  time.Now().UTC().Add(time.Minute),
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clients, mock, err := tools.NewDemoClients()
+			if err != nil {
+				t.Fatal(err)
+			}
+			service, err := Open(Config{
+				DataDir:   t.TempDir(),
+				Clients:   clients,
+				StepDelay: 0,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer service.Close()
+
+			run, err := service.StartDemo(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending := waitForApproval(t, service, run.RunID)
+			confirmed, err := service.approvals.Decide(
+				context.Background(),
+				pending.ID,
+				approval.Decision{
+					Kind:      approval.DecisionConfirm,
+					DecidedBy: "reconciler-test",
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			identity, err := confirmed.Items[0].Identity()
+			if err != nil {
+				t.Fatal(err)
+			}
+			service.effects = &fixedRecoveryExecutor{
+				Executor: service.effects,
+				command: idempotency.Command{
+					RunID:    confirmed.RunID,
+					CallID:   confirmed.Items[0].CallID,
+					Identity: identity,
+				},
+				outcome: test.outcome,
+			}
+
+			if err := service.reconcileDueEffects(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			recovered, err := service.GetApproval(confirmed.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if recovered.Status != approval.StatusReconciliationRequired {
+				t.Fatalf(
+					"approval status = %q, want reconciliation_required",
+					recovered.Status,
+				)
+			}
+			if mock.WriteCount(domain.ActionReassign) != 0 ||
+				mock.WriteCount(domain.ActionSendSMS) != 0 {
+				t.Fatal("busy or pending recovery resumed mutations")
+			}
+		})
+	}
+}
+
 func TestRecoverReschedulesPendingApprovalExpiry(t *testing.T) {
 	dataDir := t.TempDir()
 	clients, _, err := tools.NewDemoClients()
@@ -648,18 +844,22 @@ func TestRecoverReconcilesStartedEffectWithoutStoppingService(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	binding := fixtureBindingForItem(t, clients, reassign)
+	dispatchStartedAt := time.Now().UTC()
 	if _, err := first.journal.Append(context.Background(), run.RunID, audit.Draft{
 		EventID: "write:" + string(reassign.IdempotencyKey) + ":started",
 		Actor:   audit.ActorSystem,
 		Type:    audit.EventWriteStarted,
 		Payload: map[string]any{
-			"idempotency_key":  reassign.IdempotencyKey,
-			"effect_id":        reassign.EffectID,
-			"identity_version": reassign.IdentityVersion,
-			"call_id":          reassign.CallID,
-			"action":           reassign.Action,
-			"arguments_hash":   reassign.ArgumentsHash,
-			"attempt":          1,
+			"idempotency_key":     reassign.IdempotencyKey,
+			"effect_id":           reassign.EffectID,
+			"identity_version":    reassign.IdentityVersion,
+			"call_id":             reassign.CallID,
+			"action":              reassign.Action,
+			"arguments_hash":      reassign.ArgumentsHash,
+			"attempt":             1,
+			"binding":             binding,
+			"dispatch_started_at": dispatchStartedAt,
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -721,18 +921,22 @@ func TestRecoverLeavesUnknownStartedEffectPendingWithoutStoppingService(t *testi
 	if item.CallID == "" {
 		t.Fatal("approval has no reassign effect")
 	}
+	binding := fixtureBindingForItem(t, clients, item)
+	dispatchStartedAt := time.Now().UTC()
 	if _, err := first.journal.Append(context.Background(), run.RunID, audit.Draft{
 		EventID: "write:" + string(item.IdempotencyKey) + ":started",
 		Actor:   audit.ActorSystem,
 		Type:    audit.EventWriteStarted,
 		Payload: map[string]any{
-			"idempotency_key":  item.IdempotencyKey,
-			"effect_id":        item.EffectID,
-			"identity_version": item.IdentityVersion,
-			"call_id":          item.CallID,
-			"action":           item.Action,
-			"arguments_hash":   item.ArgumentsHash,
-			"attempt":          1,
+			"idempotency_key":     item.IdempotencyKey,
+			"effect_id":           item.EffectID,
+			"identity_version":    item.IdentityVersion,
+			"call_id":             item.CallID,
+			"action":              item.Action,
+			"arguments_hash":      item.ArgumentsHash,
+			"attempt":             1,
+			"binding":             binding,
+			"dispatch_started_at": dispatchStartedAt,
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -915,7 +1119,9 @@ func waitForDifferentApproval(
 		time.Sleep(10 * time.Millisecond)
 	}
 	run, _ := service.GetRun(runID)
-	t.Fatalf("timed out waiting for approval; run=%+v", run)
+	events, _ := service.Replay(context.Background(), runID, 0)
+	encodedEvents, _ := json.Marshal(events)
+	t.Fatalf("timed out waiting for approval; run=%+v events=%s", run, encodedEvents)
 	return approval.Approval{}
 }
 
@@ -933,8 +1139,36 @@ func waitForRunStatus(t *testing.T, service *Service, runID domain.RunID, want d
 		time.Sleep(10 * time.Millisecond)
 	}
 	run, _ := service.GetRun(runID)
-	t.Fatalf("timed out waiting for run status %q; run=%+v", want, run)
+	events, _ := service.Replay(context.Background(), runID, 0)
+	encodedEvents, _ := json.Marshal(events)
+	t.Fatalf(
+		"timed out waiting for run status %q; run=%+v events=%s",
+		want,
+		run,
+		encodedEvents,
+	)
 	return RunView{}
+}
+
+func fixtureBindingForItem(
+	t *testing.T,
+	clients platform.Clients,
+	item approval.Item,
+) platform.EffectBinding {
+	t.Helper()
+	runtime, err := tools.NewFixtureWriteRuntime(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := runtime.Bind(platform.EffectRequest{
+		Action:        item.Action,
+		Arguments:     item.Params,
+		ArgumentsHash: item.ArgumentsHash,
+	}, item.IdempotencyKey, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return binding
 }
 
 type failingNotificationClient struct{}
@@ -962,4 +1196,49 @@ func (unknownLookupTMS) LookupEffect(
 	platform.LookupEffectRequest,
 ) (platform.EffectResult, error) {
 	return platform.EffectResult{Disposition: platform.EffectUnknown}, nil
+}
+
+type scheduledRecoveryExecutor struct {
+	idempotency.Executor
+	command idempotency.Command
+}
+
+func (e *scheduledRecoveryExecutor) DueRecoveries(
+	context.Context,
+) ([]idempotency.Command, error) {
+	state, ok := e.Status(e.command)
+	if ok {
+		switch state {
+		case idempotency.StateSucceeded,
+			idempotency.StatePermanentFailed,
+			idempotency.StateManualReview:
+			return nil, nil
+		}
+	}
+	return []idempotency.Command{e.command}, nil
+}
+
+type fixedRecoveryExecutor struct {
+	idempotency.Executor
+	command idempotency.Command
+	outcome idempotency.RecoveryOutcome
+}
+
+func (e *fixedRecoveryExecutor) DueRecoveries(
+	context.Context,
+) ([]idempotency.Command, error) {
+	return []idempotency.Command{e.command}, nil
+}
+
+func (e *fixedRecoveryExecutor) Recover(
+	context.Context,
+	idempotency.Command,
+) (idempotency.RecoveryOutcome, error) {
+	return e.outcome, nil
+}
+
+func (e *fixedRecoveryExecutor) Status(
+	idempotency.Command,
+) (idempotency.State, bool) {
+	return e.outcome.State, true
 }

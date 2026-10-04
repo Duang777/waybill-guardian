@@ -3,11 +3,13 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/idempotency"
@@ -189,6 +191,70 @@ func TestParseWriteRejectsUnknownExecutionFields(t *testing.T) {
 	}
 }
 
+func TestExecutionRegistrySeparatesActiveAndHistoricalTools(t *testing.T) {
+	clients, _, err := NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlers, err := NewHandlers(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := []domain.Action{
+		domain.ActionGetWaybill,
+		domain.ActionGetTracking,
+		domain.ActionGetDriver,
+		domain.ActionGetRoadWeather,
+		domain.ActionReassign,
+	}
+	registry, err := NewRegistryForActions(handlers, active)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(registry.Definitions()) != 7 || len(registry.Tools()) != 7 {
+		t.Fatalf(
+			"execution registry = definitions:%d tools:%d, want 7 each",
+			len(registry.Definitions()),
+			len(registry.Tools()),
+		)
+	}
+	if len(registry.ActiveDefinitions()) != len(active) {
+		t.Fatalf("active definitions = %d, want %d", len(registry.ActiveDefinitions()), len(active))
+	}
+	if !registry.IsActiveAction(domain.ActionReassign) ||
+		registry.IsActiveAction(domain.ActionCreateClaim) ||
+		registry.IsActiveWireName("notify_send_sms") {
+		t.Fatalf("unexpected active actions: %+v", registry.ActiveDefinitions())
+	}
+
+	claim := json.RawMessage(`{"waybill_id":"YD2026101001","claim_type":"damage"}`)
+	if _, err := registry.ParseWrite("tms_create_claim", claim); err != nil {
+		t.Fatalf("historical parser rejected catalog tool: %v", err)
+	}
+	if _, err := registry.ParseActiveWrite("tms_create_claim", claim); !errors.Is(
+		err,
+		ErrCapabilityUnavailable,
+	) {
+		t.Fatalf("inactive write error = %v, want ErrCapabilityUnavailable", err)
+	}
+}
+
+func TestExecutionRegistryRejectsUnknownActiveAction(t *testing.T) {
+	clients, _, err := NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlers, err := NewHandlers(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewRegistryForActions(handlers, []domain.Action{"tms.unknown"})
+	if !errors.Is(err, ErrCapabilityUnavailable) {
+		t.Fatalf("error = %v, want ErrCapabilityUnavailable", err)
+	}
+}
+
 func TestReadToolsReturnAllowlistedEvidence(t *testing.T) {
 	clients, _, err := NewDemoClients()
 	if err != nil {
@@ -269,14 +335,14 @@ func TestReadToolsReturnAllowlistedEvidence(t *testing.T) {
 	}
 }
 
-func TestSendSMSResolvesTransportDetailsInsideHandler(t *testing.T) {
+func TestFixtureRuntimeResolvesSMSRecipientDetails(t *testing.T) {
 	clients, _, err := NewDemoClients()
 	if err != nil {
 		t.Fatal(err)
 	}
 	notification := &recordingNotification{}
 	clients.Notification = notification
-	handlers, err := NewHandlers(clients)
+	runtime, err := NewFixtureWriteRuntime(clients)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,20 +359,27 @@ func TestSendSMSResolvesTransportDetailsInsideHandler(t *testing.T) {
 			CarrierID: "CARRIER-SW-42",
 		},
 	} {
-		identity, err := idempotency.LegacyIdentity(
-			domain.ActionSendSMS,
-			domain.IdempotencyKey(fmt.Sprintf("sms-key-%d", index)),
-			"approved-arguments-hash",
-		)
+		arguments, err := json.Marshal(input)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ctx, err := idempotency.WithExecution(context.Background(), identity)
+		argumentsHash, err := idempotency.ArgumentsHash(string(arguments))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := handlers.SendSMS(ctx, input); err != nil {
+		request := platform.EffectRequest{
+			Action:        domain.ActionSendSMS,
+			Arguments:     arguments,
+			ArgumentsHash: argumentsHash,
+		}
+		key := domain.IdempotencyKey(fmt.Sprintf("sms-key-%d", index))
+		binding, err := runtime.Bind(request, key, time.Now().UTC())
+		if err != nil {
 			t.Fatal(err)
+		}
+		result := runtime.Dispatch(context.Background(), binding, request, key)
+		if result.Disposition != platform.EffectSucceeded {
+			t.Fatalf("SMS dispatch = %+v", result)
 		}
 	}
 

@@ -32,11 +32,17 @@ func TestScenarioAgentPausesThenExecutesApprovedWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	idempotencyStore, err := idempotency.NewStore(journal, nil)
+	clients, mock, err := guardtools.NewDemoClients()
 	if err != nil {
 		t.Fatal(err)
 	}
-	clients, mock, err := guardtools.NewDemoClients()
+	writeRuntime, err := guardtools.NewFixtureWriteRuntime(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idempotencyStore, err := idempotency.NewStore(journal, idempotency.StoreConfig{
+		Runtime: writeRuntime,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,6 +148,41 @@ func TestScenarioAgentPausesThenExecutesApprovedWrites(t *testing.T) {
 	}
 	if len(outcome.Chunks) == 0 || len(resumed.Chunks) == 0 {
 		t.Fatal("expected streaming lifecycle chunks")
+	}
+}
+
+func TestScenarioAgentOnlyProposesActiveWrites(t *testing.T) {
+	registry := partialRegistry(t)
+	engine, err := NewEngine(
+		t.TempDir()+"/history",
+		registry,
+		nil,
+		0,
+		ModelConfig{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+
+	outcome, err := engine.Start(context.Background(), domain.RunContext{
+		RunID:       "run-partial-capability",
+		IncidentID:  "incident-partial-capability",
+		WaybillID:   "YD2026101001",
+		PlanVersion: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Status != agentstate.RunStatusPaused {
+		t.Fatalf("status = %q, want paused", outcome.Status)
+	}
+	if len(outcome.Interrupts) != 1 {
+		t.Fatalf("interrupts = %+v, want one reassign", outcome.Interrupts)
+	}
+	if outcome.Interrupts[0].Action != domain.ActionReassign ||
+		outcome.Interrupts[0].WireName != "tms_reassign" {
+		t.Fatalf("interrupt = %+v, want tms.reassign", outcome.Interrupts[0])
 	}
 }
 

@@ -17,20 +17,24 @@ import (
 	"time"
 
 	agentkit "github.com/Duang777/waybill-guardian/internal/agent"
+	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
 	"github.com/Duang777/waybill-guardian/internal/httpauth"
-	"github.com/Duang777/waybill-guardian/internal/idempotency"
 	"github.com/Duang777/waybill-guardian/internal/metrics"
 	"github.com/Duang777/waybill-guardian/internal/outbox"
 	"github.com/Duang777/waybill-guardian/internal/outboxhttp"
 	"github.com/Duang777/waybill-guardian/internal/platform"
+	"github.com/Duang777/waybill-guardian/internal/platform/tmssandbox"
 	"github.com/Duang777/waybill-guardian/internal/storage"
 	postgresstore "github.com/Duang777/waybill-guardian/internal/storage/postgres"
 	"github.com/Duang777/waybill-guardian/internal/tools"
 	"github.com/google/uuid"
 )
 
-const defaultHTTPAddr = "127.0.0.1:8080"
+const (
+	defaultHTTPAddr   = "127.0.0.1:8080"
+	fixtureReadSource = "fixture-v1"
+)
 
 type eventRuntimeConfig struct {
 	outboxEnabled   bool
@@ -43,6 +47,22 @@ type eventRuntimeConfig struct {
 	outboxStatsPoll time.Duration
 	outboxTimeout   time.Duration
 	metricsAddr     string
+}
+
+type realPlatformRuntimeConfig struct {
+	profileID     string
+	readSource    string
+	reconcilePoll time.Duration
+	adapter       tmssandbox.Config
+}
+
+type platformRuntime struct {
+	clients       platform.Clients
+	writeRuntime  platform.WriteRuntime
+	activeActions []domain.Action
+	profileID     string
+	readSource    string
+	reconcilePoll time.Duration
 }
 
 func main() {
@@ -106,7 +126,11 @@ func run() error {
 		}
 		defer database.Close()
 	}
-	clients, err := platformClients()
+	runtimeProfile, err := openPlatformRuntime(
+		context.Background(),
+		platformMode,
+		tenantID,
+	)
 	if err != nil {
 		return err
 	}
@@ -116,7 +140,10 @@ func run() error {
 	}
 	commonConfig := guardian.Config{
 		DataDir:          envOr("DATA_DIR", "data"),
-		Clients:          clients,
+		Clients:          runtimeProfile.clients,
+		ActiveActions:    runtimeProfile.activeActions,
+		PlatformProfile:  runtimeProfile.profileID,
+		ReadSource:       runtimeProfile.readSource,
 		ApprovalTTL:      durationEnv("APPROVAL_TTL", 10*time.Minute),
 		HistoryRetention: historyRetention,
 		StepDelay:        durationEnv("DEMO_STEP_DELAY", 220*time.Millisecond),
@@ -140,30 +167,24 @@ func run() error {
 				TenantID:       string(tenantID),
 				WorkerID:       envOr("INSTANCE_ID", uuid.NewString()),
 				LeaseTTL:       durationEnv("RUN_LEASE_TTL", 30*time.Second),
+				EffectLeaseTTL: durationEnv("EFFECT_LEASE_TTL", 15*time.Second),
 				OutboxLeaseTTL: eventConfig.outboxLeaseTTL,
-				EffectLookup: func(
-					ctx context.Context,
-					command idempotency.Command,
-				) (platform.EffectResult, error) {
-					request := platform.LookupEffectRequest{
-						Action:         command.Identity.Action,
-						IdempotencyKey: command.Identity.Key,
-					}
-					switch command.Identity.Action {
-					case "tms.reassign", "tms.create_claim":
-						return clients.TMS.LookupEffect(ctx, request)
-					case "notify.send_sms":
-						return clients.Notification.LookupEffect(ctx, request)
-					default:
-						return platform.EffectResult{
-							Disposition: platform.EffectPermanentFailed,
-						}, nil
-					}
-				},
+				WriteRuntime:   runtimeProfile.writeRuntime,
 			},
 		)
 		if err != nil {
 			return err
+		}
+		if platformMode == "real" {
+			coverageCtx, cancelCoverage := context.WithTimeout(
+				context.Background(),
+				databaseConfig.StartupTimeout,
+			)
+			coverageErr := repository.ValidateRecoveryCoverage(coverageCtx)
+			cancelCoverage()
+			if coverageErr != nil {
+				return coverageErr
+			}
 		}
 		historyCtx, cancelHistory := context.WithTimeout(
 			context.Background(),
@@ -196,6 +217,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	slog.Info(
+		"platform runtime configured",
+		"mode", platformMode,
+		"profile", runtimeProfile.profileID,
+		"read_source", runtimeProfile.readSource,
+		"write_actions", runtimeProfile.writeRuntime.AdvertisedActions(),
+		"effect_reconcile_poll_interval", runtimeProfile.reconcilePoll,
+	)
 	defer service.Close()
 	if err := service.Recover(context.Background()); err != nil {
 		return err
@@ -260,6 +289,11 @@ func run() error {
 		func(ctx context.Context) error {
 			return serve(ctx, server, listener)
 		},
+	}
+	if runtimeProfile.reconcilePoll > 0 {
+		components = append(components, func(ctx context.Context) error {
+			return service.RunEffectReconciler(ctx, runtimeProfile.reconcilePoll)
+		})
 	}
 	if dispatcher != nil {
 		components = append(components, dispatcher.Run)
@@ -570,16 +604,129 @@ func validateRequestHost(value string) error {
 	return nil
 }
 
-func platformClients() (platform.Clients, error) {
-	switch strings.ToLower(envOr("PLATFORM", "mock")) {
-	case "mock":
-		clients, _, err := tools.NewDemoClients()
-		return clients, err
-	case "real":
-		return platform.Clients{}, platform.ErrNotImplemented
-	default:
-		return platform.Clients{}, errors.New("PLATFORM must be mock or real")
+func openPlatformRuntime(
+	ctx context.Context,
+	platformMode string,
+	tenantID httpauth.TenantID,
+) (platformRuntime, error) {
+	clients, _, err := tools.NewDemoClients()
+	if err != nil {
+		return platformRuntime{}, err
 	}
+	switch strings.ToLower(platformMode) {
+	case "mock":
+		writeRuntime, err := tools.NewFixtureWriteRuntime(clients)
+		if err != nil {
+			return platformRuntime{}, err
+		}
+		return platformRuntime{
+			clients:      clients,
+			writeRuntime: writeRuntime,
+			profileID:    tools.FixtureRuntimeAdapterID,
+			readSource:   fixtureReadSource,
+		}, nil
+	case "real":
+		config, err := realPlatformConfigFromEnv(tenantID)
+		if err != nil {
+			return platformRuntime{}, err
+		}
+		writeRuntime, err := tmssandbox.New(ctx, config.adapter)
+		if err != nil {
+			return platformRuntime{}, err
+		}
+		return platformRuntime{
+			clients:      clients,
+			writeRuntime: writeRuntime,
+			activeActions: []domain.Action{
+				domain.ActionGetWaybill,
+				domain.ActionGetTracking,
+				domain.ActionGetDriver,
+				domain.ActionGetRoadWeather,
+				domain.ActionReassign,
+			},
+			profileID:     config.profileID,
+			readSource:    config.readSource,
+			reconcilePoll: config.reconcilePoll,
+		}, nil
+	default:
+		return platformRuntime{}, errors.New("PLATFORM must be mock or real")
+	}
+}
+
+func realPlatformConfigFromEnv(
+	tenantID httpauth.TenantID,
+) (realPlatformRuntimeConfig, error) {
+	profileID := strings.TrimSpace(os.Getenv("REAL_PLATFORM_PROFILE"))
+	if profileID != tmssandbox.ProfileID {
+		return realPlatformRuntimeConfig{}, fmt.Errorf(
+			"REAL_PLATFORM_PROFILE must be %s",
+			tmssandbox.ProfileID,
+		)
+	}
+	readSource := strings.TrimSpace(os.Getenv("REAL_READ_SOURCE"))
+	if readSource != fixtureReadSource {
+		return realPlatformRuntimeConfig{}, fmt.Errorf(
+			"REAL_READ_SOURCE must be %s",
+			fixtureReadSource,
+		)
+	}
+	baseURL := strings.TrimSpace(os.Getenv("TMS_SANDBOX_BASE_URL"))
+	token := strings.TrimSpace(os.Getenv("TMS_SANDBOX_TOKEN"))
+	account := strings.TrimSpace(os.Getenv("TMS_SANDBOX_ACCOUNT"))
+	if baseURL == "" || token == "" || account == "" {
+		return realPlatformRuntimeConfig{}, fmt.Errorf(
+			"TMS_SANDBOX_BASE_URL, TMS_SANDBOX_TOKEN, and TMS_SANDBOX_ACCOUNT are required",
+		)
+	}
+	if account != string(tenantID) {
+		return realPlatformRuntimeConfig{}, fmt.Errorf(
+			"TMS_SANDBOX_ACCOUNT must match TENANT_ID",
+		)
+	}
+	requestTimeout, err := strictDurationEnv("PLATFORM_REQUEST_TIMEOUT", 3*time.Second)
+	if err != nil {
+		return realPlatformRuntimeConfig{}, err
+	}
+	startupTimeout, err := strictDurationEnv("PLATFORM_STARTUP_TIMEOUT", 5*time.Second)
+	if err != nil {
+		return realPlatformRuntimeConfig{}, err
+	}
+	reconciliationHorizon, err := strictDurationEnv(
+		"EFFECT_RECONCILE_HORIZON",
+		24*time.Hour,
+	)
+	if err != nil {
+		return realPlatformRuntimeConfig{}, err
+	}
+	reconcilePoll, err := strictDurationEnv(
+		"EFFECT_RECONCILE_POLL_INTERVAL",
+		time.Second,
+	)
+	if err != nil {
+		return realPlatformRuntimeConfig{}, err
+	}
+	maxConsistencyWindow, err := strictDurationEnv(
+		"PLATFORM_MAX_LOOKUP_CONSISTENCY_WINDOW",
+		30*time.Second,
+	)
+	if err != nil {
+		return realPlatformRuntimeConfig{}, err
+	}
+	return realPlatformRuntimeConfig{
+		profileID:     profileID,
+		readSource:    readSource,
+		reconcilePoll: reconcilePoll,
+		adapter: tmssandbox.Config{
+			BaseURL:               baseURL,
+			Token:                 token,
+			Account:               account,
+			RequestTimeout:        requestTimeout,
+			StartupTimeout:        startupTimeout,
+			ReconciliationHorizon: reconciliationHorizon,
+			MaxConsistencyWindow:  maxConsistencyWindow,
+			Clock:                 time.Now,
+		},
+	}, nil
 }
 
 func envOr(name, fallback string) string {

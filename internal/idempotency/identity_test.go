@@ -1,8 +1,6 @@
 package idempotency
 
 import (
-	"context"
-	"errors"
 	"testing"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
@@ -111,31 +109,6 @@ func TestDeriveIdentityChangesWithBusinessIdentity(t *testing.T) {
 				t.Fatalf("identity did not change: %+v", identity)
 			}
 		})
-	}
-}
-
-func TestExecutionContextRejectsMissingOrInvalidIdentity(t *testing.T) {
-	if _, err := ExecutionFromContext(context.Background()); !errors.Is(err, ErrExecutionIdentityMissing) {
-		t.Fatalf("missing identity error = %v", err)
-	}
-	if _, err := WithExecution(context.Background(), Identity{}); !errors.Is(err, ErrInvalidIdentity) {
-		t.Fatalf("invalid identity error = %v", err)
-	}
-
-	identity, err := LegacyIdentity(domain.ActionReassign, "legacy-key", "legacy-hash")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, err := WithExecution(context.Background(), identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := ExecutionFromContext(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != identity {
-		t.Fatalf("execution identity = %+v, want %+v", got, identity)
 	}
 }
 

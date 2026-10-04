@@ -9,6 +9,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/idempotency"
+	"github.com/Duang777/waybill-guardian/internal/platform"
 	guardtools "github.com/Duang777/waybill-guardian/internal/tools"
 	"github.com/hastekit/agent-sdk-go/pkg/agents"
 )
@@ -159,27 +160,20 @@ func (m *WriteEffectMiddleware) WrapToolCall(next agents.ToolCallFunc) agents.To
 			Identity: identity,
 		}
 		if authorization.LegacyAmbiguous {
-			state, ok := m.effects.Lookup(command)
+			state, ok := m.effects.Status(command)
 			if !ok || state != idempotency.StateSucceeded {
 				return nil, approval.ErrAmbiguousLegacyApproval
 			}
 		}
-		executionCall := canonicalToolCall(call, write.Arguments)
-		result, err := m.effects.Execute(ctx, command, func(ctx context.Context) (json.RawMessage, error) {
-			executionContext, err := idempotency.WithExecution(ctx, identity)
-			if err != nil {
-				return nil, err
-			}
-			response, err := next(executionContext, tool, executionCall)
-			if err != nil {
-				return nil, err
-			}
-			if response == nil || response.FunctionCallOutputMessage == nil ||
-				response.Output.OfString == nil {
-				return nil, fmt.Errorf("write tool %q returned no string result", action)
-			}
-			return json.RawMessage(*response.Output.OfString), nil
+		effect, err := idempotency.AuthorizeEffect(command, platform.EffectRequest{
+			Action:        write.Action,
+			Arguments:     write.Arguments,
+			ArgumentsHash: write.ArgumentsHash,
 		})
+		if err != nil {
+			return nil, err
+		}
+		result, err := m.effects.Execute(ctx, effect)
 		if err != nil {
 			return nil, err
 		}
@@ -212,12 +206,4 @@ func runIDFromCall(call *agents.ToolCall) (domain.RunID, error) {
 		return "", fmt.Errorf("run_id is missing from tool context")
 	}
 	return domain.RunID(value), nil
-}
-
-func canonicalToolCall(call *agents.ToolCall, arguments json.RawMessage) *agents.ToolCall {
-	result := *call
-	functionCall := *call.FunctionCallMessage
-	functionCall.Arguments = string(arguments)
-	result.FunctionCallMessage = &functionCall
-	return &result
 }

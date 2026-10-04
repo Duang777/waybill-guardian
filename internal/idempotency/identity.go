@@ -1,7 +1,6 @@
 package idempotency
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -21,8 +20,7 @@ const (
 )
 
 var (
-	ErrInvalidIdentity          = errors.New("invalid effect identity")
-	ErrExecutionIdentityMissing = errors.New("execution identity is missing")
+	ErrInvalidIdentity = errors.New("invalid effect identity")
 
 	proposalNamespace = uuid.MustParse("46eb81ef-2e6d-5ba6-8b9a-f72c924d8959")
 	effectNamespace   = uuid.MustParse("ea50d3aa-af21-5bb3-9bfd-6f35a36ce827")
@@ -199,24 +197,4 @@ func legacyEffectID(key domain.IdempotencyKey) domain.EffectID {
 func effectV0Key(effectID domain.EffectID) domain.IdempotencyKey {
 	sum := sha256.Sum256([]byte(effectID))
 	return domain.IdempotencyKey(hex.EncodeToString(sum[:]))
-}
-
-type executionContextKey struct{}
-
-func WithExecution(ctx context.Context, identity Identity) (context.Context, error) {
-	if err := identity.Validate(); err != nil {
-		return nil, err
-	}
-	return context.WithValue(ctx, executionContextKey{}, identity), nil
-}
-
-func ExecutionFromContext(ctx context.Context) (Identity, error) {
-	identity, ok := ctx.Value(executionContextKey{}).(Identity)
-	if !ok {
-		return Identity{}, ErrExecutionIdentityMissing
-	}
-	if err := identity.Validate(); err != nil {
-		return Identity{}, err
-	}
-	return identity, nil
 }

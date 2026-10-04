@@ -20,7 +20,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
 	"github.com/Duang777/waybill-guardian/internal/httpauth"
-	"github.com/Duang777/waybill-guardian/internal/platform"
+	"github.com/Duang777/waybill-guardian/internal/platform/tmssandbox"
 	"github.com/Duang777/waybill-guardian/internal/storage"
 	"github.com/Duang777/waybill-guardian/internal/tools"
 )
@@ -489,10 +489,144 @@ func TestParseTimelineCursorPrefersLastEventID(t *testing.T) {
 	}
 }
 
-func TestRealPlatformFailsFast(t *testing.T) {
-	t.Setenv("PLATFORM", "real")
-	if _, err := platformClients(); !errors.Is(err, platform.ErrNotImplemented) {
-		t.Fatalf("platformClients error = %v, want ErrNotImplemented", err)
+func TestOpenRealPlatformRuntime(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/.well-known/waybill-capabilities" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, `{
+			"adapter_id":"tms-reassign-sandbox-v1",
+			"contract_version":"v1",
+			"environment":"sandbox",
+			"capabilities":[{
+				"action":"tms.reassign",
+				"operation":"reassignments",
+				"key_scope":"tenant+operation",
+				"key_retention_seconds":604800,
+				"lookup_consistency_window_seconds":1,
+				"same_request_replays":true,
+				"mismatched_request_rejects":true,
+				"lookup_by_key":true
+			}]
+		}`)
+	}))
+	defer server.Close()
+	setValidRealPlatformEnv(t)
+	t.Setenv("TMS_SANDBOX_BASE_URL", server.URL)
+
+	runtime, err := openPlatformRuntime(t.Context(), "real", "tenant-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.profileID != tmssandbox.ProfileID ||
+		runtime.readSource != fixtureReadSource ||
+		runtime.clients.TMS == nil ||
+		runtime.clients.Weather == nil ||
+		runtime.clients.Notification == nil {
+		t.Fatalf("real platform runtime = %+v", runtime)
+	}
+	if _, ok := runtime.writeRuntime.(*tmssandbox.Adapter); !ok {
+		t.Fatalf("write runtime = %T, want TMS sandbox adapter", runtime.writeRuntime)
+	}
+	expected := []domain.Action{
+		domain.ActionGetWaybill,
+		domain.ActionGetTracking,
+		domain.ActionGetDriver,
+		domain.ActionGetRoadWeather,
+		domain.ActionReassign,
+	}
+	if len(runtime.activeActions) != len(expected) {
+		t.Fatalf("active actions = %v", runtime.activeActions)
+	}
+	for index, action := range expected {
+		if runtime.activeActions[index] != action {
+			t.Fatalf("active actions = %v", runtime.activeActions)
+		}
+	}
+}
+
+func TestRealPlatformConfigFromEnv(t *testing.T) {
+	setValidRealPlatformEnv(t)
+	t.Setenv("PLATFORM_REQUEST_TIMEOUT", "4s")
+	t.Setenv("PLATFORM_STARTUP_TIMEOUT", "6s")
+	t.Setenv("EFFECT_RECONCILE_HORIZON", "48h")
+	t.Setenv("EFFECT_RECONCILE_POLL_INTERVAL", "750ms")
+	t.Setenv("PLATFORM_MAX_LOOKUP_CONSISTENCY_WINDOW", "45s")
+
+	config, err := realPlatformConfigFromEnv("tenant-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.profileID != tmssandbox.ProfileID ||
+		config.readSource != "fixture-v1" ||
+		config.adapter.BaseURL != "https://sandbox.example.test" ||
+		config.adapter.Token != "secret-token" ||
+		config.adapter.Account != "tenant-a" ||
+		config.adapter.RequestTimeout != 4*time.Second ||
+		config.adapter.StartupTimeout != 6*time.Second ||
+		config.adapter.ReconciliationHorizon != 48*time.Hour ||
+		config.reconcilePoll != 750*time.Millisecond ||
+		config.adapter.MaxConsistencyWindow != 45*time.Second ||
+		config.adapter.Clock == nil {
+		t.Fatalf("real platform config = %+v", config)
+	}
+}
+
+func TestRealPlatformConfigRejectsIncompleteOrCrossTenantProfile(t *testing.T) {
+	tests := []struct {
+		name     string
+		key      string
+		value    string
+		tenantID httpauth.TenantID
+	}{
+		{
+			name:     "missing profile",
+			key:      "REAL_PLATFORM_PROFILE",
+			tenantID: "tenant-a",
+		},
+		{
+			name:     "implicit reads",
+			key:      "REAL_READ_SOURCE",
+			tenantID: "tenant-a",
+		},
+		{
+			name:     "missing URL",
+			key:      "TMS_SANDBOX_BASE_URL",
+			tenantID: "tenant-a",
+		},
+		{
+			name:     "missing token",
+			key:      "TMS_SANDBOX_TOKEN",
+			tenantID: "tenant-a",
+		},
+		{
+			name:     "account mismatch",
+			tenantID: "tenant-b",
+		},
+		{
+			name:     "invalid timeout",
+			key:      "PLATFORM_REQUEST_TIMEOUT",
+			value:    "0s",
+			tenantID: "tenant-a",
+		},
+		{
+			name:     "invalid reconcile poll",
+			key:      "EFFECT_RECONCILE_POLL_INTERVAL",
+			value:    "0s",
+			tenantID: "tenant-a",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setValidRealPlatformEnv(t)
+			if test.key != "" {
+				t.Setenv(test.key, test.value)
+			}
+			if _, err := realPlatformConfigFromEnv(test.tenantID); err == nil {
+				t.Fatal("invalid real platform configuration was accepted")
+			}
+		})
 	}
 }
 
@@ -511,6 +645,24 @@ func TestRuntimeStorageConfiguration(t *testing.T) {
 	}
 	if err := validateRuntimeModes("unknown", "jsonl", httpauth.ModeLocal); err == nil {
 		t.Fatal("unknown platform mode was accepted")
+	}
+}
+
+func setValidRealPlatformEnv(t *testing.T) {
+	t.Helper()
+	for name, value := range map[string]string{
+		"REAL_PLATFORM_PROFILE":                  tmssandbox.ProfileID,
+		"REAL_READ_SOURCE":                       "fixture-v1",
+		"TMS_SANDBOX_BASE_URL":                   "https://sandbox.example.test",
+		"TMS_SANDBOX_TOKEN":                      "secret-token",
+		"TMS_SANDBOX_ACCOUNT":                    "tenant-a",
+		"PLATFORM_REQUEST_TIMEOUT":               "",
+		"PLATFORM_STARTUP_TIMEOUT":               "",
+		"EFFECT_RECONCILE_HORIZON":               "",
+		"EFFECT_RECONCILE_POLL_INTERVAL":         "",
+		"PLATFORM_MAX_LOOKUP_CONSISTENCY_WINDOW": "",
+	} {
+		t.Setenv(name, value)
 	}
 }
 

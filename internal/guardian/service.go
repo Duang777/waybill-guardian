@@ -25,6 +25,9 @@ import (
 type Config struct {
 	DataDir          string
 	Clients          platform.Clients
+	ActiveActions    []domain.Action
+	PlatformProfile  string
+	ReadSource       string
 	Clock            func() time.Time
 	ApprovalTTL      time.Duration
 	HistoryRetention time.Duration
@@ -37,6 +40,10 @@ type RunCoordinator interface {
 		context.Context,
 		domain.RunID,
 	) (context.Context, func() error, error)
+}
+
+type runAvailabilityClassifier interface {
+	IsRunUnavailable(error) bool
 }
 
 type DurableConfig struct {
@@ -79,9 +86,14 @@ type runStartedPayload struct {
 	IncidentID domain.IncidentID `json:"incident_id"`
 	WaybillID  domain.WaybillID  `json:"waybill_id"`
 	Status     domain.RunStatus  `json:"status"`
+	Profile    string            `json:"platform_profile,omitempty"`
+	ReadSource string            `json:"read_source,omitempty"`
 }
 
-var ErrServiceClosed = errors.New("guardian service is closed")
+var (
+	ErrServiceClosed             = errors.New("guardian service is closed")
+	ErrRecoverySourceUnavailable = errors.New("effect recovery source is unavailable")
+)
 
 const DemoWaybillID domain.WaybillID = "YD2026101001"
 
@@ -91,14 +103,16 @@ type Service struct {
 	clock  func() time.Time
 	ttl    time.Duration
 
-	clients     platform.Clients
-	journal     audit.Journal
-	approvals   *approval.Store
-	effects     idempotency.Executor
-	registry    *guardtools.Registry
-	engine      *agentkit.Engine
-	coordinator RunCoordinator
-	recovery    audit.RecoveryJournal
+	clients         platform.Clients
+	platformProfile string
+	readSource      string
+	journal         audit.Journal
+	approvals       *approval.Store
+	effects         idempotency.Executor
+	registry        *guardtools.Registry
+	engine          *agentkit.Engine
+	coordinator     RunCoordinator
+	recovery        audit.RecoveryJournal
 
 	mu        sync.Mutex
 	runs      map[domain.RunID]RunView
@@ -119,7 +133,14 @@ func Open(config Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	idempotencyStore, err := idempotency.NewStore(journal, platformEffectLookup(config.Clients))
+	writeRuntime, err := guardtools.NewFixtureWriteRuntime(config.Clients)
+	if err != nil {
+		return nil, errors.Join(err, journal.Close())
+	}
+	idempotencyStore, err := idempotency.NewStore(journal, idempotency.StoreConfig{
+		Runtime: writeRuntime,
+		Clock:   config.Clock,
+	})
 	if err != nil {
 		return nil, errors.Join(err, journal.Close())
 	}
@@ -170,7 +191,12 @@ func openService(
 	if err != nil {
 		return closeJournal(err)
 	}
-	registry, err := guardtools.NewRegistry(handlers)
+	var registry *guardtools.Registry
+	if config.ActiveActions == nil {
+		registry, err = guardtools.NewRegistry(handlers)
+	} else {
+		registry, err = guardtools.NewRegistryForActions(handlers, config.ActiveActions)
+	}
 	if err != nil {
 		return closeJournal(err)
 	}
@@ -205,22 +231,24 @@ func openService(
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &Service{
-		ctx:         ctx,
-		cancel:      cancel,
-		clock:       config.Clock,
-		ttl:         config.ApprovalTTL,
-		clients:     config.Clients,
-		journal:     journal,
-		approvals:   approvals,
-		effects:     effects,
-		registry:    registry,
-		engine:      engine,
-		coordinator: coordinator,
-		recovery:    recovery,
-		runs:        make(map[domain.RunID]RunView),
-		locks:       make(map[domain.RunID]*sync.Mutex),
-		timers:      make(map[domain.ApprovalID]chan struct{}),
-		closeDone:   make(chan struct{}),
+		ctx:             ctx,
+		cancel:          cancel,
+		clock:           config.Clock,
+		ttl:             config.ApprovalTTL,
+		clients:         config.Clients,
+		platformProfile: config.PlatformProfile,
+		readSource:      config.ReadSource,
+		journal:         journal,
+		approvals:       approvals,
+		effects:         effects,
+		registry:        registry,
+		engine:          engine,
+		coordinator:     coordinator,
+		recovery:        recovery,
+		runs:            make(map[domain.RunID]RunView),
+		locks:           make(map[domain.RunID]*sync.Mutex),
+		timers:          make(map[domain.ApprovalID]chan struct{}),
+		closeDone:       make(chan struct{}),
 	}
 	if err := service.rebuildRuns(); err != nil {
 		cancel()
@@ -257,23 +285,6 @@ func validateConfig(config Config) error {
 	return nil
 }
 
-func platformEffectLookup(clients platform.Clients) idempotency.LookupFunc {
-	return func(ctx context.Context, command idempotency.Command) (platform.EffectResult, error) {
-		request := platform.LookupEffectRequest{
-			Action:         command.Identity.Action,
-			IdempotencyKey: command.Identity.Key,
-		}
-		switch command.Identity.Action {
-		case domain.ActionReassign, domain.ActionCreateClaim:
-			return clients.TMS.LookupEffect(ctx, request)
-		case domain.ActionSendSMS:
-			return clients.Notification.LookupEffect(ctx, request)
-		default:
-			return platform.EffectResult{Disposition: platform.EffectPermanentFailed}, nil
-		}
-	}
-}
-
 func (s *Service) StartDemo(ctx context.Context) (RunView, error) {
 	if err := s.beginOperation(); err != nil {
 		return RunView{}, err
@@ -295,6 +306,8 @@ func (s *Service) StartDemo(ctx context.Context) (RunView, error) {
 			IncidentID: run.IncidentID,
 			WaybillID:  run.WaybillID,
 			Status:     run.Status,
+			Profile:    s.platformProfile,
+			ReadSource: s.readSource,
 		},
 	})
 	if err != nil {
@@ -535,37 +548,7 @@ func (s *Service) Recover(ctx context.Context) error {
 				s.recordFailure(value.RunID, err)
 			}
 		case approval.StatusConfirmed, approval.StatusReconciliationRequired:
-			reconciliationPending, err := s.reconcileApprovalEffects(ctx, value)
-			if err != nil {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				s.recordFailure(value.RunID, err)
-				continue
-			}
-			if reconciliationPending {
-				continue
-			}
-			value, err = s.approvals.Get(value.ID)
-			if err != nil {
-				s.recordFailure(value.RunID, err)
-				continue
-			}
-			run := s.run(value.RunID)
-			if isTerminal(run.Status) {
-				if run.Status == domain.RunCompleted && s.approvalEffectsSucceeded(value) {
-					if _, err := s.approvals.MarkExecuted(ctx, value.ID); err != nil {
-						s.recordFailure(value.RunID, err)
-					}
-				} else if run.Status == domain.RunCompleted {
-					s.recordFailure(
-						value.RunID,
-						fmt.Errorf("completed run %q has incomplete approval effects", run.RunID),
-					)
-				}
-				continue
-			}
-			if err := s.recoverDecision(value, true); err != nil {
+			if err := s.recoverConfirmedApproval(ctx, value); err != nil {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
@@ -594,6 +577,125 @@ func (s *Service) Recover(ctx context.Context) error {
 		lock.Unlock()
 	}
 	return nil
+}
+
+func (s *Service) RunEffectReconciler(
+	ctx context.Context,
+	pollInterval time.Duration,
+) error {
+	if pollInterval <= 0 {
+		return fmt.Errorf("effect reconciliation poll interval must be positive")
+	}
+	if _, ok := s.effects.(idempotency.RecoverySource); !ok {
+		return ErrRecoverySourceUnavailable
+	}
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-s.ctx.Done():
+			return nil
+		case <-ticker.C:
+			if err := s.reconcileDueEffects(ctx); err != nil {
+				if ctx.Err() != nil || errors.Is(err, ErrServiceClosed) {
+					return nil
+				}
+				return err
+			}
+		}
+	}
+}
+
+func (s *Service) reconcileDueEffects(ctx context.Context) error {
+	if err := s.beginOperation(); err != nil {
+		return err
+	}
+	defer s.wg.Done()
+
+	source, ok := s.effects.(idempotency.RecoverySource)
+	if !ok {
+		return ErrRecoverySourceUnavailable
+	}
+	commands, err := source.DueRecoveries(ctx)
+	if err != nil {
+		return err
+	}
+	if len(commands) == 0 {
+		return nil
+	}
+
+	approvalsByEffect := make(map[domain.EffectID]approval.Approval)
+	for _, value := range s.approvals.List() {
+		if value.Status != approval.StatusConfirmed &&
+			value.Status != approval.StatusReconciliationRequired {
+			continue
+		}
+		for _, item := range value.Items {
+			approvalsByEffect[item.EffectID] = value
+		}
+	}
+	seen := make(map[domain.ApprovalID]struct{})
+	for _, command := range commands {
+		value, exists := approvalsByEffect[command.Identity.EffectID]
+		if !exists {
+			continue
+		}
+		if value.RunID != command.RunID {
+			return fmt.Errorf(
+				"due effect %q run %q does not match approval run %q",
+				command.Identity.EffectID,
+				command.RunID,
+				value.RunID,
+			)
+		}
+		if _, exists := seen[value.ID]; exists {
+			continue
+		}
+		seen[value.ID] = struct{}{}
+		if err := s.recoverConfirmedApproval(ctx, value); err != nil {
+			if s.isRunUnavailable(err) {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) isRunUnavailable(err error) bool {
+	classifier, ok := s.coordinator.(runAvailabilityClassifier)
+	return ok && classifier.IsRunUnavailable(err)
+}
+
+func (s *Service) recoverConfirmedApproval(
+	ctx context.Context,
+	value approval.Approval,
+) error {
+	reconciliationPending, err := s.reconcileApprovalEffects(ctx, value)
+	if err != nil {
+		return err
+	}
+	if reconciliationPending {
+		return nil
+	}
+	value, err = s.approvals.Get(value.ID)
+	if err != nil {
+		return err
+	}
+	run := s.run(value.RunID)
+	if isTerminal(run.Status) {
+		if run.Status == domain.RunCompleted && s.approvalEffectsSucceeded(value) {
+			_, err = s.approvals.MarkExecuted(ctx, value.ID)
+			return err
+		}
+		if run.Status == domain.RunCompleted {
+			return fmt.Errorf("completed run %q has incomplete approval effects", run.RunID)
+		}
+		return nil
+	}
+	return s.recoverDecision(value, true)
 }
 
 func (s *Service) recoverDecision(value approval.Approval, approved bool) error {
@@ -654,7 +756,7 @@ func (s *Service) resumeApproval(
 	}, value.SDKRunID, interruptsFromApproval(value), approved)
 	if err != nil {
 		if approved {
-			results, _ := s.approvalEffectResults(value)
+			results, allSucceeded := s.approvalEffectResults(value)
 			if executionRequiresReconciliation(results) {
 				pending, markErr := s.approvals.MarkReconciliationRequired(ctx, value.ID, results)
 				if markErr != nil {
@@ -662,6 +764,14 @@ func (s *Service) resumeApproval(
 				}
 				s.updateRunStatus(value.RunID, domain.RunExecuting)
 				return pending, nil
+			}
+			if !allSucceeded {
+				failed, markErr := s.approvals.MarkExecutionFailed(ctx, value.ID, results)
+				if markErr != nil {
+					return approval.Approval{}, errors.Join(err, markErr)
+				}
+				s.recordFailureWithContext(ctx, value.RunID, err)
+				return failed, nil
 			}
 		}
 		return approval.Approval{}, err
@@ -743,6 +853,7 @@ func (s *Service) reconcileApprovalEffects(
 	defer func() {
 		_ = release()
 	}()
+	recoveryPending := false
 	for _, item := range value.Items {
 		identity, err := item.Identity()
 		if err != nil {
@@ -753,19 +864,19 @@ func (s *Service) reconcileApprovalEffects(
 			CallID:   item.CallID,
 			Identity: identity,
 		}
-		state, ok := s.effects.Lookup(command)
-		if !ok || state != idempotency.StateUnknown {
-			continue
-		}
-		if _, err := s.effects.Reconcile(runCtx, command); err != nil &&
-			!errors.Is(err, idempotency.ErrRetryableFailure) &&
-			!errors.Is(err, idempotency.ErrReconciliationPending) &&
-			!errors.Is(err, idempotency.ErrManualReview) {
+		outcome, err := s.effects.Recover(runCtx, command)
+		if err != nil {
 			return false, err
+		}
+		switch outcome.Decision {
+		case idempotency.RecoveryBusy, idempotency.RecoveryPending,
+			idempotency.RecoveryManualReview:
+			recoveryPending = true
+			continue
 		}
 	}
 	results, _ := s.approvalEffectResults(value)
-	if !executionRequiresReconciliation(results) {
+	if !recoveryPending && !executionRequiresReconciliation(results) {
 		return false, nil
 	}
 	if _, err := s.approvals.MarkReconciliationRequired(runCtx, value.ID, results); err != nil {
@@ -852,7 +963,7 @@ func (s *Service) approvalEffectResults(value approval.Approval) ([]approval.Ite
 			})
 			continue
 		}
-		state, ok := s.effects.Lookup(idempotency.Command{
+		state, ok := s.effects.Status(idempotency.Command{
 			RunID:    value.RunID,
 			CallID:   item.CallID,
 			Identity: identity,
@@ -1024,7 +1135,7 @@ func (s *Service) createApproval(
 		PlanVersion: planVersion,
 	}
 	for _, interrupt := range outcome.Interrupts {
-		write, err := s.registry.ParseWrite(interrupt.WireName, interrupt.Arguments)
+		write, err := s.registry.ParseActiveWrite(interrupt.WireName, interrupt.Arguments)
 		if err != nil {
 			return approval.Approval{}, err
 		}
