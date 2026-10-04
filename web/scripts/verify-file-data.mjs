@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
 import {
+  availablePort,
   findChrome,
   repoDir,
   startProcess,
@@ -14,8 +15,8 @@ import {
 const artifactDir = join(webDir, "artifacts");
 const dataDir = await mkdtemp(join(tmpdir(), "waybill-guardian-file-e2e-"));
 const dataFile = join(webDir, "testdata", "waybills-v1.csv");
-const backendPort = Number(process.env.FILE_E2E_BACKEND_PORT ?? "18381");
-const webPort = Number(process.env.FILE_E2E_WEB_PORT ?? "15373");
+const backendPort = await availablePort(process.env.FILE_E2E_BACKEND_PORT);
+const webPort = await availablePort(process.env.FILE_E2E_WEB_PORT);
 const backendURL = `http://127.0.0.1:${backendPort}`;
 const webURL = `http://127.0.0.1:${webPort}`;
 const processes = [];
@@ -25,46 +26,44 @@ try {
   await mkdir(artifactDir, { recursive: true });
   const goEnvironment = { ...process.env };
   delete goEnvironment.GOROOT;
-  processes.push(
-    startProcess("go", ["run", "./cmd/server"], {
-      cwd: repoDir,
-      env: {
-        ...goEnvironment,
-        AUTH_MODE: "local",
-        DATA_DIR: dataDir,
-        DATA_FILE: dataFile,
-        DEMO_STEP_DELAY: "25ms",
-        HTTP_ADDR: `127.0.0.1:${backendPort}`,
-        PLATFORM: "file",
-        STORAGE: "jsonl",
-      },
-    }),
-  );
-  await waitForHTTP(`${backendURL}/healthz`, processes);
+  const backendProcess = startProcess("go", ["run", "./cmd/server"], {
+    cwd: repoDir,
+    env: {
+      ...goEnvironment,
+      AUTH_MODE: "local",
+      DATA_DIR: dataDir,
+      DATA_FILE: dataFile,
+      DEMO_STEP_DELAY: "25ms",
+      HTTP_ADDR: `127.0.0.1:${backendPort}`,
+      PLATFORM: "file",
+      STORAGE: "jsonl",
+    },
+  });
+  processes.push(backendProcess);
+  await waitForHTTP(`${backendURL}/healthz`, backendProcess, processes);
 
-  processes.push(
-    startProcess(
-      "npm",
-      [
-        "run",
-        "dev",
-        "--",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        String(webPort),
-        "--strictPort",
-      ],
-      {
-        cwd: webDir,
-        env: {
-          ...process.env,
-          VITE_API_TARGET: backendURL,
-        },
+  const webProcess = startProcess(
+    "npm",
+    [
+      "run",
+      "dev",
+      "--",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(webPort),
+      "--strictPort",
+    ],
+    {
+      cwd: webDir,
+      env: {
+        ...process.env,
+        VITE_API_TARGET: backendURL,
       },
-    ),
+    },
   );
-  await waitForHTTP(webURL, processes);
+  processes.push(webProcess);
+  await waitForHTTP(webURL, webProcess, processes);
 
   browser = await chromium.launch({
     executablePath: await findChrome(),
@@ -87,16 +86,24 @@ try {
   );
 
   let delayedRequests = 0;
+  let finishDelayedRequest = () => {};
+  const delayedRequestFinished = new Promise((resolve) => {
+    finishDelayedRequest = resolve;
+  });
   await page.route("**/api/waybills/YD2026101042", async (route) => {
     delayedRequests += 1;
-    if (delayedRequests === 1) {
+    const isDelayedRequest = delayedRequests === 1;
+    if (isDelayedRequest) {
       await delay(500);
     }
     await route.continue().catch(() => undefined);
+    if (isDelayedRequest) {
+      finishDelayedRequest();
+    }
   });
   await selector.selectOption("YD2026101042");
   await selector.selectOption("YD2026101041");
-  await delay(650);
+  await delayedRequestFinished;
   assert(
     (await selector.inputValue()) === "YD2026101041",
     "a stale detail response replaced the latest waybill selection",
@@ -110,14 +117,68 @@ try {
   await page.getByText("宁波", { exact: true }).last().waitFor();
   await page.getByText("西安", { exact: true }).last().waitFor();
 
+  let snapshotFailures = 0;
+  const failFirstSnapshot = async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (
+      request.method() === "GET" &&
+      /^\/api\/runs\/[^/]+$/.test(pathname) &&
+      snapshotFailures === 0
+    ) {
+      snapshotFailures += 1;
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            code: "snapshot_unavailable",
+            message: "simulated snapshot failure",
+          },
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  };
+  await page.route("**/api/runs/*", failFirstSnapshot);
   await page.getByRole("button", { name: "启动处置", exact: true }).click();
+  await page.getByText("simulated snapshot failure", { exact: true }).waitFor();
+  assert(runRequests.length === 1, `started ${runRequests.length} runs, want 1`);
+  await page.getByRole("button", { name: "重试", exact: true }).click();
   await page.getByText("改派至秦岭货运", { exact: true }).waitFor();
   await page.getByText("待确认", { exact: true }).waitFor();
+  await page.unroute("**/api/runs/*", failFirstSnapshot);
   assert(runRequests.length === 1, `started ${runRequests.length} runs, want 1`);
   assert(
     runRequests[0]?.waybill_id === "YD2026101042",
     "run request did not use the selected file waybill",
   );
+
+  let pendingListFailures = 0;
+  const failFirstPendingList = async (route) => {
+    if (pendingListFailures === 0) {
+      pendingListFailures += 1;
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            code: "approvals_unavailable",
+            message: "simulated approvals failure",
+          },
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  };
+  await page.route("**/api/approvals?status=pending", failFirstPendingList);
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByText("改派至秦岭货运", { exact: true }).waitFor();
+  await page.getByText("待确认", { exact: true }).waitFor();
+  await page.unroute("**/api/approvals?status=pending", failFirstPendingList);
+  assert(runRequests.length === 1, "partial recovery failure started a duplicate run");
 
   await page.getByRole("button", { name: "确认并执行", exact: true }).click();
   await page.getByText("方案已执行", { exact: true }).waitFor();

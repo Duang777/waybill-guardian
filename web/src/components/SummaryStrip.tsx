@@ -1,10 +1,10 @@
 import { Clock3, CloudSun, Route, ShieldCheck, Truck } from "lucide-react";
-import type { RunStatus, WaybillID, WaybillView } from "../api";
+import type { RunStatus } from "../api";
 import styles from "../app.module.css";
+import type { WaybillResource } from "../waybill-resource";
 
 type SummaryStripProps = {
-  view: WaybillView | null;
-  waybillID: WaybillID | null;
+  resource: WaybillResource;
   status: RunStatus | null;
   connected: boolean;
 };
@@ -21,17 +21,21 @@ const statusLabels = {
 } satisfies Record<RunStatus, string>;
 
 export function SummaryStrip({
-  view,
-  waybillID,
+  resource,
   status,
   connected,
 }: SummaryStripProps) {
-  const route =
-    view !== null
-      ? `${view.waybill.origin} → ${view.waybill.destination}`
-      : waybillID === null
-        ? "暂无可处置运单"
-        : "正在读取路线";
+  const view = resource.kind === "ready" ? resource.view : null;
+  const waybillID = resource.kind === "empty" ? null : resource.waybillID;
+  const route = routeLabel(resource);
+  const cargo =
+    resource.kind === "ready"
+      ? resource.view.waybill.cargo
+      : resource.kind === "error"
+        ? "加载失败"
+        : resource.kind === "loading"
+          ? "读取中"
+          : "--";
   return (
     <section className={styles.summaryStrip} aria-label="运单状态摘要">
       <div className={styles.routeSummary}>
@@ -51,7 +55,7 @@ export function SummaryStrip({
             <Truck aria-hidden="true" size={14} />
             货物
           </dt>
-          <dd>{view?.waybill.cargo ?? "读取中"}</dd>
+          <dd>{cargo}</dd>
         </div>
         <div>
           <dt>
@@ -91,6 +95,23 @@ export function SummaryStrip({
       </div>
     </section>
   );
+}
+
+function routeLabel(resource: WaybillResource): string {
+  switch (resource.kind) {
+    case "empty":
+      return "暂无可处置运单";
+    case "loading":
+      return "正在读取路线";
+    case "error":
+      return "路线加载失败";
+    case "ready":
+      return `${resource.view.waybill.origin} → ${resource.view.waybill.destination}`;
+    default: {
+      const exhaustive: never = resource;
+      return exhaustive;
+    }
+  }
 }
 
 type RiskBarProps = {

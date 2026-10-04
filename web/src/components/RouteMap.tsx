@@ -3,12 +3,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { hasAMapKey, loadAMap } from "../amap";
 import type { TrackPoint } from "../api";
 import styles from "../app.module.css";
+import type { WaybillResource } from "../waybill-resource";
 
 type RouteMapProps = {
   points: readonly TrackPoint[];
   origin: string | null;
   destination: string | null;
-  hasSelection: boolean;
+  resourceKind: WaybillResource["kind"];
 };
 
 type MapMode =
@@ -27,7 +28,7 @@ export function RouteMap({
   points,
   origin,
   destination,
-  hasSelection,
+  resourceKind,
 }: RouteMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -110,7 +111,7 @@ export function RouteMap({
     return (
       <div className={styles.mapEmpty}>
         <MapPin aria-hidden="true" size={20} />
-        <span>{hasSelection ? "正在读取运单轨迹" : "暂无运单轨迹"}</span>
+        <span>{emptyMapLabel(resourceKind)}</span>
       </div>
     );
   }
@@ -164,6 +165,23 @@ export function RouteMap({
       )}
     </div>
   );
+}
+
+function emptyMapLabel(kind: WaybillResource["kind"]): string {
+  switch (kind) {
+    case "empty":
+      return "暂无运单轨迹";
+    case "loading":
+      return "正在读取运单轨迹";
+    case "error":
+      return "运单轨迹加载失败";
+    case "ready":
+      return "当前运单暂无轨迹";
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
 }
 
 type FallbackMapProps = {

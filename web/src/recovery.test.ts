@@ -3,7 +3,7 @@ import {
   pendingApprovalSummarySchema,
   runSummarySchema,
 } from "./api";
-import { preferredRecoveryRun } from "./recovery";
+import { decideRecovery } from "./recovery";
 
 const activeRun = runSummarySchema.parse({
   run_id: "run-active",
@@ -23,28 +23,40 @@ const pendingApproval = pendingApprovalSummarySchema.parse({
   expires_at: "2026-10-11T09:41:00Z",
 });
 
-describe("preferredRecoveryRun", () => {
+describe("decideRecovery", () => {
   it("restores a pending approval before another active run", () => {
     expect(
-      preferredRecoveryRun({
-        pendingApprovals: [pendingApproval],
-        activeRuns: [activeRun],
+      decideRecovery({
+        pendingApprovals: { kind: "ready", data: [pendingApproval] },
+        activeRuns: { kind: "ready", data: [activeRun] },
       }),
-    ).toBe(pendingApproval.run_id);
+    ).toEqual({ kind: "recover", runID: pendingApproval.run_id });
   });
 
-  it("falls back to an active run and returns null when no run exists", () => {
+  it("uses an active run when the pending-approval query fails", () => {
     expect(
-      preferredRecoveryRun({
-        pendingApprovals: [],
-        activeRuns: [activeRun],
+      decideRecovery({
+        pendingApprovals: { kind: "error", message: "approvals unavailable" },
+        activeRuns: { kind: "ready", data: [activeRun] },
       }),
-    ).toBe(activeRun.run_id);
+    ).toEqual({ kind: "recover", runID: activeRun.run_id });
+  });
+
+  it("blocks a new selection when a failed query could hide a run", () => {
     expect(
-      preferredRecoveryRun({
-        pendingApprovals: [],
-        activeRuns: [],
+      decideRecovery({
+        pendingApprovals: { kind: "ready", data: [] },
+        activeRuns: { kind: "error", message: "runs unavailable" },
       }),
-    ).toBeNull();
+    ).toEqual({ kind: "blocked", message: "runs unavailable" });
+  });
+
+  it("selects a waybill only after both recovery sources are empty", () => {
+    expect(
+      decideRecovery({
+        pendingApprovals: { kind: "ready", data: [] },
+        activeRuns: { kind: "ready", data: [] },
+      }),
+    ).toEqual({ kind: "select_waybill" });
   });
 });
