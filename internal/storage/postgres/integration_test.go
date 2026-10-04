@@ -25,6 +25,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/idempotency"
 	outboxmodel "github.com/Duang777/waybill-guardian/internal/outbox"
 	"github.com/Duang777/waybill-guardian/internal/outboxhttp"
+	"github.com/Duang777/waybill-guardian/internal/platform"
 	guardtools "github.com/Duang777/waybill-guardian/internal/tools"
 	"github.com/google/uuid"
 	"github.com/hastekit/agent-sdk-go/pkg/agents/history"
@@ -1569,7 +1570,15 @@ func TestTimelineObservesAnotherRepositoryInstance(t *testing.T) {
 func TestRepositoryExecutesAndReplaysApprovedEffect(t *testing.T) {
 	db := openIntegrationDB(t)
 	tenantID := "tenant-" + uuid.NewString()
-	repository := newIntegrationRepository(t, db, tenantID, "worker-1")
+	clients, mock, err := guardtools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRuntime, err := guardtools.NewFixtureWriteRuntime(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := newIntegrationRepository(t, db, tenantID, "worker-1", writeRuntime)
 	defer repository.Close()
 
 	runID := domain.RunID(uuid.NewString())
@@ -1579,7 +1588,7 @@ func TestRepositoryExecutesAndReplaysApprovedEffect(t *testing.T) {
 		t.Fatal(err)
 	}
 	claimedCtx := context.WithValue(t.Context(), runClaimContextKey{}, claim)
-	arguments := json.RawMessage(`{"waybill_id":"YD2026101001","carrier_id":"carrier-b"}`)
+	arguments := json.RawMessage(`{"waybill_id":"YD2026101001","carrier_id":"CARRIER-SW-42"}`)
 	identity, err := idempotency.Derive(idempotency.DerivationInput{
 		RunContext: domain.RunContext{
 			RunID:       runID,
@@ -1588,7 +1597,7 @@ func TestRepositoryExecutesAndReplaysApprovedEffect(t *testing.T) {
 			PlanVersion: 1,
 		},
 		Action:    domain.ActionReassign,
-		Target:    "waybill/YD2026101001/carrier/carrier-b",
+		Target:    "waybill/YD2026101001/carrier/CARRIER-SW-42",
 		Arguments: arguments,
 	})
 	if err != nil {
@@ -1641,33 +1650,310 @@ func TestRepositoryExecutesAndReplaysApprovedEffect(t *testing.T) {
 	}
 
 	command := idempotency.Command{RunID: runID, CallID: item.CallID, Identity: identity}
-	calls := 0
-	expected := json.RawMessage(`{"order_id":"order-1","status":"accepted"}`)
-	first, err := repository.Execute(claimedCtx, command, func(context.Context) (json.RawMessage, error) {
-		calls++
-		return expected, nil
+	effect, err := idempotency.AuthorizeEffect(command, platform.EffectRequest{
+		Action:        item.Action,
+		Arguments:     item.Params,
+		ArgumentsHash: item.ArgumentsHash,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := repository.Execute(claimedCtx, command, func(context.Context) (json.RawMessage, error) {
-		calls++
-		return nil, errors.New("duplicate mutation")
-	})
+	first, err := repository.Execute(claimedCtx, effect)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls != 1 || first.Duplicate || !second.Duplicate ||
-		string(first.Value) != string(expected) ||
-		string(second.Value) != string(expected) {
-		t.Fatalf("effect replay: calls=%d first=%+v second=%+v", calls, first, second)
+	second, err := repository.Execute(claimedCtx, effect)
+	if err != nil {
+		t.Fatal(err)
 	}
-	state, ok := repository.Lookup(command)
+	if mock.WriteCount(domain.ActionReassign) != 1 ||
+		first.Duplicate ||
+		!second.Duplicate ||
+		string(first.Value) != string(second.Value) {
+		t.Fatalf(
+			"effect replay: calls=%d first=%+v second=%+v",
+			mock.WriteCount(domain.ActionReassign),
+			first,
+			second,
+		)
+	}
+	state, ok := repository.Status(command)
 	if !ok || state != idempotency.StateSucceeded {
 		t.Fatalf("effect state = %q, %v", state, ok)
 	}
+	var (
+		bindingVersion int
+		adapterID      string
+		requestHash    string
+		dispatchAt     time.Time
+		responseDigest string
+	)
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT binding_schema_version, adapter_id, provider_request_hash,
+		       dispatch_started_at, response_digest
+		FROM waybill.effects
+		WHERE tenant_id = $1 AND effect_id = $2
+	`, tenantID, identity.EffectID).Scan(
+		&bindingVersion,
+		&adapterID,
+		&requestHash,
+		&dispatchAt,
+		&responseDigest,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if bindingVersion != 1 ||
+		adapterID != guardtools.FixtureRuntimeAdapterID ||
+		len(requestHash) != 64 ||
+		dispatchAt.IsZero() ||
+		len(responseDigest) != 64 {
+		t.Fatalf(
+			"stored effect metadata = version:%d adapter:%q request:%q dispatch:%v response:%q",
+			bindingVersion,
+			adapterID,
+			requestHash,
+			dispatchAt,
+			responseDigest,
+		)
+	}
 	if err := repository.Verify(runID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRepositoryPersistsBindingBeforeDispatchAndRenewsEffectLease(t *testing.T) {
+	db := openIntegrationDB(t)
+	tenantID := "tenant-" + uuid.NewString()
+	clients, _, err := guardtools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := guardtools.NewFixtureWriteRuntime(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocking := &blockingWriteRuntime{
+		WriteRuntime: fixture,
+		entered:      make(chan struct{}),
+		release:      make(chan struct{}),
+	}
+	repository, err := NewRepository(db, RepositoryConfig{
+		TenantID:       tenantID,
+		WorkerID:       "worker-blocking",
+		LeaseTTL:       5 * time.Second,
+		EffectLeaseTTL: 150 * time.Millisecond,
+		OutboxLeaseTTL: 5 * time.Second,
+		PollInterval:   10 * time.Millisecond,
+		WriteRuntime:   blocking,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+
+	runID := domain.RunID(uuid.NewString())
+	claimedCtx, command, effect := prepareApprovedReassignEffect(
+		t,
+		repository,
+		runID,
+		"CARRIER-SW-42",
+	)
+	result := make(chan error, 1)
+	go func() {
+		_, executeErr := repository.Execute(claimedCtx, effect)
+		result <- executeErr
+	}()
+	select {
+	case <-blocking.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("dispatch was not entered")
+	}
+
+	var (
+		status          string
+		bindingVersion  int
+		adapterID       string
+		firstLeaseUntil time.Time
+	)
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT status, binding_schema_version, adapter_id, lease_deadline
+		FROM waybill.effects
+		WHERE tenant_id = $1 AND effect_id = $2
+	`, tenantID, command.Identity.EffectID).Scan(
+		&status,
+		&bindingVersion,
+		&adapterID,
+		&firstLeaseUntil,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if status != "dispatching" ||
+		bindingVersion != 1 ||
+		adapterID != guardtools.FixtureRuntimeAdapterID {
+		t.Fatalf(
+			"pre-dispatch row = status:%q version:%d adapter:%q",
+			status,
+			bindingVersion,
+			adapterID,
+		)
+	}
+
+	time.Sleep(250 * time.Millisecond)
+	var renewedLeaseUntil time.Time
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT lease_deadline
+		FROM waybill.effects
+		WHERE tenant_id = $1 AND effect_id = $2
+	`, tenantID, command.Identity.EffectID).Scan(&renewedLeaseUntil); err != nil {
+		t.Fatal(err)
+	}
+	if !renewedLeaseUntil.After(firstLeaseUntil) {
+		t.Fatalf(
+			"effect lease was not renewed: first=%v renewed=%v",
+			firstLeaseUntil,
+			renewedLeaseUntil,
+		)
+	}
+	close(blocking.release)
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepositoryRecoversExpiredDispatchByLookupWithoutMutation(t *testing.T) {
+	db := openIntegrationDB(t)
+	tenantID := "tenant-" + uuid.NewString()
+	clients, _, err := guardtools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := guardtools.NewFixtureWriteRuntime(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryRuntime := &recoveryWriteRuntime{WriteRuntime: fixture}
+	repository := newIntegrationRepository(
+		t,
+		db,
+		tenantID,
+		"worker-recovery",
+		recoveryRuntime,
+	)
+	defer repository.Close()
+
+	runID := domain.RunID(uuid.NewString())
+	claimedCtx, command, effect := prepareApprovedReassignEffect(
+		t,
+		repository,
+		runID,
+		"CARRIER-SW-42",
+	)
+	binding, err := recoveryRuntime.Bind(
+		effect.Request(),
+		command.Identity.Key,
+		time.Now().UTC().Add(-time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatchStartedAt := time.Now().UTC().Add(-30 * time.Second)
+	if _, err := db.pool.Exec(t.Context(), `
+		UPDATE waybill.effects
+		SET status = 'dispatching',
+		    attempt = 1,
+		    binding_schema_version = $4,
+		    adapter_id = $5,
+		    provider_contract_version = $6,
+		    provider_operation = $7,
+		    provider_scope_digest = $8,
+		    provider_request_hash = $9,
+		    key_created_at = $10,
+		    key_expires_at = $11,
+		    lookup_consistency_window_ms = $12,
+		    dispatch_started_at = $13,
+		    lease_owner = 'dead-worker',
+		    lease_deadline = clock_timestamp() + interval '1 second',
+		    fencing_token = 1
+		WHERE tenant_id = $1 AND run_id = $2 AND effect_id = $3
+	`, tenantID, runID, command.Identity.EffectID, binding.SchemaVersion,
+		binding.AdapterID, binding.ContractVersion, binding.ProviderOperation,
+		binding.ProviderScopeDigest, binding.ProviderRequestHash,
+		binding.KeyCreatedAt, binding.KeyExpiresAt,
+		binding.LookupConsistencyWindow.Milliseconds(), dispatchStartedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.Append(claimedCtx, runID, audit.Draft{
+		EventID: "write:" + string(command.Identity.EffectID) + ":attempt:1:started",
+		Actor:   audit.ActorSystem,
+		Type:    audit.EventWriteStarted,
+		Payload: writeProjection{
+			Key:             command.Identity.Key,
+			CallID:          command.CallID,
+			Action:          command.Identity.Action,
+			ArgumentsHash:   command.Identity.ArgumentsHash,
+			IdentityVersion: command.Identity.Version,
+			EffectID:        command.Identity.EffectID,
+			Attempt:         1,
+			State:           idempotency.StateStarted,
+			Binding:         &binding,
+			DispatchStarted: &dispatchStartedAt,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.pool.Exec(t.Context(), `
+		UPDATE waybill.effects
+		SET lease_deadline = clock_timestamp() - interval '1 second'
+		WHERE tenant_id = $1 AND effect_id = $2
+	`, tenantID, command.Identity.EffectID); err != nil {
+		t.Fatal(err)
+	}
+
+	outcome, err := repository.Recover(claimedCtx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Decision != idempotency.RecoveryResolved ||
+		outcome.State != idempotency.StateSucceeded ||
+		string(outcome.Result.Value) != `{"carrier_id":"CARRIER-SW-42","order_id":"RA-recovered","status":"accepted","waybill_id":"YD2026101001"}` {
+		t.Fatalf("recovery outcome = %+v", outcome)
+	}
+	if recoveryRuntime.dispatchCalls != 0 || recoveryRuntime.lookupCalls != 1 {
+		t.Fatalf(
+			"runtime calls = dispatch:%d lookup:%d, want 0 and 1",
+			recoveryRuntime.dispatchCalls,
+			recoveryRuntime.lookupCalls,
+		)
+	}
+	var (
+		status            string
+		externalRequestID string
+		responseDigest    string
+		lastLookupAt      time.Time
+	)
+	if err := db.pool.QueryRow(t.Context(), `
+		SELECT status, external_request_id, response_digest, last_lookup_at
+		FROM waybill.effects
+		WHERE tenant_id = $1 AND effect_id = $2
+	`, tenantID, command.Identity.EffectID).Scan(
+		&status,
+		&externalRequestID,
+		&responseDigest,
+		&lastLookupAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if status != "succeeded" ||
+		externalRequestID != "request-recovered" ||
+		len(responseDigest) != 64 ||
+		lastLookupAt.IsZero() {
+		t.Fatalf(
+			"recovered metadata = status:%q request:%q digest:%q lookup:%v",
+			status,
+			externalRequestID,
+			responseDigest,
+			lastLookupAt,
+		)
 	}
 }
 
@@ -1929,8 +2215,12 @@ func TestGuardianResumesPostgresHistoryAcrossInstances(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	writeRuntime, err := guardtools.NewFixtureWriteRuntime(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
 	openService := func(workerID string) *guardian.Service {
-		repository := newIntegrationRepository(t, db, tenantID, workerID)
+		repository := newIntegrationRepository(t, db, tenantID, workerID, writeRuntime)
 		persistence, err := NewConversationPersistence(t.Context(), db, HistoryConfig{
 			TenantID: tenantID,
 			KeyID:    "test-key",
@@ -2173,19 +2463,184 @@ func newIntegrationRepository(
 	db *DB,
 	tenantID string,
 	workerID string,
+	runtimes ...platform.WriteRuntime,
 ) *Repository {
 	t.Helper()
+	var writeRuntime platform.WriteRuntime
+	if len(runtimes) > 0 {
+		writeRuntime = runtimes[0]
+	}
 	repository, err := NewRepository(db, RepositoryConfig{
 		TenantID:       tenantID,
 		WorkerID:       workerID,
 		LeaseTTL:       5 * time.Second,
+		EffectLeaseTTL: 5 * time.Second,
 		OutboxLeaseTTL: 5 * time.Second,
 		PollInterval:   10 * time.Millisecond,
+		WriteRuntime:   writeRuntime,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return repository
+}
+
+type blockingWriteRuntime struct {
+	platform.WriteRuntime
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *blockingWriteRuntime) Dispatch(
+	ctx context.Context,
+	binding platform.EffectBinding,
+	request platform.EffectRequest,
+	key domain.IdempotencyKey,
+) platform.DispatchResult {
+	r.once.Do(func() {
+		close(r.entered)
+	})
+	select {
+	case <-ctx.Done():
+		return platform.DispatchResult{
+			Disposition: platform.EffectUnknown,
+			ErrorCode:   "dispatch_canceled",
+		}
+	case <-r.release:
+		return r.WriteRuntime.Dispatch(ctx, binding, request, key)
+	}
+}
+
+type recoveryWriteRuntime struct {
+	platform.WriteRuntime
+	dispatchCalls int
+	lookupCalls   int
+}
+
+func (r *recoveryWriteRuntime) Dispatch(
+	context.Context,
+	platform.EffectBinding,
+	platform.EffectRequest,
+	domain.IdempotencyKey,
+) platform.DispatchResult {
+	r.dispatchCalls++
+	return platform.DispatchResult{
+		Disposition: platform.EffectPermanentFailed,
+		ErrorCode:   "unexpected_dispatch",
+	}
+}
+
+func (r *recoveryWriteRuntime) Lookup(
+	context.Context,
+	platform.EffectBinding,
+	domain.IdempotencyKey,
+) platform.LookupResult {
+	r.lookupCalls++
+	return platform.LookupResult{
+		Disposition: platform.LookupApplied,
+		Response: json.RawMessage(
+			`{"order_id":"RA-recovered","waybill_id":"YD2026101001","carrier_id":"CARRIER-SW-42","status":"accepted"}`,
+		),
+		ExternalRef:       "RA-recovered",
+		ExternalRequestID: "request-recovered",
+		ResponseDigest:    strings.Repeat("a", 64),
+	}
+}
+
+func prepareApprovedReassignEffect(
+	t *testing.T,
+	repository *Repository,
+	runID domain.RunID,
+	carrierID domain.CarrierID,
+) (context.Context, idempotency.Command, idempotency.AuthorizedEffect) {
+	t.Helper()
+	appendStarted(t, repository, runID)
+	claim, err := repository.ClaimRun(t.Context(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimedCtx := context.WithValue(t.Context(), runClaimContextKey{}, claim)
+	arguments, err := json.Marshal(map[string]string{
+		"waybill_id": "YD2026101001",
+		"carrier_id": string(carrierID),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := idempotency.Derive(idempotency.DerivationInput{
+		RunContext: domain.RunContext{
+			RunID:       runID,
+			IncidentID:  domain.IncidentID("incident-" + string(runID)),
+			WaybillID:   "YD2026101001",
+			PlanVersion: 1,
+		},
+		Action:    domain.ActionReassign,
+		Target:    "waybill/YD2026101001/carrier/" + string(carrierID),
+		Arguments: arguments,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := approval.Item{
+		CallID:          "call-" + string(runID),
+		Action:          domain.ActionReassign,
+		WireName:        "tms_reassign",
+		Params:          arguments,
+		ArgumentsHash:   identity.ArgumentsHash,
+		IdentityVersion: identity.Version,
+		EffectID:        identity.EffectID,
+		IdempotencyKey:  identity.Key,
+	}
+	approvalID := approval.IDFor(runID, []string{item.CallID})
+	now := time.Now().UTC()
+	if _, err := repository.Append(claimedCtx, runID, audit.Draft{
+		EventID: "approval:" + string(approvalID) + ":requested",
+		Actor:   audit.ActorAgent,
+		Type:    audit.EventApprovalRequested,
+		Payload: approval.Approval{
+			ID:          approvalID,
+			RunID:       runID,
+			SDKRunID:    "sdk-" + string(runID),
+			WaybillID:   "YD2026101001",
+			PlanVersion: 1,
+			Items:       []approval.Item{item},
+			Reason:      "test",
+			Evidence:    []approval.Evidence{{Label: "delay", Value: "6h"}},
+			Status:      approval.StatusPending,
+			RequestedAt: now,
+			ExpiresAt:   now.Add(time.Minute),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.Append(claimedCtx, runID, audit.Draft{
+		EventID: "approval:" + string(approvalID) + ":confirmed",
+		Actor:   audit.ActorHuman,
+		Type:    audit.EventApprovalDecided,
+		Payload: map[string]any{
+			"approval_id": approvalID,
+			"status":      approval.StatusConfirmed,
+			"decided_by":  "reviewer",
+			"decided_at":  now,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	command := idempotency.Command{
+		RunID:    runID,
+		CallID:   item.CallID,
+		Identity: identity,
+	}
+	effect, err := idempotency.AuthorizeEffect(command, platform.EffectRequest{
+		Action:        item.Action,
+		Arguments:     item.Params,
+		ArgumentsHash: item.ArgumentsHash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return claimedCtx, command, effect
 }
 
 func appendStarted(t *testing.T, repository *Repository, runID domain.RunID) {

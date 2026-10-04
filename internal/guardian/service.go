@@ -120,7 +120,14 @@ func Open(config Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	idempotencyStore, err := idempotency.NewStore(journal, platformEffectLookup(config.Clients))
+	writeRuntime, err := guardtools.NewFixtureWriteRuntime(config.Clients)
+	if err != nil {
+		return nil, errors.Join(err, journal.Close())
+	}
+	idempotencyStore, err := idempotency.NewStore(journal, idempotency.StoreConfig{
+		Runtime: writeRuntime,
+		Clock:   config.Clock,
+	})
 	if err != nil {
 		return nil, errors.Join(err, journal.Close())
 	}
@@ -261,23 +268,6 @@ func validateConfig(config Config) error {
 		return fmt.Errorf("all platform clients are required")
 	}
 	return nil
-}
-
-func platformEffectLookup(clients platform.Clients) idempotency.LookupFunc {
-	return func(ctx context.Context, command idempotency.Command) (platform.EffectResult, error) {
-		request := platform.LookupEffectRequest{
-			Action:         command.Identity.Action,
-			IdempotencyKey: command.Identity.Key,
-		}
-		switch command.Identity.Action {
-		case domain.ActionReassign, domain.ActionCreateClaim:
-			return clients.TMS.LookupEffect(ctx, request)
-		case domain.ActionSendSMS:
-			return clients.Notification.LookupEffect(ctx, request)
-		default:
-			return platform.EffectResult{Disposition: platform.EffectPermanentFailed}, nil
-		}
-	}
 }
 
 func (s *Service) StartDemo(ctx context.Context) (RunView, error) {
@@ -660,7 +650,7 @@ func (s *Service) resumeApproval(
 	}, value.SDKRunID, interruptsFromApproval(value), approved)
 	if err != nil {
 		if approved {
-			results, _ := s.approvalEffectResults(value)
+			results, allSucceeded := s.approvalEffectResults(value)
 			if executionRequiresReconciliation(results) {
 				pending, markErr := s.approvals.MarkReconciliationRequired(ctx, value.ID, results)
 				if markErr != nil {
@@ -668,6 +658,14 @@ func (s *Service) resumeApproval(
 				}
 				s.updateRunStatus(value.RunID, domain.RunExecuting)
 				return pending, nil
+			}
+			if !allSucceeded {
+				failed, markErr := s.approvals.MarkExecutionFailed(ctx, value.ID, results)
+				if markErr != nil {
+					return approval.Approval{}, errors.Join(err, markErr)
+				}
+				s.recordFailureWithContext(ctx, value.RunID, err)
+				return failed, nil
 			}
 		}
 		return approval.Approval{}, err
@@ -749,6 +747,7 @@ func (s *Service) reconcileApprovalEffects(
 	defer func() {
 		_ = release()
 	}()
+	recoveryPending := false
 	for _, item := range value.Items {
 		identity, err := item.Identity()
 		if err != nil {
@@ -759,19 +758,19 @@ func (s *Service) reconcileApprovalEffects(
 			CallID:   item.CallID,
 			Identity: identity,
 		}
-		state, ok := s.effects.Lookup(command)
-		if !ok || state != idempotency.StateUnknown {
-			continue
-		}
-		if _, err := s.effects.Reconcile(runCtx, command); err != nil &&
-			!errors.Is(err, idempotency.ErrRetryableFailure) &&
-			!errors.Is(err, idempotency.ErrReconciliationPending) &&
-			!errors.Is(err, idempotency.ErrManualReview) {
+		outcome, err := s.effects.Recover(runCtx, command)
+		if err != nil {
 			return false, err
+		}
+		switch outcome.Decision {
+		case idempotency.RecoveryBusy, idempotency.RecoveryPending,
+			idempotency.RecoveryManualReview:
+			recoveryPending = true
+			continue
 		}
 	}
 	results, _ := s.approvalEffectResults(value)
-	if !executionRequiresReconciliation(results) {
+	if !recoveryPending && !executionRequiresReconciliation(results) {
 		return false, nil
 	}
 	if _, err := s.approvals.MarkReconciliationRequired(runCtx, value.ID, results); err != nil {
@@ -858,7 +857,7 @@ func (s *Service) approvalEffectResults(value approval.Approval) ([]approval.Ite
 			})
 			continue
 		}
-		state, ok := s.effects.Lookup(idempotency.Command{
+		state, ok := s.effects.Status(idempotency.Command{
 			RunID:    value.RunID,
 			CallID:   item.CallID,
 			Identity: identity,

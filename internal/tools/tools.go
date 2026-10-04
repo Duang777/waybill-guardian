@@ -7,12 +7,13 @@ import (
 	"fmt"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
-	"github.com/Duang777/waybill-guardian/internal/idempotency"
 	"github.com/Duang777/waybill-guardian/internal/platform"
 )
 
 //go:embed testdata/demo.json
 var demoData []byte
+
+var ErrWriteMiddlewareRequired = errors.New("write middleware required")
 
 func NewDemoClients() (platform.Clients, *platform.Mock, error) {
 	mock, err := platform.NewMock(demoData)
@@ -216,71 +217,16 @@ func (h *Handlers) GetRoadWeather(ctx context.Context, in GetRoadWeatherInput) (
 	return GetRoadWeatherOutput{Segments: evidence}, nil
 }
 
-func (h *Handlers) Reassign(ctx context.Context, in ReassignInput) (ReassignOutput, error) {
-	if err := validateReassign(in); err != nil {
-		return ReassignOutput{}, err
-	}
-	key, err := executionKey(ctx, domain.ActionReassign)
-	if err != nil {
-		return ReassignOutput{}, err
-	}
-	return h.clients.TMS.Reassign(ctx, platform.ReassignRequest{
-		WaybillID:      domain.WaybillID(in.WaybillID),
-		CarrierID:      domain.CarrierID(in.CarrierID),
-		IdempotencyKey: key,
-	})
+func (h *Handlers) Reassign(context.Context, ReassignInput) (ReassignOutput, error) {
+	return ReassignOutput{}, ErrWriteMiddlewareRequired
 }
 
-func (h *Handlers) CreateClaim(ctx context.Context, in CreateClaimInput) (CreateClaimOutput, error) {
-	if err := validateCreateClaim(in); err != nil {
-		return CreateClaimOutput{}, err
-	}
-	key, err := executionKey(ctx, domain.ActionCreateClaim)
-	if err != nil {
-		return CreateClaimOutput{}, err
-	}
-	return h.clients.TMS.CreateClaim(ctx, platform.CreateClaimRequest{
-		WaybillID:      domain.WaybillID(in.WaybillID),
-		ClaimType:      in.ClaimType,
-		IdempotencyKey: key,
-	})
+func (h *Handlers) CreateClaim(context.Context, CreateClaimInput) (CreateClaimOutput, error) {
+	return CreateClaimOutput{}, ErrWriteMiddlewareRequired
 }
 
-func (h *Handlers) SendSMS(ctx context.Context, in SendSMSInput) (SendSMSOutput, error) {
-	if err := validateSendSMS(in); err != nil {
-		return SendSMSOutput{}, err
-	}
-	key, err := executionKey(ctx, domain.ActionSendSMS)
-	if err != nil {
-		return SendSMSOutput{}, err
-	}
-	waybill, err := h.clients.TMS.GetWaybill(ctx, platform.GetWaybillRequest{
-		WaybillID: domain.WaybillID(in.WaybillID),
-	})
-	if err != nil {
-		return SendSMSOutput{}, err
-	}
-	phone := waybill.ShipperPhone
-	templateID := "waybill_reassigned"
-	if in.Recipient == RecipientDriver {
-		driver, driverErr := h.clients.TMS.GetDriver(ctx, platform.GetDriverRequest{
-			DriverID: waybill.DriverID,
-		})
-		if driverErr != nil {
-			return SendSMSOutput{}, driverErr
-		}
-		phone = driver.Phone
-		templateID = "waybill_reassigned_driver"
-	}
-	return h.clients.Notification.SendSMS(ctx, platform.SendSMSRequest{
-		Phone:      phone,
-		TemplateID: templateID,
-		Params: map[string]string{
-			"waybill_id": in.WaybillID,
-			"carrier_id": in.CarrierID,
-		},
-		IdempotencyKey: key,
-	})
+func (h *Handlers) SendSMS(context.Context, SendSMSInput) (SendSMSOutput, error) {
+	return SendSMSOutput{}, ErrWriteMiddlewareRequired
 }
 
 func validateReassign(in ReassignInput) error {
@@ -314,20 +260,6 @@ func validateSendSMS(in SendSMSInput) error {
 		return fmt.Errorf("carrier_id is required")
 	}
 	return nil
-}
-
-func executionKey(ctx context.Context, action domain.Action) (domain.IdempotencyKey, error) {
-	identity, err := idempotency.ExecutionFromContext(ctx)
-	if err != nil {
-		return "", err
-	}
-	if identity.Action != action {
-		return "", errors.Join(
-			idempotency.ErrInvalidIdentity,
-			fmt.Errorf("execution action %q does not match tool action %q", identity.Action, action),
-		)
-	}
-	return identity.Key, nil
 }
 
 func validateWaybillID(id string) error {

@@ -28,16 +28,16 @@ type EffectRequest struct {
 }
 
 type EffectBinding struct {
-	SchemaVersion           int
-	Action                  domain.Action
-	AdapterID               string
-	ContractVersion         string
-	ProviderOperation       string
-	ProviderScopeDigest     string
-	ProviderRequestHash     string
-	KeyCreatedAt            time.Time
-	KeyExpiresAt            time.Time
-	LookupConsistencyWindow time.Duration
+	SchemaVersion           int           `json:"schema_version"`
+	Action                  domain.Action `json:"action"`
+	AdapterID               string        `json:"adapter_id"`
+	ContractVersion         string        `json:"contract_version"`
+	ProviderOperation       string        `json:"provider_operation"`
+	ProviderScopeDigest     string        `json:"provider_scope_digest"`
+	ProviderRequestHash     string        `json:"provider_request_hash"`
+	KeyCreatedAt            time.Time     `json:"key_created_at"`
+	KeyExpiresAt            time.Time     `json:"key_expires_at"`
+	LookupConsistencyWindow time.Duration `json:"lookup_consistency_window"`
 }
 
 type DispatchResult struct {

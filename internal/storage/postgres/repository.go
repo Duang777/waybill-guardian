@@ -10,7 +10,7 @@ import (
 
 	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
-	"github.com/Duang777/waybill-guardian/internal/idempotency"
+	"github.com/Duang777/waybill-guardian/internal/platform"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -20,10 +20,11 @@ type RepositoryConfig struct {
 	TenantID       string
 	WorkerID       string
 	LeaseTTL       time.Duration
+	EffectLeaseTTL time.Duration
 	OutboxLeaseTTL time.Duration
 	PollInterval   time.Duration
 	Clock          func() time.Time
-	EffectLookup   idempotency.LookupFunc
+	WriteRuntime   platform.WriteRuntime
 }
 
 type Repository struct {
@@ -31,10 +32,11 @@ type Repository struct {
 	tenantID       string
 	workerID       string
 	leaseTTL       time.Duration
+	effectLeaseTTL time.Duration
 	outboxLeaseTTL time.Duration
 	pollInterval   time.Duration
 	clock          func() time.Time
-	effectLookup   idempotency.LookupFunc
+	writeRuntime   platform.WriteRuntime
 
 	mu            sync.Mutex
 	closed        bool
@@ -58,6 +60,9 @@ func NewRepository(db *DB, config RepositoryConfig) (*Repository, error) {
 	if config.OutboxLeaseTTL <= 0 {
 		config.OutboxLeaseTTL = 30 * time.Second
 	}
+	if config.EffectLeaseTTL <= 0 {
+		config.EffectLeaseTTL = config.LeaseTTL
+	}
 	if config.PollInterval <= 0 {
 		config.PollInterval = 250 * time.Millisecond
 	}
@@ -69,10 +74,11 @@ func NewRepository(db *DB, config RepositoryConfig) (*Repository, error) {
 		tenantID:       config.TenantID,
 		workerID:       config.WorkerID,
 		leaseTTL:       config.LeaseTTL,
+		effectLeaseTTL: config.EffectLeaseTTL,
 		outboxLeaseTTL: config.OutboxLeaseTTL,
 		pollInterval:   config.PollInterval,
 		clock:          config.Clock,
-		effectLookup:   config.EffectLookup,
+		writeRuntime:   config.WriteRuntime,
 		subscriptions:  make(map[uint64]context.CancelFunc),
 	}, nil
 }

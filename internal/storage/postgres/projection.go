@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/Duang777/waybill-guardian/internal/approval"
 	"github.com/Duang777/waybill-guardian/internal/audit"
@@ -36,17 +37,28 @@ type approvalStatusProjection struct {
 }
 
 type writeProjection struct {
-	Key             domain.IdempotencyKey       `json:"idempotency_key"`
-	CallID          string                      `json:"call_id"`
-	Action          domain.Action               `json:"action"`
-	ArgumentsHash   string                      `json:"arguments_hash"`
-	IdentityVersion idempotency.IdentityVersion `json:"identity_version"`
-	EffectID        domain.EffectID             `json:"effect_id"`
-	Attempt         int                         `json:"attempt"`
-	Disposition     platform.EffectDisposition  `json:"disposition"`
-	Result          json.RawMessage             `json:"result"`
-	Error           string                      `json:"error"`
-	Reconciliation  int                         `json:"reconciliation"`
+	Key               domain.IdempotencyKey       `json:"idempotency_key"`
+	CallID            string                      `json:"call_id"`
+	Action            domain.Action               `json:"action"`
+	ArgumentsHash     string                      `json:"arguments_hash"`
+	IdentityVersion   idempotency.IdentityVersion `json:"identity_version"`
+	EffectID          domain.EffectID             `json:"effect_id"`
+	Attempt           int                         `json:"attempt"`
+	State             idempotency.State           `json:"state,omitempty"`
+	Disposition       platform.EffectDisposition  `json:"disposition,omitempty"`
+	LookupDisposition platform.LookupDisposition  `json:"lookup_disposition,omitempty"`
+	Result            json.RawMessage             `json:"result,omitempty"`
+	Error             string                      `json:"error,omitempty"`
+	ErrorCode         string                      `json:"error_code,omitempty"`
+	ErrorClass        string                      `json:"error_class,omitempty"`
+	ExternalRef       string                      `json:"external_ref,omitempty"`
+	ExternalRequestID string                      `json:"external_request_id,omitempty"`
+	ResponseDigest    string                      `json:"response_digest,omitempty"`
+	RetryAt           *time.Time                  `json:"retry_at,omitempty"`
+	LastLookupAt      *time.Time                  `json:"last_lookup_at,omitempty"`
+	Reconciliation    int                         `json:"reconciliation,omitempty"`
+	Binding           *platform.EffectBinding     `json:"binding,omitempty"`
+	DispatchStarted   *time.Time                  `json:"dispatch_started_at,omitempty"`
 }
 
 func (r *Repository) ensureRun(
@@ -329,6 +341,43 @@ func (r *Repository) projectWriteStarted(
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return fmt.Errorf("decode write start projection: %w", err)
 	}
+	if payload.Binding != nil {
+		command, err := tx.Exec(ctx, `
+			UPDATE waybill.effects
+			SET status = 'dispatching',
+			    attempt = $4,
+			    binding_schema_version = $8,
+			    adapter_id = $9,
+			    provider_contract_version = $10,
+			    provider_operation = $11,
+			    provider_scope_digest = $12,
+			    provider_request_hash = $13,
+			    key_created_at = $14,
+			    key_expires_at = $15,
+			    lookup_consistency_window_ms = $16,
+			    dispatch_started_at = $17,
+			    retry_after = NULL,
+			    last_error_code = NULL,
+			    last_error_class = NULL,
+			    updated_at = $5
+			WHERE tenant_id = $1 AND run_id = $2 AND effect_id = $3
+			  AND idempotency_key = $6 AND arguments_hash = $7
+		`, r.tenantID, event.RunID, payload.EffectID, payload.Attempt, event.TS,
+			payload.Key, payload.ArgumentsHash, payload.Binding.SchemaVersion,
+			payload.Binding.AdapterID, payload.Binding.ContractVersion,
+			payload.Binding.ProviderOperation, payload.Binding.ProviderScopeDigest,
+			payload.Binding.ProviderRequestHash, payload.Binding.KeyCreatedAt,
+			payload.Binding.KeyExpiresAt,
+			payload.Binding.LookupConsistencyWindow.Milliseconds(),
+			payload.DispatchStarted)
+		if err != nil {
+			return fmt.Errorf("start PostgreSQL bound effect: %w", err)
+		}
+		if command.RowsAffected() != 1 {
+			return fmt.Errorf("effect %q is not bound to the approved arguments", payload.EffectID)
+		}
+		return nil
+	}
 	command, err := tx.Exec(ctx, `
 		UPDATE waybill.effects
 		SET status = 'dispatching', attempt = $4, updated_at = $5
@@ -370,29 +419,31 @@ func (r *Repository) projectWriteResult(
 		}
 		return nil
 	}
-	status := ""
-	switch event.Type {
-	case audit.EventWriteExecuted:
-		status = "succeeded"
-	case audit.EventWriteFailed:
-		switch payload.Disposition {
-		case platform.EffectPermanentFailed:
-			status = "permanent_failed"
-		default:
-			status = "retryable_failed"
-		}
-	case audit.EventWriteUnknown:
-		status = "unknown"
-	case audit.EventWriteReconciled:
-		switch payload.Disposition {
-		case platform.EffectSucceeded:
+	status := string(payload.State)
+	if status == "" {
+		switch event.Type {
+		case audit.EventWriteExecuted:
 			status = "succeeded"
-		case platform.EffectRetryableFailed:
-			status = "retryable_failed"
-		case platform.EffectPermanentFailed:
-			status = "manual_review"
-		default:
+		case audit.EventWriteFailed:
+			switch payload.Disposition {
+			case platform.EffectPermanentFailed:
+				status = "permanent_failed"
+			default:
+				status = "retryable_failed"
+			}
+		case audit.EventWriteUnknown:
 			status = "unknown"
+		case audit.EventWriteReconciled:
+			switch payload.Disposition {
+			case platform.EffectSucceeded:
+				status = "succeeded"
+			case platform.EffectRetryableFailed:
+				status = "retryable_failed"
+			case platform.EffectPermanentFailed:
+				status = "manual_review"
+			default:
+				status = "unknown"
+			}
 		}
 	}
 	command, err := tx.Exec(ctx, `
@@ -400,14 +451,22 @@ func (r *Repository) projectWriteResult(
 		SET status = $4,
 		    response = CASE WHEN $5::bytea IS NULL THEN response ELSE convert_from($5, 'UTF8')::jsonb END,
 		    response_canonical = CASE WHEN $5::bytea IS NULL THEN response_canonical ELSE $5 END,
-		    last_error_code = NULLIF($6, ''),
-		    reconciliation_attempt = GREATEST(reconciliation_attempt, $7),
+		    external_ref = COALESCE(NULLIF($6, ''), external_ref),
+		    external_request_id = COALESCE(NULLIF($7, ''), external_request_id),
+		    response_digest = COALESCE(NULLIF($8, ''), response_digest),
+		    last_error_code = NULLIF($9, ''),
+		    last_error_class = NULLIF($10, ''),
+		    retry_after = $11,
+		    last_lookup_at = COALESCE($12, last_lookup_at),
+		    reconciliation_attempt = GREATEST(reconciliation_attempt, $13),
 		    lease_owner = NULL,
 		    lease_deadline = NULL,
-		    updated_at = $8
+		    updated_at = $14
 		WHERE tenant_id = $1 AND run_id = $2 AND effect_id = $3
 	`, r.tenantID, event.RunID, payload.EffectID, status, []byte(payload.Result),
-		payload.Error, payload.Reconciliation, event.TS)
+		payload.ExternalRef, payload.ExternalRequestID, payload.ResponseDigest,
+		payload.ErrorCode, payload.ErrorClass, payload.RetryAt, payload.LastLookupAt,
+		payload.Reconciliation, event.TS)
 	if err != nil {
 		return fmt.Errorf("complete PostgreSQL effect: %w", err)
 	}

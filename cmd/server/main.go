@@ -19,7 +19,6 @@ import (
 	agentkit "github.com/Duang777/waybill-guardian/internal/agent"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
 	"github.com/Duang777/waybill-guardian/internal/httpauth"
-	"github.com/Duang777/waybill-guardian/internal/idempotency"
 	"github.com/Duang777/waybill-guardian/internal/metrics"
 	"github.com/Duang777/waybill-guardian/internal/outbox"
 	"github.com/Duang777/waybill-guardian/internal/outboxhttp"
@@ -117,6 +116,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	writeRuntime, err := tools.NewFixtureWriteRuntime(clients)
+	if err != nil {
+		return err
+	}
 	historyRetention, err := strictDurationEnv("HISTORY_RETENTION", 7*24*time.Hour)
 	if err != nil {
 		return err
@@ -147,26 +150,9 @@ func run() error {
 				TenantID:       string(tenantID),
 				WorkerID:       envOr("INSTANCE_ID", uuid.NewString()),
 				LeaseTTL:       durationEnv("RUN_LEASE_TTL", 30*time.Second),
+				EffectLeaseTTL: durationEnv("EFFECT_LEASE_TTL", 15*time.Second),
 				OutboxLeaseTTL: eventConfig.outboxLeaseTTL,
-				EffectLookup: func(
-					ctx context.Context,
-					command idempotency.Command,
-				) (platform.EffectResult, error) {
-					request := platform.LookupEffectRequest{
-						Action:         command.Identity.Action,
-						IdempotencyKey: command.Identity.Key,
-					}
-					switch command.Identity.Action {
-					case "tms.reassign", "tms.create_claim":
-						return clients.TMS.LookupEffect(ctx, request)
-					case "notify.send_sms":
-						return clients.Notification.LookupEffect(ctx, request)
-					default:
-						return platform.EffectResult{
-							Disposition: platform.EffectPermanentFailed,
-						}, nil
-					}
-				},
+				WriteRuntime:   writeRuntime,
 			},
 		)
 		if err != nil {

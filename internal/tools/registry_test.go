@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/idempotency"
@@ -334,14 +335,14 @@ func TestReadToolsReturnAllowlistedEvidence(t *testing.T) {
 	}
 }
 
-func TestSendSMSResolvesTransportDetailsInsideHandler(t *testing.T) {
+func TestFixtureRuntimeResolvesSMSRecipientDetails(t *testing.T) {
 	clients, _, err := NewDemoClients()
 	if err != nil {
 		t.Fatal(err)
 	}
 	notification := &recordingNotification{}
 	clients.Notification = notification
-	handlers, err := NewHandlers(clients)
+	runtime, err := NewFixtureWriteRuntime(clients)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,20 +359,27 @@ func TestSendSMSResolvesTransportDetailsInsideHandler(t *testing.T) {
 			CarrierID: "CARRIER-SW-42",
 		},
 	} {
-		identity, err := idempotency.LegacyIdentity(
-			domain.ActionSendSMS,
-			domain.IdempotencyKey(fmt.Sprintf("sms-key-%d", index)),
-			"approved-arguments-hash",
-		)
+		arguments, err := json.Marshal(input)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ctx, err := idempotency.WithExecution(context.Background(), identity)
+		argumentsHash, err := idempotency.ArgumentsHash(string(arguments))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := handlers.SendSMS(ctx, input); err != nil {
+		request := platform.EffectRequest{
+			Action:        domain.ActionSendSMS,
+			Arguments:     arguments,
+			ArgumentsHash: argumentsHash,
+		}
+		key := domain.IdempotencyKey(fmt.Sprintf("sms-key-%d", index))
+		binding, err := runtime.Bind(request, key, time.Now().UTC())
+		if err != nil {
 			t.Fatal(err)
+		}
+		result := runtime.Dispatch(context.Background(), binding, request, key)
+		if result.Disposition != platform.EffectSucceeded {
+			t.Fatalf("SMS dispatch = %+v", result)
 		}
 	}
 

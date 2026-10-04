@@ -31,36 +31,46 @@ func TestConcurrentExecuteRunsEffectOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewStore(journal, nil)
+	defer journal.Close()
+	runtime := &testWriteRuntime{
+		dispatch: func(context.Context, platform.EffectBinding, platform.EffectRequest, domain.IdempotencyKey) platform.DispatchResult {
+			time.Sleep(10 * time.Millisecond)
+			return platform.DispatchResult{
+				Disposition: platform.EffectSucceeded,
+				Response:    json.RawMessage(`{"order_id":"RA-1"}`),
+			}
+		},
+	}
+	store, err := NewStore(journal, StoreConfig{Runtime: runtime})
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := Generate(domain.ActionReassign, "YD2026101001", "incident-1/plan-1")
-	var calls atomic.Int64
 	const workers = 10
 	results := make([]Result, workers)
 	errs := make([]error, workers)
-	identity := mustLegacyIdentity(t, domain.ActionReassign, key, "args-hash")
 	var wait sync.WaitGroup
 	wait.Add(workers)
 	for index := 0; index < workers; index++ {
 		go func(index int) {
 			defer wait.Done()
-			results[index], errs[index] = store.Execute(context.Background(), Command{
-				RunID:    "run-concurrent",
-				CallID:   "call-" + string(rune('a'+index)),
-				Identity: identity,
-			}, func(context.Context) (json.RawMessage, error) {
-				calls.Add(1)
-				time.Sleep(10 * time.Millisecond)
-				return json.RawMessage(`{"order_id":"RA-1"}`), nil
-			})
+			command := testCommand(
+				t,
+				"run-concurrent",
+				"call-"+string(rune('a'+index)),
+				"shared-key",
+				domain.ActionReassign,
+				`{"waybill_id":"YD2026101001","carrier_id":"CARRIER-SW-42"}`,
+			)
+			results[index], errs[index] = store.Execute(
+				context.Background(),
+				testAuthorizedEffect(t, command, `{"waybill_id":"YD2026101001","carrier_id":"CARRIER-SW-42"}`),
+			)
 		}(index)
 	}
 	wait.Wait()
 
-	if calls.Load() != 1 {
-		t.Fatalf("effect calls = %d, want 1", calls.Load())
+	if runtime.dispatchCalls.Load() != 1 {
+		t.Fatalf("effect calls = %d, want 1", runtime.dispatchCalls.Load())
 	}
 	duplicates := 0
 	for index, err := range errs {
@@ -79,73 +89,60 @@ func TestConcurrentExecuteRunsEffectOnce(t *testing.T) {
 	}
 }
 
-func TestMissingAndConflictingKeysAreRejected(t *testing.T) {
+func TestConflictingKeyIsRejected(t *testing.T) {
 	journal, err := audit.Open(t.TempDir(), time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewStore(journal, nil)
+	defer journal.Close()
+	runtime := successfulTestRuntime()
+	store, err := NewStore(journal, StoreConfig{Runtime: runtime})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Execute(context.Background(), Command{}, func(context.Context) (json.RawMessage, error) {
-		return nil, nil
-	}); !errors.Is(err, ErrMissingKey) {
-		t.Fatalf("missing key error = %v", err)
-	}
-
-	key := domain.IdempotencyKey("same-key")
-	_, err = store.Execute(context.Background(), Command{
-		RunID:    "run-1",
-		CallID:   "call-1",
-		Identity: mustLegacyIdentity(t, domain.ActionReassign, key, "first"),
-	}, func(context.Context) (json.RawMessage, error) {
-		return json.RawMessage(`{"ok":true}`), nil
-	})
-	if err != nil {
+	firstArgs := `{"waybill_id":"YD2026101001","carrier_id":"CARRIER-SW-42"}`
+	first := testCommand(t, "run-1", "call-1", "same-key", domain.ActionReassign, firstArgs)
+	if _, err := store.Execute(context.Background(), testAuthorizedEffect(t, first, firstArgs)); err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.Execute(context.Background(), Command{
-		RunID:    "run-1",
-		CallID:   "call-2",
-		Identity: mustLegacyIdentity(t, domain.ActionReassign, key, "second"),
-	}, func(context.Context) (json.RawMessage, error) {
-		t.Fatal("conflicting effect must not run")
-		return nil, nil
-	})
-	if !errors.Is(err, ErrKeyConflict) {
-		t.Fatalf("conflict error = %v", err)
+	secondArgs := `{"waybill_id":"YD2026101001","carrier_id":"CARRIER-SW-19"}`
+	second := testCommand(t, "run-1", "call-2", "same-key", domain.ActionReassign, secondArgs)
+	if _, err := store.Execute(
+		context.Background(),
+		testAuthorizedEffect(t, second, secondArgs),
+	); !errors.Is(err, ErrKeyConflict) {
+		t.Fatalf("conflict error = %v, want ErrKeyConflict", err)
+	}
+	if runtime.dispatchCalls.Load() != 1 {
+		t.Fatalf("dispatch calls = %d, want 1", runtime.dispatchCalls.Load())
 	}
 }
 
-func TestSucceededMatchesDurableCommand(t *testing.T) {
+func TestStatusMatchesDurableCommand(t *testing.T) {
 	journal, err := audit.Open(t.TempDir(), time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewStore(journal, nil)
+	defer journal.Close()
+	store, err := NewStore(journal, StoreConfig{Runtime: successfulTestRuntime()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := Command{
-		RunID:    "run-1",
-		CallID:   "call-1",
-		Identity: mustLegacyIdentity(t, domain.ActionReassign, "key-1", "args-hash"),
+	args := `{"waybill_id":"YD2026101001","claim_type":"delay"}`
+	command := testCommand(t, "run-status", "call-status", "key-status", domain.ActionCreateClaim, args)
+	if _, ok := store.Status(command); ok {
+		t.Fatal("missing command reported a status")
 	}
-	if store.Succeeded(command) {
-		t.Fatal("missing command reported as succeeded")
-	}
-	if _, err := store.Execute(context.Background(), command, func(context.Context) (json.RawMessage, error) {
-		return json.RawMessage(`{"ok":true}`), nil
-	}); err != nil {
+	if _, err := store.Execute(context.Background(), testAuthorizedEffect(t, command, args)); err != nil {
 		t.Fatal(err)
 	}
-	if !store.Succeeded(command) {
-		t.Fatal("successful command was not found")
+	state, ok := store.Status(command)
+	if !ok || state != StateSucceeded {
+		t.Fatalf("status = %q, %v, want succeeded", state, ok)
 	}
 	command.Identity.ArgumentsHash = "different"
-	if store.Succeeded(command) {
-		t.Fatal("mismatched command reported as succeeded")
+	if _, ok := store.Status(command); ok {
+		t.Fatal("mismatched command reported a status")
 	}
 }
 
@@ -154,31 +151,25 @@ func TestRetryableExecutionUsesDistinctAttemptEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewStore(journal, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	identity, err := Derive(DerivationInput{
-		RunContext: domain.RunContext{
-			RunID:       "run-retry",
-			IncidentID:  "incident-retry",
-			WaybillID:   "YD2026101001",
-			PlanVersion: 1,
+	defer journal.Close()
+	runtime := &testWriteRuntime{
+		dispatch: func(context.Context, platform.EffectBinding, platform.EffectRequest, domain.IdempotencyKey) platform.DispatchResult {
+			return platform.DispatchResult{
+				Disposition: platform.EffectRetryableFailed,
+				ErrorCode:   "temporary_failure",
+			}
 		},
-		Action:    domain.ActionSendSMS,
-		Target:    "phone/13800001234",
-		Arguments: json.RawMessage(`{"phone":"13800001234","template_id":"delay","params":{}}`),
-	})
+	}
+	store, err := NewStore(journal, StoreConfig{Runtime: runtime})
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := Command{RunID: "run-retry", CallID: "call-retry", Identity: identity}
+	args := `{"waybill_id":"YD2026101001","claim_type":"delay"}`
+	command := testCommand(t, "run-retry", "call-retry", "key-retry", domain.ActionCreateClaim, args)
+	effect := testAuthorizedEffect(t, command, args)
 	for attempt := 1; attempt <= 2; attempt++ {
-		_, err := store.Execute(context.Background(), command, func(context.Context) (json.RawMessage, error) {
-			return nil, platform.RetryableEffectError(errors.New("temporary failure"))
-		})
-		if err == nil {
-			t.Fatalf("attempt %d succeeded", attempt)
+		if _, err := store.Execute(context.Background(), effect); !errors.Is(err, ErrRetryableFailure) {
+			t.Fatalf("attempt %d error = %v, want ErrRetryableFailure", attempt, err)
 		}
 	}
 
@@ -191,13 +182,13 @@ func TestRetryableExecutionUsesDistinctAttemptEvents(t *testing.T) {
 		eventIDs = append(eventIDs, event.EventID)
 	}
 	expected := []string{
-		"write:" + string(identity.EffectID) + ":attempt:1:started",
-		"write:" + string(identity.EffectID) + ":attempt:1:retryable_failed",
-		"write:" + string(identity.EffectID) + ":attempt:2:started",
-		"write:" + string(identity.EffectID) + ":attempt:2:retryable_failed",
+		"write:" + string(command.Identity.EffectID) + ":attempt:1:started",
+		"write:" + string(command.Identity.EffectID) + ":attempt:1:retryable_failed",
+		"write:" + string(command.Identity.EffectID) + ":attempt:2:started",
+		"write:" + string(command.Identity.EffectID) + ":attempt:2:retryable_failed",
 	}
 	if len(eventIDs) != len(expected) {
-		t.Fatalf("event ids = %v", eventIDs)
+		t.Fatalf("event IDs = %v, want %v", eventIDs, expected)
 	}
 	for index := range expected {
 		if eventIDs[index] != expected[index] {
@@ -206,94 +197,84 @@ func TestRetryableExecutionUsesDistinctAttemptEvents(t *testing.T) {
 	}
 }
 
-func TestNewStoreReplaysLegacySuccessWithoutExecuting(t *testing.T) {
+func TestRecoverKeepsDelayedRetryPending(t *testing.T) {
 	journal, err := audit.Open(t.TempDir(), time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := writeResultPayload{
-		Key:           "legacy-key",
-		CallID:        "legacy-call",
-		Action:        domain.ActionReassign,
-		ArgumentsHash: "legacy-arguments-hash",
-		Result:        json.RawMessage(`{"order_id":"RA-legacy"}`),
+	defer journal.Close()
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	runtime := &testWriteRuntime{
+		dispatch: func(context.Context, platform.EffectBinding, platform.EffectRequest, domain.IdempotencyKey) platform.DispatchResult {
+			return platform.DispatchResult{
+				Disposition: platform.EffectRetryableFailed,
+				ErrorCode:   "rate_limited",
+				RetryAfter:  time.Minute,
+			}
+		},
 	}
-	if _, err := journal.Append(context.Background(), "legacy-run", audit.Draft{
-		EventID: "write:legacy-key:succeeded",
-		Actor:   audit.ActorSystem,
-		Type:    audit.EventWriteExecuted,
-		Payload: payload,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	store, err := NewStore(journal, nil)
+	store, err := NewStore(journal, StoreConfig{
+		Runtime: runtime,
+		Clock:   func() time.Time { return now },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := Command{
-		RunID:    "legacy-run",
-		CallID:   "legacy-call",
-		Identity: mustLegacyIdentity(t, payload.Action, payload.Key, payload.ArgumentsHash),
+	args := `{"waybill_id":"YD2026101001","claim_type":"delay"}`
+	command := testCommand(t, "run-delay", "call-delay", "key-delay", domain.ActionCreateClaim, args)
+	if _, err := store.Execute(
+		context.Background(),
+		testAuthorizedEffect(t, command, args),
+	); !errors.Is(err, ErrRetryableFailure) {
+		t.Fatalf("Execute error = %v, want ErrRetryableFailure", err)
 	}
-	result, err := store.Execute(context.Background(), command, func(context.Context) (json.RawMessage, error) {
-		t.Fatal("legacy success executed again")
-		return nil, nil
-	})
+	outcome, err := store.Recover(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Decision != RecoveryPending ||
+		outcome.State != StateRetryableFailed ||
+		!outcome.RetryAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("recovery outcome = %+v, want delayed pending retry", outcome)
+	}
+}
+
+func TestNewStoreReplaysLegacySuccessWithoutDispatching(t *testing.T) {
+	journal, err := audit.Open(t.TempDir(), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	args := `{"waybill_id":"YD2026101001","carrier_id":"CARRIER-SW-42"}`
+	command := testCommand(t, "legacy-run", "legacy-call", "legacy-key", domain.ActionReassign, args)
+	if _, err := journal.Append(context.Background(), command.RunID, audit.Draft{
+		EventID: "write:legacy-key:succeeded",
+		Actor:   audit.ActorSystem,
+		Type:    audit.EventWriteExecuted,
+		Payload: writeResultPayload{
+			Key:           command.Identity.Key,
+			CallID:        command.CallID,
+			Action:        command.Identity.Action,
+			ArgumentsHash: command.Identity.ArgumentsHash,
+			Result:        json.RawMessage(`{"order_id":"RA-legacy"}`),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := successfulTestRuntime()
+	store, err := NewStore(journal, StoreConfig{Runtime: runtime})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.Execute(context.Background(), testAuthorizedEffect(t, command, args))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !result.Duplicate || string(result.Value) != `{"order_id":"RA-legacy"}` {
 		t.Fatalf("legacy replay = %+v", result)
 	}
-}
-
-func TestNewStoreReplaysEffectV0SuccessWithoutExecuting(t *testing.T) {
-	journal, err := audit.Open(t.TempDir(), time.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runContext := domain.RunContext{
-		RunID:       "effect-v0-run",
-		IncidentID:  "effect-v0-incident",
-		WaybillID:   "YD2026101001",
-		PlanVersion: 1,
-	}
-	identity, err := EffectV0Identity(runContext, domain.ActionSendSMS, "effect-v0-hash")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := journal.Append(context.Background(), runContext.RunID, audit.Draft{
-		EventID: "write:" + string(identity.Key) + ":succeeded",
-		Actor:   audit.ActorSystem,
-		Type:    audit.EventWriteExecuted,
-		Payload: writeResultPayload{
-			Key:           identity.Key,
-			EffectID:      identity.EffectID,
-			CallID:        "effect-v0-call",
-			Action:        identity.Action,
-			ArgumentsHash: identity.ArgumentsHash,
-			Result:        json.RawMessage(`{"message_id":"SMS-v0"}`),
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	store, err := NewStore(journal, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := store.Execute(context.Background(), Command{
-		RunID:    runContext.RunID,
-		CallID:   "effect-v0-call",
-		Identity: identity,
-	}, func(context.Context) (json.RawMessage, error) {
-		t.Fatal("effect-v0 success executed again")
-		return nil, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.Duplicate || string(result.Value) != `{"message_id":"SMS-v0"}` {
-		t.Fatalf("effect-v0 replay = %+v", result)
+	if runtime.dispatchCalls.Load() != 0 {
+		t.Fatalf("legacy success dispatched %d times", runtime.dispatchCalls.Load())
 	}
 }
 
@@ -302,6 +283,7 @@ func TestNewStoreRejectsPartiallyPopulatedIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer journal.Close()
 	if _, err := journal.Append(context.Background(), "run-partial-identity", audit.Draft{
 		EventID: "write:partial:started",
 		Actor:   audit.ActorSystem,
@@ -317,141 +299,218 @@ func TestNewStoreRejectsPartiallyPopulatedIdentity(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewStore(journal, nil); !errors.Is(err, ErrInvalidIdentity) {
+	if _, err := NewStore(journal, StoreConfig{}); !errors.Is(err, ErrInvalidIdentity) {
 		t.Fatalf("partial identity error = %v", err)
 	}
 }
 
-func TestUnknownResultIsNotRetriedAsNewMutation(t *testing.T) {
+func TestStartedWithoutBindingRequiresManualReview(t *testing.T) {
 	journal, err := audit.Open(t.TempDir(), time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewStore(journal, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	command := Command{
-		RunID:    "run-unknown",
-		CallID:   "call-unknown",
-		Identity: mustLegacyIdentity(t, domain.ActionReassign, "key-unknown", "args-unknown"),
-	}
-	calls := 0
-	execute := func(context.Context) (json.RawMessage, error) {
-		calls++
-		return nil, errors.New("client timed out after the platform committed")
-	}
-	if _, err := store.Execute(context.Background(), command, execute); err == nil {
-		t.Fatal("unknown result returned no error")
-	}
-	command.CallID = "call-unknown-retry"
-	if _, err := store.Execute(context.Background(), command, execute); err == nil {
-		t.Fatal("unreconciled result returned no error")
-	}
-	if calls != 1 {
-		t.Fatalf("mutation calls = %d, want 1", calls)
-	}
-}
-
-func TestStartedWithoutResultRebuildsAsUnknown(t *testing.T) {
-	journal, err := audit.Open(t.TempDir(), time.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	identity := mustLegacyIdentity(t, domain.ActionSendSMS, "key-crashed", "args-crashed")
-	command := Command{RunID: "run-crashed", CallID: "call-crashed", Identity: identity}
+	defer journal.Close()
+	args := `{"waybill_id":"YD2026101001","carrier_id":"CARRIER-SW-42"}`
+	command := testCommand(t, "run-crashed", "call-crashed", "key-crashed", domain.ActionReassign, args)
 	if _, err := journal.Append(context.Background(), command.RunID, audit.Draft{
-		EventID: "write:" + string(identity.EffectID) + ":attempt:1:started",
+		EventID: "write:" + string(command.Identity.EffectID) + ":attempt:1:started",
 		Actor:   audit.ActorSystem,
 		Type:    audit.EventWriteStarted,
 		Payload: writeStartedPayload{
-			Key:             identity.Key,
-			EffectID:        identity.EffectID,
+			Key:             command.Identity.Key,
+			EffectID:        command.Identity.EffectID,
 			CallID:          command.CallID,
-			Action:          identity.Action,
-			ArgumentsHash:   identity.ArgumentsHash,
-			IdentityVersion: identity.Version,
+			Action:          command.Identity.Action,
+			ArgumentsHash:   command.Identity.ArgumentsHash,
+			IdentityVersion: command.Identity.Version,
 			Attempt:         1,
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
-
-	store, err := NewStore(journal, nil)
+	store, err := NewStore(journal, StoreConfig{Runtime: successfulTestRuntime()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, ok := store.Lookup(command)
-	if !ok {
-		t.Fatal("crashed command was not rebuilt")
+	state, ok := store.Status(command)
+	if !ok || state != StateUnknown {
+		t.Fatalf("crashed command state = %q, %v, want unknown", state, ok)
 	}
-	if state != StateUnknown {
-		t.Fatalf("crashed command state = %q, want unknown", state)
+	outcome, err := store.Recover(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Decision != RecoveryManualReview || outcome.State != StateManualReview {
+		t.Fatalf("recovery outcome = %+v, want manual review", outcome)
 	}
 }
 
-func TestUnknownMutationUsesLookupInsteadOfRepeatingWrite(t *testing.T) {
+func TestUnknownMutationUsesLookupInsteadOfRepeatingDispatch(t *testing.T) {
 	journal, err := audit.Open(t.TempDir(), time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity := mustLegacyIdentity(t, domain.ActionReassign, "key-committed", "args-committed")
-	lookupCalls := 0
-	store, err := NewStore(journal, func(
-		_ context.Context,
-		command Command,
-	) (platform.EffectResult, error) {
-		lookupCalls++
-		if command.Identity.Key != identity.Key {
-			t.Fatalf("lookup key = %q", command.Identity.Key)
-		}
-		return platform.EffectResult{
-			Disposition: platform.EffectSucceeded,
-			Response:    json.RawMessage(`{"order_id":"RA-committed"}`),
-		}, nil
-	})
+	defer journal.Close()
+	runtime := &testWriteRuntime{
+		dispatch: func(context.Context, platform.EffectBinding, platform.EffectRequest, domain.IdempotencyKey) platform.DispatchResult {
+			return platform.DispatchResult{
+				Disposition: platform.EffectUnknown,
+				ErrorCode:   "response_lost",
+			}
+		},
+		lookup: func(context.Context, platform.EffectBinding, domain.IdempotencyKey) platform.LookupResult {
+			return platform.LookupResult{
+				Disposition: platform.LookupApplied,
+				Response:    json.RawMessage(`{"order_id":"RA-committed"}`),
+			}
+		},
+	}
+	store, err := NewStore(journal, StoreConfig{Runtime: runtime})
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := Command{RunID: "run-committed", CallID: "call-committed", Identity: identity}
-	mutationCalls := 0
-	result, err := store.Execute(context.Background(), command, func(context.Context) (json.RawMessage, error) {
-		mutationCalls++
-		return nil, errors.New("response connection reset after commit")
-	})
+	args := `{"waybill_id":"YD2026101001","carrier_id":"CARRIER-SW-42"}`
+	command := testCommand(t, "run-unknown", "call-unknown", "key-unknown", domain.ActionReassign, args)
+	result, err := store.Execute(context.Background(), testAuthorizedEffect(t, command, args))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(result.Value) != `{"order_id":"RA-committed"}` {
-		t.Fatalf("reconciled result = %s", result.Value)
-	}
-
-	command.CallID = "call-committed-retry"
-	replayed, err := store.Execute(context.Background(), command, func(context.Context) (json.RawMessage, error) {
-		mutationCalls++
-		return nil, errors.New("mutation must not run again")
-	})
+	replayed, err := store.Execute(context.Background(), testAuthorizedEffect(t, command, args))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !replayed.Duplicate {
-		t.Fatal("reconciled result was not replayed as a duplicate")
+	if string(result.Value) != `{"order_id":"RA-committed"}` || !replayed.Duplicate {
+		t.Fatalf("results = first:%+v replayed:%+v", result, replayed)
 	}
-	if mutationCalls != 1 || lookupCalls != 1 {
-		t.Fatalf("calls = mutation:%d lookup:%d, want 1 each", mutationCalls, lookupCalls)
+	if runtime.dispatchCalls.Load() != 1 || runtime.lookupCalls.Load() != 1 {
+		t.Fatalf(
+			"calls = dispatch:%d lookup:%d, want 1 each",
+			runtime.dispatchCalls.Load(),
+			runtime.lookupCalls.Load(),
+		)
 	}
 }
 
-func mustLegacyIdentity(
-	t *testing.T,
-	action domain.Action,
+type testWriteRuntime struct {
+	dispatchCalls atomic.Int64
+	lookupCalls   atomic.Int64
+	dispatch      func(
+		context.Context,
+		platform.EffectBinding,
+		platform.EffectRequest,
+		domain.IdempotencyKey,
+	) platform.DispatchResult
+	lookup func(
+		context.Context,
+		platform.EffectBinding,
+		domain.IdempotencyKey,
+	) platform.LookupResult
+}
+
+func successfulTestRuntime() *testWriteRuntime {
+	return &testWriteRuntime{
+		dispatch: func(context.Context, platform.EffectBinding, platform.EffectRequest, domain.IdempotencyKey) platform.DispatchResult {
+			return platform.DispatchResult{
+				Disposition: platform.EffectSucceeded,
+				Response:    json.RawMessage(`{"ok":true}`),
+			}
+		},
+	}
+}
+
+func (r *testWriteRuntime) AdvertisedActions() []domain.Action {
+	return []domain.Action{
+		domain.ActionReassign,
+		domain.ActionCreateClaim,
+		domain.ActionSendSMS,
+	}
+}
+
+func (r *testWriteRuntime) Bind(
+	request platform.EffectRequest,
+	_ domain.IdempotencyKey,
+	createdAt time.Time,
+) (platform.EffectBinding, error) {
+	return platform.EffectBinding{
+		SchemaVersion:           1,
+		Action:                  request.Action,
+		AdapterID:               "test-runtime",
+		ContractVersion:         "v1",
+		ProviderOperation:       string(request.Action),
+		ProviderScopeDigest:     "scope",
+		ProviderRequestHash:     request.ArgumentsHash,
+		KeyCreatedAt:            createdAt,
+		KeyExpiresAt:            createdAt.Add(time.Hour),
+		LookupConsistencyWindow: 0,
+	}, nil
+}
+
+func (r *testWriteRuntime) Dispatch(
+	ctx context.Context,
+	binding platform.EffectBinding,
+	request platform.EffectRequest,
 	key domain.IdempotencyKey,
-	argumentsHash string,
-) Identity {
+) platform.DispatchResult {
+	r.dispatchCalls.Add(1)
+	if r.dispatch == nil {
+		return platform.DispatchResult{Disposition: platform.EffectUnknown}
+	}
+	return r.dispatch(ctx, binding, request, key)
+}
+
+func (r *testWriteRuntime) Lookup(
+	ctx context.Context,
+	binding platform.EffectBinding,
+	key domain.IdempotencyKey,
+) platform.LookupResult {
+	r.lookupCalls.Add(1)
+	if r.lookup == nil {
+		return platform.LookupResult{Disposition: platform.LookupPending}
+	}
+	return r.lookup(ctx, binding, key)
+}
+
+func (r *testWriteRuntime) SupportsRecovery(binding platform.EffectBinding) bool {
+	return binding.SchemaVersion == 1 &&
+		binding.AdapterID == "test-runtime" &&
+		binding.KeyExpiresAt.After(binding.KeyCreatedAt)
+}
+
+func testCommand(
+	t *testing.T,
+	runID domain.RunID,
+	callID string,
+	key domain.IdempotencyKey,
+	action domain.Action,
+	arguments string,
+) Command {
 	t.Helper()
-	identity, err := LegacyIdentity(action, key, argumentsHash)
+	hash, err := ArgumentsHash(arguments)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return identity
+	identity, err := LegacyIdentity(action, key, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Command{RunID: runID, CallID: callID, Identity: identity}
 }
+
+func testAuthorizedEffect(
+	t *testing.T,
+	command Command,
+	arguments string,
+) AuthorizedEffect {
+	t.Helper()
+	effect, err := AuthorizeEffect(command, platform.EffectRequest{
+		Action:        command.Identity.Action,
+		Arguments:     json.RawMessage(arguments),
+		ArgumentsHash: command.Identity.ArgumentsHash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return effect
+}
+
+var _ platform.WriteRuntime = (*testWriteRuntime)(nil)

@@ -648,18 +648,22 @@ func TestRecoverReconcilesStartedEffectWithoutStoppingService(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	binding := fixtureBindingForItem(t, clients, reassign)
+	dispatchStartedAt := time.Now().UTC()
 	if _, err := first.journal.Append(context.Background(), run.RunID, audit.Draft{
 		EventID: "write:" + string(reassign.IdempotencyKey) + ":started",
 		Actor:   audit.ActorSystem,
 		Type:    audit.EventWriteStarted,
 		Payload: map[string]any{
-			"idempotency_key":  reassign.IdempotencyKey,
-			"effect_id":        reassign.EffectID,
-			"identity_version": reassign.IdentityVersion,
-			"call_id":          reassign.CallID,
-			"action":           reassign.Action,
-			"arguments_hash":   reassign.ArgumentsHash,
-			"attempt":          1,
+			"idempotency_key":     reassign.IdempotencyKey,
+			"effect_id":           reassign.EffectID,
+			"identity_version":    reassign.IdentityVersion,
+			"call_id":             reassign.CallID,
+			"action":              reassign.Action,
+			"arguments_hash":      reassign.ArgumentsHash,
+			"attempt":             1,
+			"binding":             binding,
+			"dispatch_started_at": dispatchStartedAt,
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -721,18 +725,22 @@ func TestRecoverLeavesUnknownStartedEffectPendingWithoutStoppingService(t *testi
 	if item.CallID == "" {
 		t.Fatal("approval has no reassign effect")
 	}
+	binding := fixtureBindingForItem(t, clients, item)
+	dispatchStartedAt := time.Now().UTC()
 	if _, err := first.journal.Append(context.Background(), run.RunID, audit.Draft{
 		EventID: "write:" + string(item.IdempotencyKey) + ":started",
 		Actor:   audit.ActorSystem,
 		Type:    audit.EventWriteStarted,
 		Payload: map[string]any{
-			"idempotency_key":  item.IdempotencyKey,
-			"effect_id":        item.EffectID,
-			"identity_version": item.IdentityVersion,
-			"call_id":          item.CallID,
-			"action":           item.Action,
-			"arguments_hash":   item.ArgumentsHash,
-			"attempt":          1,
+			"idempotency_key":     item.IdempotencyKey,
+			"effect_id":           item.EffectID,
+			"identity_version":    item.IdentityVersion,
+			"call_id":             item.CallID,
+			"action":              item.Action,
+			"arguments_hash":      item.ArgumentsHash,
+			"attempt":             1,
+			"binding":             binding,
+			"dispatch_started_at": dispatchStartedAt,
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -935,6 +943,27 @@ func waitForRunStatus(t *testing.T, service *Service, runID domain.RunID, want d
 	run, _ := service.GetRun(runID)
 	t.Fatalf("timed out waiting for run status %q; run=%+v", want, run)
 	return RunView{}
+}
+
+func fixtureBindingForItem(
+	t *testing.T,
+	clients platform.Clients,
+	item approval.Item,
+) platform.EffectBinding {
+	t.Helper()
+	runtime, err := tools.NewFixtureWriteRuntime(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := runtime.Bind(platform.EffectRequest{
+		Action:        item.Action,
+		Arguments:     item.Params,
+		ArgumentsHash: item.ArgumentsHash,
+	}, item.IdempotencyKey, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return binding
 }
 
 type failingNotificationClient struct{}

@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"testing"
 	"time"
 
@@ -22,15 +21,21 @@ func TestWriteEffectMiddlewareSeparatesSameActionEffects(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer journal.Close()
-	effects, err := idempotency.NewStore(journal, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	approvals, err := approval.NewStore(journal, time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	clients, _, err := guardtools.NewDemoClients()
+	clients, mock, err := guardtools.NewDemoClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRuntime, err := guardtools.NewFixtureWriteRuntime(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effects, err := idempotency.NewStore(journal, idempotency.StoreConfig{
+		Runtime: writeRuntime,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,25 +83,14 @@ func TestWriteEffectMiddlewareSeparatesSameActionEffects(t *testing.T) {
 		guardtools.MetaAccess:       guardtools.AccessWrite,
 		guardtools.MetaContractName: string(domain.ActionSendSMS),
 	}}
-	calls := make(map[string]int)
+	nextCalls := 0
 	execute := middleware.WrapToolCall(func(
-		ctx context.Context,
+		_ context.Context,
 		_ *agents.BaseTool,
 		call *agents.ToolCall,
 	) (*agents.ToolCallResponse, error) {
-		identity, err := idempotency.ExecutionFromContext(ctx)
-		if err != nil {
-			return nil, err
-		}
-		var arguments guardtools.SendSMSInput
-		if err := json.Unmarshal([]byte(call.Arguments), &arguments); err != nil {
-			return nil, err
-		}
-		calls[string(arguments.Recipient)]++
-		return agents.ToolCallResult(
-			call,
-			fmt.Sprintf(`{"recipient":%q,"effect_id":%q}`, arguments.Recipient, identity.EffectID),
-		), nil
+		nextCalls++
+		return agents.ToolCallResult(call, `{"unexpected":true}`), nil
 	})
 
 	first, err := execute(context.Background(), tool, shipper)
@@ -110,9 +104,11 @@ func TestWriteEffectMiddlewareSeparatesSameActionEffects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls[string(guardtools.RecipientShipper)] != 1 ||
-		calls[string(guardtools.RecipientDriver)] != 1 {
-		t.Fatalf("effect calls = %#v, want one call per effect", calls)
+	if nextCalls != 0 {
+		t.Fatalf("write handler calls = %d, want 0", nextCalls)
+	}
+	if mock.WriteCount(domain.ActionSendSMS) != 2 {
+		t.Fatalf("SMS writes = %d, want 2", mock.WriteCount(domain.ActionSendSMS))
 	}
 	if *replayed.Output.OfString != *first.Output.OfString {
 		t.Fatalf("replayed output = %q, want %q", *replayed.Output.OfString, *first.Output.OfString)

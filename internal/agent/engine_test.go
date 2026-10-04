@@ -32,11 +32,17 @@ func TestScenarioAgentPausesThenExecutesApprovedWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	idempotencyStore, err := idempotency.NewStore(journal, nil)
+	clients, mock, err := guardtools.NewDemoClients()
 	if err != nil {
 		t.Fatal(err)
 	}
-	clients, mock, err := guardtools.NewDemoClients()
+	writeRuntime, err := guardtools.NewFixtureWriteRuntime(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idempotencyStore, err := idempotency.NewStore(journal, idempotency.StoreConfig{
+		Runtime: writeRuntime,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
