@@ -24,11 +24,11 @@ type SourceDescriptor struct {
 	Format        string
 	SchemaVersion string
 	DatasetID     string
-	DigestPrefix  string
+	Digest        string
 }
 
 func (s SourceDescriptor) String() string {
-	return "file:" + s.Format + ":" + s.SchemaVersion + ":" + s.DatasetID + ":" + s.DigestPrefix
+	return "file:" + s.Format + ":" + s.SchemaVersion + ":" + s.DatasetID + ":" + s.Digest
 }
 
 type Stats struct {

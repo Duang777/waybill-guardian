@@ -73,7 +73,7 @@ const waybillSchema = z
     carrier_id: z.string().min(1),
     driver_id: z.string().min(1),
     status: z.string().min(1),
-    sla_hours: z.number().int().positive(),
+    sla_hours: z.number().int().nonnegative(),
     shipper_phone: z.string().min(1),
     candidate_carriers: z.array(carrierSchema),
   })

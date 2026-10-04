@@ -37,6 +37,14 @@ func TestJSONAndCSVTemplatesProduceEquivalentSnapshots(t *testing.T) {
 	if strings.Contains(jsonLoaded.Source.String(), string(filepath.Separator)) {
 		t.Fatalf("source descriptor leaks a path: %q", jsonLoaded.Source.String())
 	}
+	if len(jsonLoaded.Source.Digest) != 64 ||
+		len(csvLoaded.Source.Digest) != 64 {
+		t.Fatalf(
+			"source digests must be complete SHA-256 values: %q, %q",
+			jsonLoaded.Source.Digest,
+			csvLoaded.Source.Digest,
+		)
+	}
 
 	jsonCase := readCase(t, jsonLoaded.Reads, "YD2026101001")
 	csvCase := readCase(t, csvLoaded.Reads, "YD2026101001")
@@ -212,6 +220,36 @@ func TestJSONParserRejectsUnknownDuplicateAndTrailingFields(t *testing.T) {
 				1,
 			),
 			want: "json dataset_id: duplicate top-level field",
+		},
+		{
+			name: "nested duplicate",
+			raw: strings.Replace(
+				valid,
+				`"origin": "杭州",`,
+				`"origin": "杭州", "origin": "南京",`,
+				1,
+			),
+			want: "json.waybills[0] origin: duplicate field",
+		},
+		{
+			name: "missing required scalar",
+			raw: strings.Replace(
+				valid,
+				`"sla_hours": 72,`,
+				"",
+				1,
+			),
+			want: "waybills[0] sla_hours: is required",
+		},
+		{
+			name: "null required boolean",
+			raw: strings.Replace(
+				valid,
+				`"fatigue_alert": true`,
+				`"fatigue_alert": null`,
+				1,
+			),
+			want: "drivers[0] fatigue_alert: is required",
 		},
 		{
 			name: "trailing",

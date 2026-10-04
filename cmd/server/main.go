@@ -639,7 +639,11 @@ func openPlatformRuntime(
 		if err != nil {
 			return platformRuntime{}, err
 		}
-		writeRuntime, err := tools.NewFixtureWriteRuntime(loaded.Reads)
+		sourceIdentity := loaded.Source.String()
+		writeRuntime, err := tools.NewFixtureWriteRuntimeForSource(
+			loaded.Reads,
+			sourceIdentity,
+		)
 		if err != nil {
 			return platformRuntime{}, err
 		}
@@ -647,7 +651,7 @@ func openPlatformRuntime(
 			reads:        loaded.Reads,
 			writeRuntime: writeRuntime,
 			profileID:    tools.FixtureRuntimeAdapterID,
-			readSource:   loaded.Source.String(),
+			readSource:   sourceIdentity,
 		}, nil
 	case "real":
 		reads, _, err := tools.NewDemoRuntime()
