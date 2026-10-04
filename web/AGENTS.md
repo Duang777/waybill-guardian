@@ -43,8 +43,8 @@ React 运营控制台。目标是在三分钟内显示异常、归因、审批�
 `npm run verify:file-e2e` 使用双运单 CSV 启动 `PLATFORM=file`，验证目录切换、旧响应抑制、
 动态路线和异常标签，以及所选运单的完整审批执行。
 
-`npm run verify:overview` 使用 72 港仿真数据验证 KPI、港网 SVG、5 单批量启动、SSE 状态、
-单运单下钻和三档响应式布局。
+`npm run verify:overview` 使用 72 港仿真数据验证 KPI、港网 SVG、5 个独立 run 与审批、
+单独确认不影响其余 4 个审批、地图下钻、轨迹异常点和三档响应式布局。
 
 `npm run record:demo` 启动隔离服务，录制确认、回放和驳回路径，再用 ffmpeg 生成带中文字幕的
 1600×900 MP4。录制文件写入已忽略的 `web/artifacts/`。

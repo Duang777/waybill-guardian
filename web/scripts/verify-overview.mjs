@@ -124,20 +124,113 @@ try {
     (await page.locator('input[type="checkbox"]:checked').count()) === 5,
     "top-five selection did not select five anomalies",
   );
+  const batchResponsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/api/runs:batch"),
+  );
   await page.getByRole("button", { name: "交给 Agent · 5", exact: true }).click();
+  const batchResponse = await batchResponsePromise;
+  assert(batchResponse.status() === 202, `batch request returned ${batchResponse.status()}`);
+  const batchResponseBody = await batchResponse.json();
   await page.getByText("5 个独立处置任务已启动", { exact: true }).waitFor();
   assert(
     Array.isArray(batchPayload?.waybill_ids) && batchPayload.waybill_ids.length === 5,
     "batch request did not contain five independent waybill IDs",
   );
-  await page.getByText("待审批", { exact: true }).first().waitFor();
+  assert(
+    batchResponseBody.requested === 5 &&
+      batchResponseBody.accepted === 5 &&
+      Array.isArray(batchResponseBody.results) &&
+      batchResponseBody.results.length === 5,
+    `batch response did not accept five runs: ${JSON.stringify(batchResponseBody)}`,
+  );
+  const acceptedRuns = batchResponseBody.results.map((item) => {
+    assert(item.error === undefined, `batch item failed: ${JSON.stringify(item)}`);
+    assert(item.run?.waybill_id === item.waybill_id, "batch run changed its waybill pairing");
+    return item.run;
+  });
+  assertUnique(
+    acceptedRuns.map((run) => run.run_id),
+    "batch run IDs",
+  );
+  assertUnique(
+    acceptedRuns.map((run) => run.waybill_id),
+    "batch waybill IDs",
+  );
+  assert(
+    sameValues(
+      acceptedRuns.map((run) => run.waybill_id),
+      batchPayload.waybill_ids,
+    ),
+    "batch response did not preserve the five requested waybills",
+  );
+  for (const run of acceptedRuns) {
+    await page
+      .locator("article")
+      .filter({ hasText: run.waybill_id })
+      .getByText("待审批", { exact: true })
+      .waitFor();
+  }
 
-  const firstDrilldown = page.locator('a[aria-label^="查看运单"]').first();
-  const href = await firstDrilldown.getAttribute("href");
+  const runToWaybill = new Map(
+    acceptedRuns.map((run) => [run.run_id, run.waybill_id]),
+  );
+  const pendingApprovals = await waitForPendingApprovals(page, backendURL, 5);
+  assertUnique(
+    pendingApprovals.map((approval) => approval.id),
+    "approval IDs",
+  );
+  for (const approval of pendingApprovals) {
+    assert(
+      runToWaybill.get(approval.run_id) === approval.waybill_id,
+      `approval changed run/waybill pairing: ${JSON.stringify(approval)}`,
+    );
+  }
+
+  const confirmedApproval = pendingApprovals[0];
+  const remainingApprovals = pendingApprovals.slice(1);
+  const confirmResponse = await page.request.post(
+    `${backendURL}/api/approvals/${encodeURIComponent(confirmedApproval.id)}/confirm`,
+    { data: {} },
+  );
+  assert(
+    confirmResponse.ok(),
+    `approval confirmation returned ${confirmResponse.status()}`,
+  );
+  const confirmedBody = await confirmResponse.json();
+  assert(
+    confirmedBody.id === confirmedApproval.id &&
+      confirmedBody.run_id === confirmedApproval.run_id &&
+      confirmedBody.waybill_id === confirmedApproval.waybill_id &&
+      confirmedBody.status === "executed",
+    `confirmation changed approval identity: ${JSON.stringify(confirmedBody)}`,
+  );
+  const stillPending = await waitForPendingApprovals(page, backendURL, 4);
+  assert(
+    sameApprovalSet(stillPending, remainingApprovals),
+    "confirming one approval changed one of the other four approvals",
+  );
+  await page
+    .locator("article")
+    .filter({ hasText: confirmedApproval.waybill_id })
+    .getByText("已闭环", { exact: true })
+    .waitFor();
+
+  const mapDrilldown = page.locator('svg a[aria-label^="下钻 "]').first();
+  const href = await mapDrilldown.getAttribute("href");
   assert(
     typeof href === "string" && /^\/waybills\/YD\d{10}$/.test(href),
-    `invalid drilldown URL: ${href}`,
+    `invalid map drilldown URL: ${href}`,
   );
+  const drilldownWaybillID = href.split("/").at(-1);
+  const waybillResponse = await page.request.get(
+    `${backendURL}/api/waybills/${encodeURIComponent(drilldownWaybillID)}`,
+  );
+  assert(waybillResponse.ok(), `drilldown waybill returned ${waybillResponse.status()}`);
+  const waybillBody = await waybillResponse.json();
+  const anomalyPoint = waybillBody.tracking?.find((point) => point.anomaly);
+  assert(anomalyPoint !== undefined, "map drilldown waybill has no anomaly point");
 
   await page.setViewportSize({ width: 375, height: 812 });
   assert(!(await hasHorizontalOverflow(page)), "375px overview overflowed horizontally");
@@ -156,9 +249,28 @@ try {
     path: join(artifactDir, "overview-mobile-320.png"),
   });
 
-  await firstDrilldown.click();
-  await page.waitForURL(/\/waybills\/YD\d{10}$/);
+  await mapDrilldown.click();
+  await page.waitForURL(`${webURL}${href}`);
+  assert(
+    new URL(page.url()).pathname === href,
+    `map drilldown opened ${page.url()}, want ${href}`,
+  );
   await page.getByRole("heading", { name: "异常轨迹", exact: true }).waitFor();
+  const routePoints = page.locator(
+    'button[aria-label^="查看"][aria-label$="轨迹点"]',
+  );
+  await routePoints.first().waitFor();
+  assert(
+    (await routePoints.count()) >= 3,
+    "workbench did not render route-point controls",
+  );
+  await page
+    .getByRole("button", {
+      name: `查看${anomalyPoint.label}轨迹点`,
+      exact: true,
+    })
+    .waitFor();
+  await page.getByText(anomalyPoint.label, { exact: true }).last().waitFor();
   assert(
     await page.getByRole("link", { name: "返回全国经营总览", exact: true }).isVisible(),
     "workbench does not provide a return path to the overview",
@@ -172,6 +284,9 @@ try {
         routes: 72,
         primary_kpis: 4,
         batch_runs: 5,
+        independent_approvals: 5,
+        approvals_left_pending: 4,
+        map_drilldown_waybill: drilldownWaybillID,
         responsive_widths: [1280, 375, 320],
       },
       null,
@@ -199,6 +314,50 @@ async function undersizedButtons(page) {
       })
       .map((button) => button.getAttribute("aria-label") ?? button.textContent?.trim() ?? "button"),
   );
+}
+
+async function waitForPendingApprovals(page, backendURL, expectedCount) {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const response = await page.request.get(
+      `${backendURL}/api/approvals?status=pending`,
+    );
+    assert(response.ok(), `pending approvals returned ${response.status()}`);
+    const body = await response.json();
+    if (Array.isArray(body.approvals) && body.approvals.length === expectedCount) {
+      return body.approvals;
+    }
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`timed out waiting for ${expectedCount} pending approvals`);
+}
+
+function sameApprovalSet(actual, expected) {
+  const expectedByID = new Map(
+    expected.map((approval) => [
+      approval.id,
+      `${approval.run_id}\u0000${approval.waybill_id}`,
+    ]),
+  );
+  return (
+    actual.length === expected.length &&
+    actual.every(
+      (approval) =>
+        expectedByID.get(approval.id) ===
+        `${approval.run_id}\u0000${approval.waybill_id}`,
+    )
+  );
+}
+
+function sameValues(actual, expected) {
+  return (
+    actual.length === expected.length &&
+    actual.every((value) => expected.includes(value))
+  );
+}
+
+function assertUnique(values, label) {
+  assert(new Set(values).size === values.length, `${label} are not unique`);
 }
 
 function assert(condition, message) {
