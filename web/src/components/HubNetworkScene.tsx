@@ -33,8 +33,16 @@ type HubNetworkSceneProps = {
   paused: boolean;
   onSelectHub: (hubID: string) => void;
   onSelectWaybill: (waybillID: WaybillID) => void;
+  onFailure: () => void;
   onReady: () => void;
   onDrawCalls: (drawCalls: number) => void;
+  onStats: (stats: SceneStats) => void;
+};
+
+export type SceneStats = {
+  hubs: number;
+  routes: number;
+  markers: number;
 };
 
 type SceneHub = {
@@ -64,8 +72,10 @@ const coordinateBounds = {
 
 const sceneWidth = 22;
 const sceneDepth = 12;
+const maxFlowMarkersPerRoute = 4;
 const transform = new Object3D();
 const markerTransform = new Matrix4();
+const markerPoint = new Vector3();
 
 export default function HubNetworkScene({
   hubs,
@@ -76,8 +86,10 @@ export default function HubNetworkScene({
   paused,
   onSelectHub,
   onSelectWaybill,
+  onFailure,
   onReady,
   onDrawCalls,
+  onStats,
 }: HubNetworkSceneProps) {
   const model = useMemo(
     () => buildSceneModel(hubs, routes, anomalies),
@@ -86,6 +98,14 @@ export default function HubNetworkScene({
   const selectedHub = selectedHubID === null
     ? undefined
     : model.hubsByID.get(selectedHubID);
+
+  useEffect(() => {
+    onStats({
+      hubs: model.hubs.length,
+      routes: model.routes.length,
+      markers: model.markers.length,
+    });
+  }, [model, onStats]);
 
   return (
     <Canvas
@@ -106,6 +126,7 @@ export default function HubNetworkScene({
       <ambientLight intensity={2.2} />
       <hemisphereLight args={["#ffffff", "#b9cbc8", 1.5]} />
       <directionalLight position={[8, 14, 10]} intensity={2.4} />
+      <WebGLContextObserver onFailure={onFailure} />
 
       <StrategyTable />
       <RouteLines routes={model.routes} />
@@ -374,7 +395,7 @@ function FlowMarkerInstances({
       }
       markers.forEach((marker, index) => {
         const progress = (marker.phase + time * marker.speed) % 1;
-        const point = marker.route.curve.getPointAt(progress);
+        const point = marker.route.curve.getPointAt(progress, markerPoint);
         markerTransform.makeScale(scale, scale, scale);
         markerTransform.setPosition(point);
         mesh.current?.setMatrixAt(index, markerTransform);
@@ -591,6 +612,9 @@ function SceneReporter({
 
   useFrame(() => {
     frame.current += 1;
+    if (import.meta.env.DEV) {
+      gl.domElement.dataset.sceneFrame = String(frame.current);
+    }
     if (frame.current === 1) {
       onReady();
       invalidate();
@@ -603,7 +627,27 @@ function SceneReporter({
   return null;
 }
 
-function buildSceneModel(
+function WebGLContextObserver({ onFailure }: { onFailure: () => void }) {
+  const { gl } = useThree();
+
+  useEffect(() => {
+    const canvas = gl.domElement;
+    const handleContextLoss = (event: Event) => {
+      event.preventDefault();
+      onFailure();
+    };
+    canvas.addEventListener("webglcontextlost", handleContextLoss, {
+      once: true,
+    });
+    return () => {
+      canvas.removeEventListener("webglcontextlost", handleContextLoss);
+    };
+  }, [gl, onFailure]);
+
+  return null;
+}
+
+export function buildSceneModel(
   hubs: readonly HubOverview[],
   routes: readonly RouteOverview[],
   anomalies: readonly AnomalyOverview[],
@@ -615,11 +659,16 @@ function buildSceneModel(
     height: 0.28 + (hub.in_flight / maxInFlight) * 0.82,
   }));
   const hubsByID = new Map(sceneHubs.map((item) => [item.hub.hub_id, item]));
-  const anomalyByRoute = new Map(
-    anomalies.flatMap((item) =>
-      item.route_id === undefined ? [] : [[item.route_id, item] as const],
-    ),
-  );
+  const anomalyByRoute = new Map<string, AnomalyOverview>();
+  for (const item of anomalies) {
+    if (item.route_id === undefined) {
+      continue;
+    }
+    const current = anomalyByRoute.get(item.route_id);
+    if (current === undefined || item.risk_score > current.risk_score) {
+      anomalyByRoute.set(item.route_id, item);
+    }
+  }
   const sceneRoutes = routes.flatMap((route) => {
     const origin = hubsByID.get(route.origin_hub_id);
     const destination = hubsByID.get(route.destination_hub_id);
@@ -640,18 +689,22 @@ function buildSceneModel(
       anomaly: anomalyByRoute.get(route.route_id),
     }];
   });
-  const markers = sceneRoutes.flatMap((route, routeIndex) =>
-    Array.from({ length: route.route.waybills }, (_, markerIndex) => ({
+  const markers = sceneRoutes.flatMap((route, routeIndex) => {
+    const markerCount = Math.min(
+      route.route.waybills,
+      maxFlowMarkersPerRoute,
+    );
+    return Array.from({ length: markerCount }, (_, markerIndex) => ({
       route,
       phase:
         ((routeIndex * 0.61803398875 +
-          markerIndex / Math.max(route.route.waybills, 1)) %
+          markerIndex / Math.max(markerCount, 1)) %
           1 +
           1) %
         1,
       speed: 0.025 + ((routeIndex * 7 + markerIndex * 3) % 11) * 0.002,
-    })),
-  );
+    }));
+  });
 
   return {
     hubs: sceneHubs,

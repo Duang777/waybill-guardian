@@ -77,7 +77,7 @@ card uses `0 12px 32px oklch(0.22 0.02 255 / 0.10)`. No blur or glass effect is 
 
 - Do keep evidence and proposed effects visible without opening another surface.
 - Do link the selected route point to its timestamp and speed.
-- Do use amber only for an unresolved incident or approval.
+- Do use coral only for an unresolved incident or approval.
 - Do keep event sequence numbers aligned and readable.
 - Do keep the 3D network useful as a static frame under reduced motion.
 - Do retain the SVG network as an automatic WebGL/error fallback.
@@ -100,10 +100,10 @@ horizontal scrolling.
 
 ## 9. Agent prompt guide
 
-- "Create a flush operations panel on `oklch(0.992 0.003 95)` with 1 px
-  `oklch(0.875 0.012 95)` dividers, 8 px radius, and no shadow."
-- "Create a pending approval card with a 6 px radius, `oklch(0.94 0.045 75)` header,
-  13 px body text, and a single `oklch(0.69 0.145 67)` primary action."
+- "Create a flush operations panel on `oklch(1 0 0)` with 1 px
+  `oklch(0.91 0.009 220)` dividers, 8 px radius, and no shadow."
+- "Create a pending approval card with a 6 px radius, `oklch(0.96 0.035 29)` header,
+  13 px body text, and a single `oklch(0.62 0.18 29)` primary action."
 - "Create a compact event row with a 48 px sequence column in monospace, 13 px event title,
   12 px metadata, and a 1 px divider."
 - "Create a three-option queue segment on `oklch(0.94 0.004 210)` with 3 px track padding,

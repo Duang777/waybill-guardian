@@ -21,6 +21,7 @@ import {
   type KPIReport,
   type KPIMetric,
   type Overview,
+  type RunID,
   type RunStatus,
   type WaybillID,
 } from "./api";
@@ -39,6 +40,11 @@ type BatchState =
 
 type QueueView = "all" | "unassigned" | "active";
 
+type RunProjection = {
+  runID: RunID;
+  status: RunStatus;
+};
+
 const primaryKPIKeys = [
   "time_recovered_hours",
   "cost_impact_cny",
@@ -55,8 +61,8 @@ const queueViews = [
 export function OverviewPage() {
   const [resource, setResource] = useState<OverviewResource>({ kind: "loading" });
   const [selected, setSelected] = useState<ReadonlySet<WaybillID>>(new Set());
-  const [runStatuses, setRunStatuses] = useState<
-    ReadonlyMap<WaybillID, RunStatus>
+  const [runProjections, setRunProjections] = useState<
+    ReadonlyMap<WaybillID, RunProjection>
   >(new Map());
   const [batch, setBatch] = useState<BatchState>({ kind: "idle" });
   const [queueView, setQueueView] = useState<QueueView>("all");
@@ -108,12 +114,18 @@ export function OverviewPage() {
   }, [resource]);
   const queueEntries = useMemo(
     () =>
-      anomalies.map((item, index) => ({
-        item,
-        rank: index + 1,
-        status: runStatuses.get(item.waybill_id) ?? item.run_status,
-      })),
-    [anomalies, runStatuses],
+      anomalies.map((item, index) => {
+        const projection = runProjections.get(item.waybill_id);
+        const projectionIsCurrent =
+          projection !== undefined &&
+          (item.run_id === undefined || item.run_id === projection.runID);
+        return {
+          item,
+          rank: index + 1,
+          status: projectionIsCurrent ? projection.status : item.run_status,
+        };
+      }),
+    [anomalies, runProjections],
   );
   const queueCounts = useMemo(
     () => ({
@@ -156,7 +168,12 @@ export function OverviewPage() {
 
   const selectTopFive = () => {
     setSelected(
-      new Set(visibleQueueEntries.slice(0, 5).map((entry) => entry.item.waybill_id)),
+      new Set(
+        visibleQueueEntries
+          .filter((entry) => !isActive(entry.status))
+          .slice(0, 5)
+          .map((entry) => entry.item.waybill_id),
+      ),
     );
   };
 
@@ -164,19 +181,39 @@ export function OverviewPage() {
     if (selected.size === 0 || batch.kind === "starting") {
       return;
     }
+    const activeWaybillIDs = new Set(
+      queueEntries
+        .filter((entry) => isActive(entry.status))
+        .map((entry) => entry.item.waybill_id),
+    );
+    const requestedWaybillIDs = [...selected].filter(
+      (waybillID) => !activeWaybillIDs.has(waybillID),
+    );
+    if (requestedWaybillIDs.length === 0) {
+      setSelected(new Set());
+      setBatch({
+        kind: "result",
+        failed: 0,
+        message: "所选运单已在处置中",
+      });
+      return;
+    }
     setBatch({ kind: "starting" });
     try {
-      const result = await startBatch([...selected]);
+      const result = await startBatch(requestedWaybillIDs);
       const accepted = result.results.filter(
         (
           item,
         ): item is typeof item & { run: NonNullable<typeof item.run> } =>
           item.run !== undefined,
       );
-      setRunStatuses((current) => {
+      setRunProjections((current) => {
         const next = new Map(current);
         for (const item of accepted) {
-          next.set(item.waybill_id, item.run.status);
+          next.set(item.waybill_id, {
+            runID: item.run.run_id,
+            status: item.run.status,
+          });
         }
         return next;
       });
@@ -187,9 +224,12 @@ export function OverviewPage() {
           onEvent: (event) => {
             const status = statusFromEvent(event);
             if (status !== null) {
-              setRunStatuses((current) => {
+              setRunProjections((current) => {
                 const next = new Map(current);
-                next.set(item.waybill_id, status);
+                next.set(item.waybill_id, {
+                  runID: item.run.run_id,
+                  status,
+                });
                 return next;
               });
             }
@@ -216,7 +256,7 @@ export function OverviewPage() {
     } catch (error) {
       setBatch({
         kind: "result",
-        failed: selected.size,
+        failed: requestedWaybillIDs.length,
         message: errorMessage(error),
       });
     }
@@ -364,7 +404,11 @@ export function OverviewPage() {
                     <button
                       className={styles.selectButton}
                       type="button"
-                      disabled={visibleQueueEntries.length === 0}
+                      disabled={
+                        !visibleQueueEntries.some(
+                          (entry) => !isActive(entry.status),
+                        )
+                      }
                       onClick={selectTopFive}
                     >
                       <CheckCheck aria-hidden="true" size={15} />
@@ -409,7 +453,9 @@ export function OverviewPage() {
                             <input
                               type="checkbox"
                               checked={selected.has(item.waybill_id)}
-                              disabled={batch.kind === "starting"}
+                              disabled={
+                                batch.kind === "starting" || isActive(status)
+                              }
                               onChange={() => toggleSelection(item.waybill_id)}
                             />
                             <span className={styles.srOnly}>选择 {item.waybill_id}</span>

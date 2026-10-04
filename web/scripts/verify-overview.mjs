@@ -106,6 +106,10 @@ try {
         .querySelector('[data-network-renderer="webgl"]')
         ?.getAttribute("data-scene-ready") === "true",
   );
+  await page.waitForFunction(() => {
+    const stage = document.querySelector('[data-network-renderer="webgl"]');
+    return Number(stage?.getAttribute("data-scene-hubs")) > 0;
+  });
   const networkCanvas = networkMap.locator("canvas");
   const drawCalls = Number(await networkMap.getAttribute("data-draw-calls"));
   assert(
@@ -117,6 +121,37 @@ try {
     pixelProbe !== null && pixelProbe.colors >= 3,
     `3D network canvas is blank: ${JSON.stringify(pixelProbe)}`,
   );
+  const overviewResponse = await page.request.get(`${backendURL}/api/overview`);
+  assert(
+    overviewResponse.ok(),
+    `overview verification request returned ${overviewResponse.status()}`,
+  );
+  const overviewBody = await overviewResponse.json();
+  const sceneCounts = {
+    hubs: Number(await networkMap.getAttribute("data-scene-hubs")),
+    routes: Number(await networkMap.getAttribute("data-scene-routes")),
+    markers: Number(await networkMap.getAttribute("data-scene-markers")),
+  };
+  const expectedSceneCounts = {
+    hubs: overviewBody.hubs.length,
+    routes: overviewBody.routes.length,
+    markers: overviewBody.routes.reduce(
+      (count, route) => count + Math.min(route.waybills, 4),
+      0,
+    ),
+  };
+  assert(
+    JSON.stringify(sceneCounts) === JSON.stringify(expectedSceneCounts),
+    `3D scene counts ${JSON.stringify(sceneCounts)}, want ${JSON.stringify(expectedSceneCounts)}`,
+  );
+  const firstHub = overviewBody.hubs[0];
+  const hubPicker = page.getByLabel("选择公路港", { exact: true });
+  await hubPicker.selectOption(firstHub.hub_id);
+  await page
+    .locator('[role="status"]')
+    .getByText(firstHub.name, { exact: true })
+    .waitFor();
+  await hubPicker.selectOption("");
   const mapBounds = await networkMap.boundingBox();
   assert(
     mapBounds !== null && mapBounds.width > 600 && mapBounds.height > 400,
@@ -156,7 +191,7 @@ try {
     !firstFlowFrame.equals(secondFlowFrame),
     "shipment markers did not move between animation frames",
   );
-  const measuredFPS = await measureAnimationFPS(page, 90);
+  const measuredFPS = await measureSceneFPS(networkCanvas, 90);
   assert(
     measuredFPS >= 50,
     `3D network measured ${measuredFPS.toFixed(1)} FPS, want at least 50`,
@@ -179,11 +214,20 @@ try {
   });
   await page.setViewportSize({ width: 1280, height: 900 });
   assert(!(await hasHorizontalOverflow(page)), "1280px overview overflowed horizontally");
+  const clippedKPIText = await clippedText(
+    page,
+    'section[aria-label="24 小时经营指标"] article > span:last-child',
+  );
+  assert(
+    clippedKPIText.length === 0,
+    `1280px KPI text was clipped: ${clippedKPIText.join(", ")}`,
+  );
   await page.screenshot({
     path: join(artifactDir, "overview-desktop.png"),
   });
 
   await verifyReducedMotion(browser, webURL);
+  await verifyWebGLContextLoss(browser, webURL);
   await verifyWebGLFallback(webURL);
 
   await page.getByRole("button", { name: "选择前 5", exact: true }).click();
@@ -243,6 +287,14 @@ try {
   assert(
     (await queueItems.count()) === acceptedRuns.length,
     "active queue view did not isolate the five running incidents",
+  );
+  assert(
+    await riskQueue.getByRole("button", { name: "选择前 5", exact: true }).isDisabled(),
+    "active queue view allowed selecting runs already in progress",
+  );
+  assert(
+    (await riskQueue.locator('input[type="checkbox"]:not(:disabled)').count()) === 0,
+    "active queue view allowed restarting an in-progress waybill",
   );
   await riskQueue.getByRole("radio", { name: "全部", exact: true }).check();
 
@@ -312,7 +364,7 @@ try {
   });
   await page.setViewportSize({ width: 320, height: 812 });
   assert(!(await hasHorizontalOverflow(page)), "320px overview overflowed horizontally");
-  const undersized = await undersizedButtons(page);
+  const undersized = await undersizedControls(page);
   assert(
     undersized.length === 0,
     `320px controls smaller than 40px: ${undersized.join(", ")}`,
@@ -352,8 +404,9 @@ try {
     JSON.stringify(
       {
         first_visible_ms: Math.round(visibleInMilliseconds),
-        hubs: 72,
-        routes: 72,
+        hubs: sceneCounts.hubs,
+        routes: sceneCounts.routes,
+        markers: sceneCounts.markers,
         renderer: "webgl",
         draw_calls: drawCalls,
         sampled_canvas_colors: pixelProbe.colors,
@@ -417,19 +470,22 @@ async function probeCanvasPixels(canvas) {
   });
 }
 
-async function measureAnimationFPS(page, frames) {
-  return page.evaluate(
-    (frameCount) =>
+async function measureSceneFPS(canvas, frames) {
+  return canvas.evaluate(
+    (element, frameCount) =>
       new Promise((resolve) => {
-        let count = 0;
-        let startedAt = 0;
-        const tick = (time) => {
-          if (count === 0) {
-            startedAt = time;
+        const firstFrame = Number(element.dataset.sceneFrame);
+        const startedAt = performance.now();
+        const tick = () => {
+          const currentFrame = Number(element.dataset.sceneFrame);
+          const renderedFrames = currentFrame - firstFrame;
+          const elapsed = performance.now() - startedAt;
+          if (renderedFrames >= frameCount) {
+            resolve((renderedFrames * 1_000) / elapsed);
+            return;
           }
-          count += 1;
-          if (count >= frameCount) {
-            resolve(((count - 1) * 1_000) / (time - startedAt));
+          if (elapsed >= 5_000) {
+            resolve((renderedFrames * 1_000) / elapsed);
             return;
           }
           requestAnimationFrame(tick);
@@ -461,6 +517,46 @@ async function verifyReducedMotion(browser, webURL) {
     assert(
       firstFrame.equals(secondFrame),
       "reduced-motion network continued animating",
+    );
+  } finally {
+    await page.close();
+  }
+}
+
+async function verifyWebGLContextLoss(browser, webURL) {
+  const page = await browser.newPage({
+    viewport: { width: 1280, height: 900 },
+  });
+  try {
+    await page.goto(webURL, { waitUntil: "networkidle" });
+    const stage = page.locator('[data-network-renderer="webgl"]');
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[data-network-renderer="webgl"]')
+          ?.getAttribute("data-scene-ready") === "true",
+    );
+    const lost = await stage.locator("canvas").evaluate((element) => {
+      const gl = element.getContext("webgl2");
+      const extension = gl?.getExtension("WEBGL_lose_context");
+      if (extension === null || extension === undefined) {
+        return false;
+      }
+      extension.loseContext();
+      return true;
+    });
+    assert(lost, "browser did not expose WEBGL_lose_context");
+    const fallback = page.locator('[data-network-renderer="svg"]');
+    await fallback.waitFor();
+    assert(
+      (await fallback.locator("canvas").count()) === 0,
+      "context-lost page kept the failed WebGL canvas",
+    );
+    assert(
+      (await fallback.getByRole("img", {
+        name: /全国公路港异常网络/,
+      }).locator("circle").count()) >= 72,
+      "context-lost page did not render the SVG fallback",
     );
   } finally {
     await page.close();
@@ -500,14 +596,38 @@ async function verifyWebGLFallback(webURL) {
   }
 }
 
-async function undersizedButtons(page) {
-  return page.locator("button").evaluateAll((buttons) =>
-    buttons
-      .filter((button) => {
-        const bounds = button.getBoundingClientRect();
-        return bounds.width < 40 || bounds.height < 40;
-      })
-      .map((button) => button.getAttribute("aria-label") ?? button.textContent?.trim() ?? "button"),
+async function undersizedControls(page) {
+  return page
+    .locator('button, select, input[type="checkbox"], input[type="radio"]')
+    .evaluateAll((controls) =>
+      controls
+        .filter((control) => {
+          const target =
+            control instanceof HTMLInputElement
+              ? control.closest("label") ?? control
+              : control;
+          const bounds = target.getBoundingClientRect();
+          return bounds.width < 40 || bounds.height < 40;
+        })
+        .map(
+          (control) =>
+            control.getAttribute("aria-label") ??
+            control.textContent?.trim() ??
+            control.getAttribute("type") ??
+            "control",
+        ),
+    );
+}
+
+async function clippedText(page, selector) {
+  return page.locator(selector).evaluateAll((elements) =>
+    elements
+      .filter(
+        (element) =>
+          element.scrollWidth > element.clientWidth ||
+          element.scrollHeight > element.clientHeight,
+      )
+      .map((element) => element.textContent?.trim() ?? selector),
   );
 }
 

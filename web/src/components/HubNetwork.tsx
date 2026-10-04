@@ -17,6 +17,7 @@ import type {
   RouteOverview,
   WaybillID,
 } from "../api";
+import type { SceneStats } from "./HubNetworkScene";
 import styles from "../overview.module.css";
 import { NetworkMap } from "./NetworkMap";
 
@@ -44,6 +45,7 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
   const [sceneFailed, setSceneFailed] = useState(false);
   const [sceneReady, setSceneReady] = useState(false);
   const [drawCalls, setDrawCalls] = useState<number | null>(null);
+  const [sceneStats, setSceneStats] = useState<SceneStats | null>(null);
   const [selectedHubID, setSelectedHubID] = useState<string | null>(null);
 
   const hubByID = useMemo(
@@ -72,6 +74,10 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
     setSelectedHubID(null);
   }, []);
 
+  const useSceneFallback = useCallback(() => {
+    setSceneFailed(true);
+  }, []);
+
   const openWaybill = useCallback((waybillID: WaybillID) => {
     window.location.assign(`/waybills/${encodeURIComponent(waybillID)}`);
   }, []);
@@ -93,15 +99,18 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
     <div
       className={styles.networkStage}
       role="region"
-      aria-label={`全国公路港三维网络，${hubs.length} 个港口，${routes.length} 条线路`}
+      aria-label={`全国公路港网络，${hubs.length} 个港口，${routes.length} 条线路`}
       data-network-renderer={useFallback ? "svg" : "webgl"}
       data-scene-ready={sceneReady ? "true" : "false"}
       data-draw-calls={drawCalls ?? ""}
+      data-scene-hubs={sceneStats?.hubs ?? ""}
+      data-scene-routes={sceneStats?.routes ?? ""}
+      data-scene-markers={sceneStats?.markers ?? ""}
     >
       {useFallback ? (
         <NetworkMap hubs={hubs} routes={routes} anomalies={anomalies} />
       ) : (
-        <SceneFailureBoundary onFailure={() => setSceneFailed(true)}>
+        <SceneFailureBoundary onFailure={useSceneFallback}>
           <Suspense fallback={<SceneLoading />}>
             <HubNetworkScene
               hubs={hubs}
@@ -112,8 +121,10 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
               paused={!pageVisible}
               onSelectHub={setSelectedHubID}
               onSelectWaybill={openWaybill}
+              onFailure={useSceneFallback}
               onReady={() => setSceneReady(true)}
               onDrawCalls={setDrawCalls}
+              onStats={setSceneStats}
             />
           </Suspense>
         </SceneFailureBoundary>
@@ -124,26 +135,6 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
           <div className={styles.sceneIdentity}>
             <span>WG / LIVE NETWORK</span>
             <strong>{hubs.length} HUBS</strong>
-          </div>
-          <div className={styles.sceneControls}>
-            <button
-              type="button"
-              onClick={focusTopRisk}
-              disabled={topRiskHub === undefined}
-              aria-label="聚焦最高风险"
-              title="聚焦最高风险"
-            >
-              <Crosshair aria-hidden="true" size={17} />
-            </button>
-            <button
-              type="button"
-              onClick={resetView}
-              disabled={selectedHubID === null}
-              aria-label="复位网络视角"
-              title="复位视角"
-            >
-              <RotateCcw aria-hidden="true" size={17} />
-            </button>
           </div>
           <div className={styles.sceneRegions} aria-hidden="true">
             <span>西北</span>
@@ -157,43 +148,62 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
             <span><i className={styles.sceneFlowKey} />运输流</span>
             <span><i className={styles.sceneRiskKey} />风险</span>
           </div>
-          {selectedHub !== undefined && (
-            <div className={styles.sceneSelection} role="status">
-              <span>{selectedHub.province} / {selectedHub.city}</span>
-              <strong>{selectedHub.name}</strong>
-              <dl>
-                <div><dt>在途</dt><dd>{selectedHub.in_flight}</dd></div>
-                <div><dt>异常</dt><dd>{selectedHub.anomalies}</dd></div>
-                <div><dt>处置中</dt><dd>{selectedHub.handling}</dd></div>
-              </dl>
-              {selectedAnomaly !== undefined && (
-                <a
-                  href={`/waybills/${encodeURIComponent(selectedAnomaly.waybill_id)}`}
-                  aria-label={`下钻 ${selectedHub.name} 的高风险运单 ${selectedAnomaly.waybill_id}`}
-                >
-                  查看 {selectedAnomaly.waybill_id}
-                </a>
-              )}
-            </div>
-          )}
         </>
       )}
 
-      <nav className={styles.sceneAccessibleLinks} aria-label="风险港口下钻">
-        {hubs.flatMap((hub) => {
-          const anomaly = anomalyForHub(hub, anomalies);
-          return anomaly === undefined
-            ? []
-            : [
-                <a
-                  key={hub.hub_id}
-                  href={`/waybills/${encodeURIComponent(anomaly.waybill_id)}`}
-                >
-                  下钻 {hub.name} 的高风险运单 {anomaly.waybill_id}
-                </a>,
-              ];
-        })}
-      </nav>
+      <div className={styles.sceneControls}>
+        <select
+          value={selectedHubID ?? ""}
+          aria-label="选择公路港"
+          onChange={(event) => {
+            setSelectedHubID(event.target.value || null);
+          }}
+        >
+          <option value="">选择港口</option>
+          {hubs.map((hub) => (
+            <option key={hub.hub_id} value={hub.hub_id}>
+              {hub.name}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={focusTopRisk}
+          disabled={topRiskHub === undefined}
+          aria-label="聚焦最高风险"
+          title="聚焦最高风险"
+        >
+          <Crosshair aria-hidden="true" size={17} />
+        </button>
+        <button
+          type="button"
+          onClick={resetView}
+          disabled={selectedHubID === null}
+          aria-label="复位网络视角"
+          title="复位视角"
+        >
+          <RotateCcw aria-hidden="true" size={17} />
+        </button>
+      </div>
+      {selectedHub !== undefined && (
+        <div className={styles.sceneSelection} role="status">
+          <span>{selectedHub.province} / {selectedHub.city}</span>
+          <strong>{selectedHub.name}</strong>
+          <dl>
+            <div><dt>在途</dt><dd>{selectedHub.in_flight}</dd></div>
+            <div><dt>异常</dt><dd>{selectedHub.anomalies}</dd></div>
+            <div><dt>处置中</dt><dd>{selectedHub.handling}</dd></div>
+          </dl>
+          {selectedAnomaly !== undefined && (
+            <a
+              href={`/waybills/${encodeURIComponent(selectedAnomaly.waybill_id)}`}
+              aria-label={`下钻 ${selectedHub.name} 的高风险运单 ${selectedAnomaly.waybill_id}`}
+            >
+              查看 {selectedAnomaly.waybill_id}
+            </a>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -268,9 +278,12 @@ function supportsWebGL(): boolean {
     const options: WebGLContextAttributes = {
       failIfMajorPerformanceCaveat: true,
     };
-    const gl =
-      canvas.getContext("webgl2", options) ??
-      canvas.getContext("webgl", options);
+    const gl = canvas.getContext("webgl2", {
+      ...options,
+      alpha: false,
+      antialias: true,
+      powerPreference: "high-performance",
+    });
     if (gl === null) {
       return false;
     }
