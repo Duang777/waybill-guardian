@@ -263,6 +263,30 @@ export function latestProposal(events: readonly AuditEvent[]): Proposal | null {
   return current;
 }
 
+export function proposalForApproval(
+  events: readonly AuditEvent[],
+  approval: Approval | null,
+): Proposal | null {
+  if (approval?.proposal_ref === undefined) {
+    return null;
+  }
+  const reference = approval.proposal_ref;
+  const event = events.find((candidate) => candidate.event_id === reference.event_id);
+  if (event?.type !== "proposal_prepared") {
+    return null;
+  }
+  const parsed = preparedProposalSchema.safeParse(event.payload);
+  if (
+    !parsed.success ||
+    parsed.data.approval_id !== approval.id ||
+    parsed.data.proposal_id !== reference.proposal_id ||
+    parsed.data.proposal.digest !== reference.digest
+  ) {
+    return null;
+  }
+  return parsed.data.proposal;
+}
+
 export type InferenceMode =
   | { kind: "online"; model: string | null; apiStyle: string | null }
   | { kind: "offline" }

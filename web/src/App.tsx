@@ -30,7 +30,7 @@ import {
 import {
   initialTimelineState,
   latestApproval,
-  latestProposal,
+  proposalForApproval,
   runStatus,
   timelineReducer,
   visibleEvents,
@@ -334,7 +334,10 @@ function WaybillWorkbench({
 
   const projectedEvents = useMemo(() => visibleEvents(timeline), [timeline]);
   const currentApproval = useMemo(() => latestApproval(projectedEvents), [projectedEvents]);
-  const currentProposal = useMemo(() => latestProposal(projectedEvents), [projectedEvents]);
+  const currentProposal = useMemo(
+    () => proposalForApproval(projectedEvents, currentApproval),
+    [currentApproval, projectedEvents],
+  );
   const currentStatus =
     runStatus(projectedEvents) ??
     (timeline.playback.kind === "live" ? (run?.status ?? null) : null);

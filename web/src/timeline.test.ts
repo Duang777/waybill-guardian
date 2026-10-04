@@ -11,6 +11,7 @@ import {
   latestApproval,
   latestProposal,
   playbackCursor,
+  proposalForApproval,
   runStatus,
   timelineReducer,
   visibleEvents,
@@ -31,6 +32,82 @@ function event(seq: number, type: AuditEventType, payload: unknown) {
     prev_hash: hash,
     hash,
   });
+}
+
+function preparedProposalPayload({
+  approvalID,
+  planVersion,
+  digest,
+  carrierID,
+}: {
+  approvalID: string;
+  planVersion: number;
+  digest: string;
+  carrierID: string;
+}) {
+  return {
+    proposal_id: `proposal:${approvalID}`,
+    approval_id: approvalID,
+    sdk_run_id: `sdk-${planVersion}`,
+    plan_version: planVersion,
+    proposal: {
+      schema_version: "proposal.v1",
+      summary: "司机疲劳与异常停留造成延误风险。",
+      confidence_bps: 8600,
+      attribution: [
+        {
+          factor: "司机连续驾驶时间过长",
+          confidence_bps: 9100,
+          evidence: [
+            {
+              tool_call_id: "call-driver",
+              field_path: "/continuous_drive_hours",
+              value: 9,
+              display_value: "9",
+              source_event_id: "tool:call-driver:result",
+              source_seq: 1,
+              source_hash: hash,
+            },
+          ],
+        },
+      ],
+      alternatives: [
+        {
+          carrier_id: carrierID,
+          reason: "时效和历史履约率更优",
+        },
+      ],
+      expected_impact: {
+        eta_saved_min: {
+          availability: "unavailable",
+          reason: "当前证据没有改派后的到达时间",
+        },
+        cost_delta_cny: {
+          availability: "unavailable",
+          reason: "当前证据没有成本字段",
+        },
+      },
+      digest,
+    },
+    writes: [
+      {
+        call_id: "call-write",
+        action: "tms.reassign",
+        wire_name: "tms_reassign",
+        params: {
+          waybill_id: "YD2026101001",
+          carrier_id: carrierID,
+        },
+        arguments_hash: "arguments-hash",
+        identity_version: "effect-v1",
+        effect_id: "1fd92e48-c2d3-5654-b9f9-a507a2348354",
+        idempotency_key: "key-1",
+      },
+    ],
+    writes_digest: "b".repeat(64),
+    requested_at: "2026-10-10T01:15:00Z",
+    expires_at: "2026-10-10T01:25:00Z",
+  };
 }
 
 describe("timelineReducer", () => {
@@ -148,68 +225,16 @@ describe("model proposal projection", () => {
         model: "deepseek-chat",
       },
     });
-    const prepared = event(2, "proposal_prepared", {
-      proposal_id: "proposal:APR-1",
-      approval_id: "APR-1",
-      sdk_run_id: "sdk-1",
-      plan_version: 1,
-      proposal: {
-        schema_version: "proposal.v1",
-        summary: "司机疲劳与异常停留造成延误风险。",
-        confidence_bps: 8600,
-        attribution: [
-          {
-            factor: "司机连续驾驶时间过长",
-            confidence_bps: 9100,
-            evidence: [
-              {
-                tool_call_id: "call-driver",
-                field_path: "/continuous_drive_hours",
-                value: 9,
-                display_value: "9",
-                source_event_id: "tool:call-driver:result",
-                source_seq: 1,
-                source_hash: hash,
-              },
-            ],
-          },
-        ],
-        alternatives: [
-          {
-            carrier_id: "CARRIER-SW-42",
-            reason: "时效和历史履约率更优",
-          },
-        ],
-        expected_impact: {
-          eta_saved_min: {
-            availability: "unavailable",
-            reason: "当前证据没有改派后的到达时间",
-          },
-          cost_delta_cny: {
-            availability: "unavailable",
-            reason: "当前证据没有成本字段",
-          },
-        },
+    const prepared = event(
+      2,
+      "proposal_prepared",
+      preparedProposalPayload({
+        approvalID: "APR-1",
+        planVersion: 1,
         digest: "a".repeat(64),
-      },
-      writes: [
-        {
-          call_id: "call-write",
-          action: "tms.reassign",
-          wire_name: "tms_reassign",
-          params: {
-            waybill_id: "YD2026101001",
-            carrier_id: "CARRIER-SW-42",
-          },
-          arguments_hash: "arguments-hash",
-          identity_version: "effect-v1",
-          effect_id: "1fd92e48-c2d3-5654-b9f9-a507a2348354",
-          idempotency_key: "key-1",
-        },
-      ],
-      writes_digest: "b".repeat(64),
-      expires_at: "2026-10-10T01:25:00Z",
-    });
+        carrierID: "CARRIER-SW-42",
+      }),
+    );
 
     expect(inferenceMode([started])).toEqual({
       kind: "online",
@@ -227,6 +252,68 @@ describe("model proposal projection", () => {
         event(2, "run_review_required", { status: "review_required" }),
       ]),
     ).toBe("review_required");
+  });
+
+  it("pairs an approval with its referenced proposal instead of the newest proposal", () => {
+    const firstPrepared = event(
+      1,
+      "proposal_prepared",
+      preparedProposalPayload({
+        approvalID: "APR-1",
+        planVersion: 1,
+        digest: "a".repeat(64),
+        carrierID: "CARRIER-SW-42",
+      }),
+    );
+    const firstApproval = event(2, "approval_requested", {
+      id: "APR-1",
+      run_id: "run-1",
+      sdk_run_id: "sdk-1",
+      waybill_id: "YD2026101001",
+      plan_version: 1,
+      items: [
+        {
+          call_id: "call-write",
+          action: "tms.reassign",
+          wire_name: "tms_reassign",
+          params: {
+            waybill_id: "YD2026101001",
+            carrier_id: "CARRIER-SW-42",
+          },
+          arguments_hash: "arguments-hash",
+          identity_version: "effect-v1",
+          effect_id: "1fd92e48-c2d3-5654-b9f9-a507a2348354",
+          idempotency_key: "key-1",
+        },
+      ],
+      reason: "降低延误风险",
+      evidence: [],
+      proposal_ref: {
+        proposal_id: "proposal:APR-1",
+        event_id: "event-1",
+        digest: "a".repeat(64),
+      },
+      status: "pending",
+      requested_at: "2026-10-10T01:15:00Z",
+      expires_at: "2026-10-10T01:25:00Z",
+    });
+    const secondPrepared = event(
+      3,
+      "proposal_prepared",
+      preparedProposalPayload({
+        approvalID: "APR-2",
+        planVersion: 2,
+        digest: "c".repeat(64),
+        carrierID: "CARRIER-SW-19",
+      }),
+    );
+    const events = [firstPrepared, firstApproval, secondPrepared];
+    const approval = latestApproval(events);
+
+    expect(latestProposal(events)?.alternatives[0]?.carrier_id).toBe("CARRIER-SW-19");
+    expect(proposalForApproval(events, approval)?.alternatives[0]?.carrier_id).toBe(
+      "CARRIER-SW-42",
+    );
   });
 });
 

@@ -46,26 +46,29 @@ export function ApprovalPanel({
     }
   }, [approval?.id]);
 
+  if (runStatus === "review_required") {
+    return (
+      <aside className={styles.approvalPanel} aria-labelledby="approval-title">
+        <PanelHeading status="review_required" />
+        <div className={styles.approvalIdle}>
+          <TriangleAlert aria-hidden="true" size={22} />
+          <strong id="approval-title">提案需要人工复核</strong>
+          <p>模型输出未通过证据校验，本次运行没有生成可执行审批。</p>
+        </div>
+      </aside>
+    );
+  }
+
   if (approval === null) {
     return (
       <aside className={styles.approvalPanel} aria-labelledby="approval-title">
-        <PanelHeading status={runStatus === "review_required" ? "review_required" : "idle"} />
+        <PanelHeading status="idle" />
         <div className={styles.approvalIdle}>
-          {runStatus === "review_required" ? (
-            <>
-              <TriangleAlert aria-hidden="true" size={22} />
-              <strong id="approval-title">提案需要人工复核</strong>
-              <p>模型输出未通过证据校验，本次运行没有生成可执行审批。</p>
-            </>
-          ) : (
-            <>
-              <div className={styles.agentSweep} aria-hidden="true">
-                <span />
-              </div>
-              <strong id="approval-title">等待 Agent 提交方案</strong>
-              <p>Agent 完成运单、轨迹、司机与天气核验后，写操作会在这里等待确认。</p>
-            </>
-          )}
+          <div className={styles.agentSweep} aria-hidden="true">
+            <span />
+          </div>
+          <strong id="approval-title">等待 Agent 提交方案</strong>
+          <p>Agent 完成运单、轨迹、司机与天气核验后，写操作会在这里等待确认。</p>
         </div>
       </aside>
     );
