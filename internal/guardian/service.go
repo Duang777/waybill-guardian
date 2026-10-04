@@ -23,17 +23,19 @@ import (
 )
 
 type Config struct {
-	DataDir          string
-	Reads            platform.ReadSet
-	WriteRuntime     platform.WriteRuntime
-	ActiveActions    []domain.Action
-	PlatformProfile  string
-	ReadSource       string
-	Clock            func() time.Time
-	ApprovalTTL      time.Duration
-	HistoryRetention time.Duration
-	StepDelay        time.Duration
-	Model            agentkit.ModelConfig
+	DataDir             string
+	Reads               platform.ReadSet
+	WriteRuntime        platform.WriteRuntime
+	ActiveActions       []domain.Action
+	PlatformProfile     string
+	ReadSource          string
+	Clock               func() time.Time
+	ApprovalTTL         time.Duration
+	HistoryRetention    time.Duration
+	StepDelay           time.Duration
+	MaxConcurrentRuns   int
+	EvidenceStepMinutes float64
+	Model               agentkit.ModelConfig
 }
 
 type RunCoordinator interface {
@@ -80,13 +82,15 @@ type runStartedPayload struct {
 var (
 	ErrServiceClosed             = errors.New("guardian service is closed")
 	ErrRecoverySourceUnavailable = errors.New("effect recovery source is unavailable")
+	ErrRunCapacity               = errors.New("concurrent run capacity reached")
 )
 
 type Service struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	clock  func() time.Time
-	ttl    time.Duration
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	clock               func() time.Time
+	ttl                 time.Duration
+	evidenceStepMinutes float64
 
 	reads           platform.ReadSet
 	platformProfile string
@@ -103,6 +107,7 @@ type Service struct {
 	runs      map[domain.RunID]RunView
 	locks     map[domain.RunID]*sync.Mutex
 	timers    map[domain.ApprovalID]chan struct{}
+	runSlots  chan struct{}
 	closed    bool
 	closeDone chan struct{}
 	closeErr  error
@@ -220,24 +225,26 @@ func openService(
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &Service{
-		ctx:             ctx,
-		cancel:          cancel,
-		clock:           config.Clock,
-		ttl:             config.ApprovalTTL,
-		reads:           config.Reads,
-		platformProfile: config.PlatformProfile,
-		readSource:      config.ReadSource,
-		journal:         journal,
-		approvals:       approvals,
-		effects:         effects,
-		registry:        registry,
-		engine:          engine,
-		coordinator:     coordinator,
-		recovery:        recovery,
-		runs:            make(map[domain.RunID]RunView),
-		locks:           make(map[domain.RunID]*sync.Mutex),
-		timers:          make(map[domain.ApprovalID]chan struct{}),
-		closeDone:       make(chan struct{}),
+		ctx:                 ctx,
+		cancel:              cancel,
+		clock:               config.Clock,
+		ttl:                 config.ApprovalTTL,
+		evidenceStepMinutes: config.EvidenceStepMinutes,
+		reads:               config.Reads,
+		platformProfile:     config.PlatformProfile,
+		readSource:          config.ReadSource,
+		journal:             journal,
+		approvals:           approvals,
+		effects:             effects,
+		registry:            registry,
+		engine:              engine,
+		coordinator:         coordinator,
+		recovery:            recovery,
+		runs:                make(map[domain.RunID]RunView),
+		locks:               make(map[domain.RunID]*sync.Mutex),
+		timers:              make(map[domain.ApprovalID]chan struct{}),
+		runSlots:            make(chan struct{}, config.MaxConcurrentRuns),
+		closeDone:           make(chan struct{}),
 	}
 	if err := service.rebuildRuns(); err != nil {
 		cancel()
@@ -259,12 +266,24 @@ func normalizeConfig(config Config) Config {
 	if config.HistoryRetention == 0 {
 		config.HistoryRetention = 7 * 24 * time.Hour
 	}
+	if config.MaxConcurrentRuns == 0 {
+		config.MaxConcurrentRuns = 8
+	}
+	if config.EvidenceStepMinutes == 0 {
+		config.EvidenceStepMinutes = 8
+	}
 	return config
 }
 
 func validateConfig(config Config) error {
 	if config.HistoryRetention < 0 {
 		return fmt.Errorf("history retention must be positive")
+	}
+	if config.MaxConcurrentRuns < 0 {
+		return fmt.Errorf("maximum concurrent runs must be positive")
+	}
+	if config.EvidenceStepMinutes < 0 {
+		return fmt.Errorf("evidence step minutes must be positive")
 	}
 	if config.Reads.TMS == nil ||
 		config.Reads.Weather == nil ||
@@ -293,6 +312,15 @@ func (s *Service) StartRun(
 	}); err != nil {
 		return RunView{}, err
 	}
+	if !s.acquireRunSlot() {
+		return RunView{}, ErrRunCapacity
+	}
+	slotOwned := true
+	defer func() {
+		if slotOwned {
+			s.releaseRunSlot()
+		}
+	}()
 
 	runID := domain.RunID(uuid.NewString())
 	run := RunView{
@@ -320,8 +348,10 @@ func (s *Service) StartRun(
 	s.setRun(run)
 
 	s.wg.Add(1)
+	slotOwned = false
 	go func() {
 		defer s.wg.Done()
+		defer s.releaseRunSlot()
 		lock := s.lockFor(runID)
 		lock.Lock()
 		defer lock.Unlock()
@@ -352,6 +382,19 @@ func (s *Service) StartRun(
 		}
 	}()
 	return run, nil
+}
+
+func (s *Service) acquireRunSlot() bool {
+	select {
+	case s.runSlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Service) releaseRunSlot() {
+	<-s.runSlots
 }
 
 func (s *Service) Decide(

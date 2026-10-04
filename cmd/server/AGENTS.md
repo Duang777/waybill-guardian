@@ -10,8 +10,11 @@ HTTP 和 SSE 服务入口。handler 只做请求校验、协议转换和错误�
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/healthz` | 健康检查，返回 200 |
+| GET | `/api/overview` | 返回授权范围内的港口、线路、异常队列和经营简报 |
+| GET | `/api/kpis?window=24h` | 返回经营 KPI、公式和数据可用性 |
 | GET | `/api/waybills` | 返回授权范围内的运单目录 |
 | POST | `/api/runs` | 对请求中的 `waybill_id` 启动 run，返回 202 |
+| POST | `/api/runs:batch` | 按 ID 或过滤条件批量启动独立 run，返回逐项结果 |
 | POST | `/api/demo/trigger` | 兼容别名，启动第一张可用异常运单 |
 | GET | `/api/runs` | 返回活跃 run，支持 `status=active` |
 | GET | `/api/runs/:id` | 返回 run 与完整审计快照 |
@@ -38,6 +41,9 @@ HTTP 和 SSE 服务入口。handler 只做请求校验、协议转换和错误�
 - confirm 请求体必须为空。重复 confirm 返回当前决定或执行结果，不会重复调用 platform。
 - reject 请求体为 `{"reason":"..."}`，拒绝未知字段，且 `reason` 不能为空。
 - start run 请求体为 `{"waybill_id":"..."}`，要求 JSON content type，拒绝未知字段。
+- batch run 请求体必须提供 `waybill_ids` 或 `filter`，两者只能出现一个。一次请求最多启动
+  20 个 run。服务在启动任何 run 前检查全部显式 ID 的授权。
+- overview 和 KPI 先过滤授权范围，再计算总数、比例和简报。未授权运单不进入聚合分母。
 - `/healthz` 允许匿名访问。其他路由统一经过 `internal/httpauth.Boundary`。
 - `AUTH_MODE=local` 固定使用 `local-demo-reviewer`，客户端提供的 `Authorization` 和
   `X-Actor` 不参与身份判断。
@@ -59,12 +65,14 @@ HTTP 和 SSE 服务入口。handler 只做请求校验、协议转换和错误�
 `127.0.0.1:8080`。`OUTBOX_ENABLED=true` 显式启动 dispatcher。`METRICS_ADDR` 设置独立的
 Prometheus listener。两项都要求 PostgreSQL 模式。
 `PLATFORM=file` 要求 `DATA_FILE`、local auth 和 JSONL storage，并在监听端口前完成文件校验。
+`MAX_CONCURRENT_RUNS` 默认是 8，限制同时执行的 Agent 调查任务。`EVIDENCE_STEP_MINUTES`
+默认是 8，用于计算人力节省 KPI。
 local 模式只接受 loopback IP 字面量，HTTP handler 也拒绝 Host 不是 loopback IP 的请求。
 JWT 模式允许显式非 loopback IP。`PLATFORM=real` 缺少 PostgreSQL 或 JWT 认证时先返回配置
 错误；通过检查后仍会因真实 adapter 未实现而拒绝启动。
 
 ## 验证
 
-`http_test.go` 覆盖目录、任意运单启动、兼容触发、确认、驳回、错误映射、重复决定、
-SSE 游标续传和启动检查。
+`http_test.go` 和 `overview_http_test.go` 覆盖目录、聚合、KPI、批量启动、任意运单启动、
+兼容触发、确认、驳回、错误映射、重复决定、SSE 游标续传和启动检查。
 `http_auth_test.go` 覆盖匿名访问、租户和运单越权、角色不足、列表过滤与可信审批主体。

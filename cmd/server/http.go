@@ -60,8 +60,11 @@ func newHandlerWithEvents(
 		sseSlots:     make(chan struct{}, maxSSESubscriptions),
 	}
 	server.mux.HandleFunc("POST /api/demo/trigger", server.triggerDemo)
+	server.mux.HandleFunc("GET /api/overview", server.overview)
+	server.mux.HandleFunc("GET /api/kpis", server.kpis)
 	server.mux.HandleFunc("GET /api/waybills", server.listWaybills)
 	server.mux.HandleFunc("POST /api/runs", server.startRun)
+	server.mux.HandleFunc("POST /api/runs:batch", server.startBatch)
 	server.mux.HandleFunc("GET /api/runs", server.listRuns)
 	server.mux.HandleFunc("GET /api/runs/{id}", server.runSnapshot)
 	server.mux.HandleFunc("GET /api/runs/{id}/timeline", server.timeline)
@@ -267,6 +270,45 @@ func (a *api) listWaybills(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"waybills": waybills})
 }
 
+func (a *api) overview(w http.ResponseWriter, r *http.Request) {
+	_, grant, ok := a.grant(w, r, httpauth.Read)
+	if !ok {
+		return
+	}
+	ids, ok := a.authorizedWaybillIDs(w, r, grant)
+	if !ok {
+		return
+	}
+	value, err := a.service.Overview(r.Context(), ids)
+	if err != nil {
+		a.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (a *api) kpis(w http.ResponseWriter, r *http.Request) {
+	_, grant, ok := a.grant(w, r, httpauth.Read)
+	if !ok {
+		return
+	}
+	window, err := parseKPIWindow(r)
+	if err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid_window", err.Error())
+		return
+	}
+	ids, ok := a.authorizedWaybillIDs(w, r, grant)
+	if !ok {
+		return
+	}
+	value, err := a.service.KPIs(r.Context(), ids, window)
+	if err != nil {
+		a.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
 func (a *api) startRun(w http.ResponseWriter, r *http.Request) {
 	_, grant, ok := a.grant(w, r, httpauth.StartRun)
 	if !ok {
@@ -296,6 +338,62 @@ func (a *api) startRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, run)
+}
+
+type batchRunFilter struct {
+	HasAnomaly   *bool    `json:"has_anomaly"`
+	AnomalyTypes []string `json:"anomaly_types"`
+	Limit        int      `json:"limit"`
+}
+
+func (a *api) startBatch(w http.ResponseWriter, r *http.Request) {
+	_, grant, ok := a.grant(w, r, httpauth.StartRun)
+	if !ok {
+		return
+	}
+	if err := requireJSONContentType(r.Header.Get("Content-Type")); err != nil {
+		writeProblem(w, http.StatusUnsupportedMediaType, "invalid_content_type", err.Error())
+		return
+	}
+	var body struct {
+		WaybillIDs []domain.WaybillID `json:"waybill_ids"`
+		Filter     *batchRunFilter    `json:"filter"`
+	}
+	if err := decodeJSON(r.Body, &body); err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	if (body.WaybillIDs == nil) == (body.Filter == nil) {
+		writeProblem(
+			w,
+			http.StatusBadRequest,
+			"invalid_batch",
+			"provide exactly one of waybill_ids or filter",
+		)
+		return
+	}
+
+	ids := body.WaybillIDs
+	if body.Filter != nil {
+		var err error
+		ids, err = a.filterBatchWaybills(r.Context(), grant, *body.Filter)
+		if err != nil {
+			writeProblem(w, http.StatusBadRequest, "invalid_batch", err.Error())
+			return
+		}
+	} else {
+		for _, id := range ids {
+			if !a.requireWaybill(w, grant, id) {
+				return
+			}
+		}
+	}
+	result, err := a.service.StartBatch(r.Context(), ids)
+	if err != nil {
+		a.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, result)
 }
 
 func (a *api) listRuns(w http.ResponseWriter, r *http.Request) {
@@ -575,6 +673,70 @@ func (a *api) requireWaybill(
 	return true
 }
 
+func (a *api) authorizedWaybillIDs(
+	w http.ResponseWriter,
+	r *http.Request,
+	grant httpauth.Grant,
+) ([]domain.WaybillID, bool) {
+	waybills, err := a.service.ListWaybills(r.Context())
+	if err != nil {
+		a.writeServiceError(w, err)
+		return nil, false
+	}
+	ids := make([]domain.WaybillID, 0, len(waybills))
+	for _, item := range waybills {
+		if grant.Allows(item.WaybillID) {
+			ids = append(ids, item.WaybillID)
+		}
+	}
+	return ids, true
+}
+
+func (a *api) filterBatchWaybills(
+	ctx context.Context,
+	grant httpauth.Grant,
+	filter batchRunFilter,
+) ([]domain.WaybillID, error) {
+	if filter.Limit < 1 || filter.Limit > guardian.MaxBatchRuns {
+		return nil, fmt.Errorf("filter limit must be between 1 and %d", guardian.MaxBatchRuns)
+	}
+	allowedTypes := make(map[string]struct{}, len(filter.AnomalyTypes))
+	for _, value := range filter.AnomalyTypes {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil, fmt.Errorf("filter anomaly_types must not contain empty values")
+		}
+		allowedTypes[value] = struct{}{}
+	}
+	waybills, err := a.service.ListWaybills(ctx)
+	if err != nil {
+		return nil, err
+	}
+	hasAnomaly := true
+	if filter.HasAnomaly != nil {
+		hasAnomaly = *filter.HasAnomaly
+	}
+	result := make([]domain.WaybillID, 0, filter.Limit)
+	for _, item := range waybills {
+		if !grant.Allows(item.WaybillID) || item.HasAnomaly != hasAnomaly {
+			continue
+		}
+		if len(allowedTypes) > 0 {
+			if _, ok := allowedTypes[item.AnomalyType]; !ok {
+				continue
+			}
+		}
+		result = append(result, item.WaybillID)
+		if len(result) == filter.Limit {
+			break
+		}
+	}
+	if len(result) == 0 {
+		return nil, guardian.ErrBatchEmpty
+	}
+	return result, nil
+}
+
 func (a *api) writeAccessError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, httpauth.ErrUnauthenticated):
@@ -637,6 +799,12 @@ func (a *api) writeServiceError(w http.ResponseWriter, err error) {
 		writeProblem(w, http.StatusConflict, "cursor_ahead", err.Error())
 	case errors.Is(err, guardian.ErrServiceClosed):
 		writeProblem(w, http.StatusServiceUnavailable, "service_closing", "service is shutting down")
+	case errors.Is(err, guardian.ErrRunCapacity):
+		writeProblem(w, http.StatusTooManyRequests, "run_capacity_reached", err.Error())
+	case errors.Is(err, guardian.ErrBatchEmpty),
+		errors.Is(err, guardian.ErrBatchTooLarge),
+		errors.Is(err, guardian.ErrBatchDuplicate):
+		writeProblem(w, http.StatusBadRequest, "invalid_batch", err.Error())
 	default:
 		writeProblem(w, http.StatusInternalServerError, "internal_error", "request failed")
 	}
@@ -674,6 +842,19 @@ func requireFilter(r *http.Request, expected string) error {
 		return fmt.Errorf("status must be %q", expected)
 	}
 	return nil
+}
+
+func parseKPIWindow(r *http.Request) (time.Duration, error) {
+	query := r.URL.Query()
+	values, ok := query["window"]
+	if len(query) != 1 || !ok || len(values) != 1 {
+		return 0, fmt.Errorf("window must be one duration between 1h and 168h")
+	}
+	window, err := time.ParseDuration(values[0])
+	if err != nil || window < time.Hour || window > 7*24*time.Hour {
+		return 0, fmt.Errorf("window must be one duration between 1h and 168h")
+	}
+	return window, nil
 }
 
 func requireEmptyBody(body io.Reader) error {

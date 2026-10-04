@@ -46,10 +46,17 @@ func TestJWTHandlerRequiresAuthenticationOnEveryAPIRoute(t *testing.T) {
 		body   io.Reader
 	}{
 		{method: http.MethodPost, path: "/api/demo/trigger"},
+		{method: http.MethodGet, path: "/api/overview"},
+		{method: http.MethodGet, path: "/api/kpis?window=24h"},
 		{
 			method: http.MethodPost,
 			path:   "/api/runs",
 			body:   strings.NewReader(`{"waybill_id":"YD2026101001"}`),
+		},
+		{
+			method: http.MethodPost,
+			path:   "/api/runs:batch",
+			body:   strings.NewReader(`{"waybill_ids":["YD2026101001"]}`),
 		},
 		{method: http.MethodGet, path: "/api/waybills"},
 		{method: http.MethodGet, path: "/api/runs?status=active"},
