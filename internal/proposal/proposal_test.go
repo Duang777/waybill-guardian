@@ -72,6 +72,9 @@ func TestCompilerAcceptsAuditedScalarCitations(t *testing.T) {
 		accepted.Alternatives[0].CarrierID != "CARRIER-SW-42" {
 		t.Fatalf("alternatives = %+v", accepted.Alternatives)
 	}
+	if err := compiler.Verify(t.Context(), runID, accepted); err != nil {
+		t.Fatalf("Verify accepted proposal: %v", err)
+	}
 
 	replayed, err := compiler.Compile(t.Context(), runID, mustMarshal(t, validDraft()))
 	if err != nil {
@@ -79,6 +82,38 @@ func TestCompilerAcceptsAuditedScalarCitations(t *testing.T) {
 	}
 	if replayed.Digest != accepted.Digest {
 		t.Fatalf("digest changed: %q != %q", replayed.Digest, accepted.Digest)
+	}
+}
+
+func TestCompilerVerifyRejectsChangedCheckpointCitation(t *testing.T) {
+	store := openTestJournal(t)
+	runID := domain.RunID("run-checkpoint")
+	appendToolResult(t, store, runID, "call-waybill", domain.ActionGetWaybill, map[string]any{
+		"candidate_carriers": []any{
+			map[string]any{"carrier_id": "CARRIER-SW-42"},
+		},
+	}, "")
+	appendToolResult(t, store, runID, "call-tracking", domain.ActionGetTracking, map[string]any{
+		"points": []any{
+			map[string]any{"label": "杭州"},
+			map[string]any{"label": "绵阳北服务区"},
+		},
+	}, "")
+	appendValidDriver(t, store, runID)
+	compiler, err := NewCompiler(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := compiler.Compile(t.Context(), runID, mustMarshal(t, validDraft()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted.Attribution[0].Evidence[0].SourceSeq++
+
+	err = compiler.Verify(t.Context(), runID, accepted)
+	if err == nil || CodeOf(err) != IssueInvalidCitation ||
+		!strings.Contains(err.Error(), "source metadata") {
+		t.Fatalf("Verify error = %v, want changed citation rejection", err)
 	}
 }
 

@@ -39,6 +39,7 @@ const (
 	EventRunCompleted                   EventType = "run_completed"
 	EventRunRejected                    EventType = "run_rejected"
 	EventRunFailed                      EventType = "run_failed"
+	EventRunReviewRequired              EventType = "run_review_required"
 	EventNote                           EventType = "note"
 )
 

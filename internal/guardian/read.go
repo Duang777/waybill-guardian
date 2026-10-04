@@ -395,6 +395,8 @@ func projectRun(events []audit.Event) (RunSummary, error) {
 			run.Status = domain.RunExecuting
 		case audit.EventApprovalExecutionFailed, audit.EventRunFailed:
 			run.Status = domain.RunFailed
+		case audit.EventRunReviewRequired:
+			run.Status = domain.RunReviewRequired
 		case audit.EventRunCompleted:
 			run.Status = domain.RunCompleted
 		case audit.EventRunRejected:

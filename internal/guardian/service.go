@@ -2,6 +2,8 @@ package guardian
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +18,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/idempotency"
 	"github.com/Duang777/waybill-guardian/internal/platform"
+	"github.com/Duang777/waybill-guardian/internal/proposal"
 	guardtools "github.com/Duang777/waybill-guardian/internal/tools"
 	"github.com/google/uuid"
 	"github.com/hastekit/agent-sdk-go/pkg/agents"
@@ -73,11 +76,23 @@ type DecisionRequest struct {
 }
 
 type runStartedPayload struct {
-	IncidentID domain.IncidentID `json:"incident_id"`
-	WaybillID  domain.WaybillID  `json:"waybill_id"`
-	Status     domain.RunStatus  `json:"status"`
-	Profile    string            `json:"platform_profile,omitempty"`
-	ReadSource string            `json:"read_source,omitempty"`
+	IncidentID domain.IncidentID             `json:"incident_id"`
+	WaybillID  domain.WaybillID              `json:"waybill_id"`
+	Status     domain.RunStatus              `json:"status"`
+	Profile    string                        `json:"platform_profile,omitempty"`
+	ReadSource string                        `json:"read_source,omitempty"`
+	Inference  *agentkit.InferenceDescriptor `json:"inference,omitempty"`
+}
+
+type proposalPreparedPayload struct {
+	ProposalID   string            `json:"proposal_id"`
+	ApprovalID   domain.ApprovalID `json:"approval_id"`
+	SDKRunID     string            `json:"sdk_run_id"`
+	PlanVersion  int               `json:"plan_version"`
+	Proposal     proposal.Accepted `json:"proposal"`
+	Writes       []approval.Item   `json:"writes"`
+	WritesDigest string            `json:"writes_digest"`
+	ExpiresAt    time.Time         `json:"expires_at"`
 }
 
 var (
@@ -333,6 +348,7 @@ func (s *Service) StartRun(
 		WaybillID:  waybillID,
 		Status:     domain.RunStarted,
 	}
+	inference := s.engine.Inference()
 	event, err := s.journal.Append(ctx, runID, audit.Draft{
 		EventID: "run:" + string(runID) + ":started",
 		Actor:   audit.ActorSystem,
@@ -343,6 +359,7 @@ func (s *Service) StartRun(
 			Status:     run.Status,
 			Profile:    s.platformProfile,
 			ReadSource: s.readSource,
+			Inference:  &inference,
 		},
 	})
 	if err != nil {
@@ -375,13 +392,13 @@ func (s *Service) StartRun(
 		})
 		if err != nil {
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, agentkit.ErrEngineClosed) {
-				s.recordFailureWithContext(runCtx, runID, err)
+				s.recordRunErrorWithContext(runCtx, runID, err)
 			}
 			return
 		}
 		if err := s.handleOutcome(runCtx, run, 1, outcome, false); err != nil {
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, agentkit.ErrEngineClosed) {
-				s.recordFailureWithContext(runCtx, runID, err)
+				s.recordRunErrorWithContext(runCtx, runID, err)
 			}
 		}
 	}()
@@ -441,7 +458,7 @@ func (s *Service) Decide(
 			if _, resumeErr := s.resumeApproval(runCtx, decided, false); resumeErr != nil {
 				if !errors.Is(resumeErr, context.Canceled) &&
 					!errors.Is(resumeErr, agentkit.ErrEngineClosed) {
-					s.recordFailureWithContext(runCtx, decided.RunID, resumeErr)
+					s.recordRunErrorWithContext(runCtx, decided.RunID, resumeErr)
 				}
 				return approval.Approval{}, errors.Join(err, resumeErr)
 			}
@@ -470,7 +487,7 @@ func (s *Service) Decide(
 	result, err := s.resumeApproval(runCtx, decided, approved)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) && !errors.Is(err, agentkit.ErrEngineClosed) {
-			s.recordFailureWithContext(runCtx, decided.RunID, err)
+			s.recordRunErrorWithContext(runCtx, decided.RunID, err)
 		}
 		return approval.Approval{}, err
 	}
@@ -542,6 +559,9 @@ func (s *Service) Recover(ctx context.Context) error {
 	if err := s.validateRecoveryReadSources(ctx); err != nil {
 		return err
 	}
+	if err := s.recoverPreparedApprovals(ctx); err != nil {
+		return err
+	}
 
 	values := s.approvals.List()
 	latestPlan := make(map[domain.RunID]int)
@@ -564,14 +584,14 @@ func (s *Service) Recover(ctx context.Context) error {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				s.recordFailure(value.RunID, err)
+				s.recordRunError(value.RunID, err)
 			}
 		case approval.StatusConfirmed, approval.StatusReconciliationRequired:
 			if err := s.recoverConfirmedApproval(ctx, value); err != nil {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				s.recordFailure(value.RunID, err)
+				s.recordRunError(value.RunID, err)
 			}
 		case approval.StatusRejected, approval.StatusExpired:
 			if value.PlanVersion < latestPlan[value.RunID] || isTerminal(s.run(value.RunID).Status) {
@@ -581,7 +601,7 @@ func (s *Service) Recover(ctx context.Context) error {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				s.recordFailure(value.RunID, err)
+				s.recordRunError(value.RunID, err)
 			}
 		}
 	}
@@ -592,10 +612,120 @@ func (s *Service) Recover(ctx context.Context) error {
 		}
 		lock := s.lockFor(run.RunID)
 		lock.Lock()
-		s.recordFailure(run.RunID, errors.New("run stopped before a durable approval checkpoint"))
+		usesProposalProtocol, err := s.runUsesProposalProtocol(ctx, run.RunID)
+		if err != nil {
+			lock.Unlock()
+			return err
+		}
+		if usesProposalProtocol {
+			s.recordReviewRequired(
+				run.RunID,
+				errors.Join(
+					proposal.ErrReviewRequired,
+					errors.New("run stopped before a durable proposal checkpoint"),
+				),
+			)
+		} else {
+			s.recordFailure(run.RunID, errors.New("run stopped before a durable approval checkpoint"))
+		}
 		lock.Unlock()
 	}
 	return nil
+}
+
+func (s *Service) recoverPreparedApprovals(ctx context.Context) error {
+	for _, run := range s.runSnapshot() {
+		if isTerminal(run.Status) {
+			continue
+		}
+		events, err := s.journal.Replay(ctx, run.RunID, 0)
+		if err != nil {
+			return err
+		}
+		prepared, ok, err := latestPreparedProposal(events)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		if _, err := s.approvals.Get(prepared.ApprovalID); err == nil {
+			continue
+		} else if !errors.Is(err, approval.ErrNotFound) {
+			return err
+		}
+
+		lock := s.lockFor(run.RunID)
+		lock.Lock()
+		runCtx, release, err := s.acquireRun(s.ctx, run.RunID)
+		if err != nil {
+			lock.Unlock()
+			return err
+		}
+		_, materializeErr := s.materializePreparedProposal(runCtx, run, prepared)
+		if materializeErr != nil {
+			if errors.Is(materializeErr, proposal.ErrReviewRequired) {
+				s.recordReviewRequiredWithContext(runCtx, run.RunID, materializeErr)
+				releaseErr := release()
+				lock.Unlock()
+				if releaseErr != nil {
+					return releaseErr
+				}
+				continue
+			}
+			releaseErr := release()
+			lock.Unlock()
+			return errors.Join(materializeErr, releaseErr)
+		}
+		s.updateRunStatus(run.RunID, domain.RunAwaitingApproval)
+		releaseErr := release()
+		lock.Unlock()
+		if releaseErr != nil {
+			return releaseErr
+		}
+	}
+	return nil
+}
+
+func latestPreparedProposal(events []audit.Event) (proposalPreparedPayload, bool, error) {
+	var latest proposalPreparedPayload
+	found := false
+	for _, event := range events {
+		if event.Type != audit.EventProposalPrepared {
+			continue
+		}
+		var prepared proposalPreparedPayload
+		if err := json.Unmarshal(event.Payload, &prepared); err != nil {
+			return proposalPreparedPayload{}, false, fmt.Errorf(
+				"decode proposal checkpoint %q: %w",
+				event.EventID,
+				err,
+			)
+		}
+		if !found || prepared.PlanVersion >= latest.PlanVersion {
+			latest = prepared
+			found = true
+		}
+	}
+	return latest, found, nil
+}
+
+func (s *Service) runUsesProposalProtocol(
+	ctx context.Context,
+	runID domain.RunID,
+) (bool, error) {
+	events, err := s.journal.Replay(ctx, runID, 0)
+	if err != nil {
+		return false, err
+	}
+	if len(events) == 0 || events[0].Type != audit.EventRunStarted {
+		return false, fmt.Errorf("run %q has no run_started prefix", runID)
+	}
+	var payload runStartedPayload
+	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+		return false, fmt.Errorf("decode run %q inference: %w", runID, err)
+	}
+	return payload.Inference != nil, nil
 }
 
 func (s *Service) validateRecoveryReadSources(ctx context.Context) error {
@@ -779,7 +909,7 @@ func (s *Service) recoverDecision(value approval.Approval, approved bool) error 
 	}
 	if _, err := s.resumeApproval(runCtx, current, approved); err != nil {
 		if !errors.Is(err, context.Canceled) {
-			s.recordFailureWithContext(runCtx, current.RunID, err)
+			s.recordRunErrorWithContext(runCtx, current.RunID, err)
 		}
 		return err
 	}
@@ -961,7 +1091,7 @@ func (s *Service) scheduleExpiration(value approval.Approval) {
 			s.removeExpiration(value.ID, cancel)
 			if err := s.expireApproval(s.ctx, value.ID); err != nil &&
 				!errors.Is(err, context.Canceled) {
-				s.recordFailure(value.RunID, err)
+				s.recordRunError(value.RunID, err)
 			}
 		case <-cancel:
 		case <-s.ctx.Done():
@@ -1077,6 +1207,7 @@ func isTerminal(status domain.RunStatus) bool {
 	return status == domain.RunCompleted ||
 		status == domain.RunRejected ||
 		status == domain.RunFailed ||
+		status == domain.RunReviewRequired ||
 		status == domain.RunManualReview
 }
 
@@ -1122,32 +1253,11 @@ func (s *Service) handleOutcome(
 		if len(outcome.Interrupts) == 0 {
 			return fmt.Errorf("agent paused without interrupts")
 		}
-		facts, err := s.loadWaybillFacts(ctx, run.WaybillID)
+		prepared, err := s.prepareProposal(ctx, run, planVersion, outcome)
 		if err != nil {
 			return err
 		}
-		analysis := deriveAssessment(facts)
-		evidence := make([]map[string]string, 0, len(analysis.Evidence))
-		for _, item := range analysis.Evidence {
-			evidence = append(evidence, map[string]string{
-				"label": item.Label,
-				"value": item.Value,
-			})
-		}
-		if _, err := s.journal.Append(ctx, run.RunID, audit.Draft{
-			EventID: fmt.Sprintf("run:%s:attribution:%d", run.RunID, planVersion),
-			Actor:   audit.ActorAgent,
-			Type:    audit.EventAttribution,
-			Payload: map[string]any{
-				"summary":      analysis.Summary,
-				"evidence":     evidence,
-				"plan_version": planVersion,
-			},
-		}); err != nil {
-			return err
-		}
-		_, err = s.createApproval(ctx, run, planVersion, outcome, analysis)
-		if err != nil {
+		if _, err := s.materializePreparedProposal(ctx, run, prepared); err != nil {
 			return err
 		}
 		s.updateRunStatus(run.RunID, domain.RunAwaitingApproval)
@@ -1176,38 +1286,165 @@ func (s *Service) handleOutcome(
 	return nil
 }
 
-func (s *Service) createApproval(
+func (s *Service) prepareProposal(
 	ctx context.Context,
 	run RunView,
 	planVersion int,
 	outcome agentkit.Outcome,
-	analysis assessment,
+) (proposalPreparedPayload, error) {
+	if outcome.SDKRunID == "" || outcome.Proposal == nil {
+		return proposalPreparedPayload{}, errors.Join(
+			proposal.ErrReviewRequired,
+			errors.New("paused agent run has no accepted proposal"),
+		)
+	}
+	compiler, err := proposal.NewCompiler(s.journal)
+	if err != nil {
+		return proposalPreparedPayload{}, err
+	}
+	if err := compiler.Verify(ctx, run.RunID, *outcome.Proposal); err != nil {
+		var validationErr *proposal.ValidationError
+		if errors.As(err, &validationErr) {
+			return proposalPreparedPayload{}, errors.Join(proposal.ErrReviewRequired, err)
+		}
+		return proposalPreparedPayload{}, err
+	}
+	items, err := s.approvalItems(run, planVersion, outcome.Interrupts)
+	if err != nil {
+		return proposalPreparedPayload{}, errors.Join(proposal.ErrReviewRequired, err)
+	}
+	callIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		callIDs = append(callIDs, item.CallID)
+	}
+	approvalID := approval.IDFor(run.RunID, callIDs)
+	writesDigest, err := approvalItemsDigest(items)
+	if err != nil {
+		return proposalPreparedPayload{}, err
+	}
+	prepared := proposalPreparedPayload{
+		ProposalID:   proposalIDFor(approvalID),
+		ApprovalID:   approvalID,
+		SDKRunID:     outcome.SDKRunID,
+		PlanVersion:  planVersion,
+		Proposal:     *outcome.Proposal,
+		Writes:       items,
+		WritesDigest: writesDigest,
+		ExpiresAt:    s.clock().UTC().Add(s.ttl),
+	}
+	eventID := proposalPreparedEventID(run.RunID, planVersion)
+	event, err := s.journal.Append(ctx, run.RunID, audit.Draft{
+		EventID: eventID,
+		Actor:   audit.ActorAgent,
+		Type:    audit.EventProposalPrepared,
+		Payload: prepared,
+	})
+	if err != nil {
+		return proposalPreparedPayload{}, err
+	}
+	var stored proposalPreparedPayload
+	if err := json.Unmarshal(event.Payload, &stored); err != nil {
+		return proposalPreparedPayload{}, fmt.Errorf("decode prepared proposal: %w", err)
+	}
+	if err := s.validatePreparedProposal(ctx, run, stored); err != nil {
+		return proposalPreparedPayload{}, err
+	}
+	if !samePreparedProposal(prepared, stored) {
+		return proposalPreparedPayload{}, errors.Join(
+			proposal.ErrReviewRequired,
+			errors.New("proposal checkpoint conflicts with the paused agent outcome"),
+		)
+	}
+	return stored, nil
+}
+
+func (s *Service) materializePreparedProposal(
+	ctx context.Context,
+	run RunView,
+	prepared proposalPreparedPayload,
 ) (approval.Approval, error) {
-	items := make([]approval.Item, 0, len(outcome.Interrupts))
-	callIDs := make([]string, 0, len(outcome.Interrupts))
+	if err := s.validatePreparedProposal(ctx, run, prepared); err != nil {
+		return approval.Approval{}, err
+	}
+	evidence := proposalEvidence(prepared.Proposal)
+	if _, err := s.journal.Append(ctx, run.RunID, audit.Draft{
+		EventID: fmt.Sprintf("run:%s:attribution:%d", run.RunID, prepared.PlanVersion),
+		Actor:   audit.ActorAgent,
+		Type:    audit.EventAttribution,
+		Payload: map[string]any{
+			"summary":         prepared.Proposal.Summary,
+			"confidence_bps":  prepared.Proposal.ConfidenceBPS,
+			"attribution":     prepared.Proposal.Attribution,
+			"evidence":        evidence,
+			"alternatives":    prepared.Proposal.Alternatives,
+			"expected_impact": prepared.Proposal.ExpectedImpact,
+			"proposal_digest": prepared.Proposal.Digest,
+			"plan_version":    prepared.PlanVersion,
+		},
+	}); err != nil {
+		return approval.Approval{}, err
+	}
+	value := approval.Approval{
+		ID:          prepared.ApprovalID,
+		RunID:       run.RunID,
+		SDKRunID:    prepared.SDKRunID,
+		WaybillID:   run.WaybillID,
+		PlanVersion: prepared.PlanVersion,
+		Items:       prepared.Writes,
+		Reason:      prepared.Proposal.Summary,
+		Evidence:    evidence,
+		ProposalRef: &approval.ProposalRef{
+			ProposalID: prepared.ProposalID,
+			EventID:    proposalPreparedEventID(run.RunID, prepared.PlanVersion),
+			Digest:     prepared.Proposal.Digest,
+		},
+		ExpiresAt: prepared.ExpiresAt,
+	}
+	created, err := s.approvals.Create(ctx, value)
+	if err != nil {
+		return approval.Approval{}, err
+	}
+	s.scheduleExpiration(created)
+	return created, nil
+}
+
+func (s *Service) approvalItems(
+	run RunView,
+	planVersion int,
+	interrupts []agentkit.Interrupt,
+) ([]approval.Item, error) {
+	items := make([]approval.Item, 0, len(interrupts))
+	callIDs := make(map[string]struct{}, len(interrupts))
 	runContext := domain.RunContext{
 		RunID:       run.RunID,
 		IncidentID:  run.IncidentID,
 		WaybillID:   run.WaybillID,
 		PlanVersion: planVersion,
 	}
-	for _, interrupt := range outcome.Interrupts {
+	for _, interrupt := range interrupts {
+		if interrupt.CallID == "" {
+			return nil, errors.New("write interrupt has no call_id")
+		}
+		if _, exists := callIDs[interrupt.CallID]; exists {
+			return nil, fmt.Errorf("write interrupts contain duplicate call_id %q", interrupt.CallID)
+		}
+		callIDs[interrupt.CallID] = struct{}{}
 		write, err := s.registry.ParseActiveWrite(interrupt.WireName, interrupt.Arguments)
 		if err != nil {
-			return approval.Approval{}, err
+			return nil, err
 		}
 		if write.Action != interrupt.Action {
-			return approval.Approval{}, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"interrupt action %q does not match tool action %q",
 				interrupt.Action,
 				write.Action,
 			)
 		}
 		if err := write.ValidateRunContext(runContext); err != nil {
-			return approval.Approval{}, err
+			return nil, err
 		}
 		if write.LegacyKey != "" {
-			return approval.Approval{}, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"%w: model supplied idempotency_key",
 				idempotency.ErrInvalidIdentity,
 			)
@@ -1219,7 +1456,7 @@ func (s *Service) createApproval(
 			Arguments:  write.Arguments,
 		})
 		if err != nil {
-			return approval.Approval{}, err
+			return nil, err
 		}
 		items = append(items, approval.Item{
 			CallID:          interrupt.CallID,
@@ -1231,25 +1468,155 @@ func (s *Service) createApproval(
 			EffectID:        identity.EffectID,
 			IdempotencyKey:  identity.Key,
 		})
-		callIDs = append(callIDs, interrupt.CallID)
 	}
-	value := approval.Approval{
-		ID:          approval.IDFor(run.RunID, callIDs),
-		RunID:       run.RunID,
-		SDKRunID:    outcome.SDKRunID,
-		WaybillID:   run.WaybillID,
-		PlanVersion: planVersion,
-		Items:       items,
-		Reason:      analysis.Reason,
-		Evidence:    append([]approval.Evidence(nil), analysis.Evidence...),
-		ExpiresAt:   s.clock().UTC().Add(s.ttl),
+	return items, nil
+}
+
+func (s *Service) validatePreparedProposal(
+	ctx context.Context,
+	run RunView,
+	prepared proposalPreparedPayload,
+) error {
+	if prepared.SDKRunID == "" ||
+		prepared.PlanVersion <= 0 ||
+		prepared.ApprovalID == "" ||
+		prepared.ProposalID == "" ||
+		len(prepared.Writes) == 0 ||
+		prepared.ExpiresAt.IsZero() {
+		return errors.Join(
+			proposal.ErrReviewRequired,
+			errors.New("proposal checkpoint is incomplete"),
+		)
 	}
-	created, err := s.approvals.Create(ctx, value)
+	callIDs := make([]string, 0, len(prepared.Writes))
+	interrupts := make([]agentkit.Interrupt, 0, len(prepared.Writes))
+	for _, item := range prepared.Writes {
+		callIDs = append(callIDs, item.CallID)
+		interrupts = append(interrupts, agentkit.Interrupt{
+			CallID:    item.CallID,
+			WireName:  item.WireName,
+			Action:    item.Action,
+			Arguments: append(json.RawMessage(nil), item.Params...),
+		})
+	}
+	expectedApprovalID := approval.IDFor(run.RunID, callIDs)
+	if prepared.ApprovalID != expectedApprovalID ||
+		prepared.ProposalID != proposalIDFor(expectedApprovalID) {
+		return errors.Join(
+			proposal.ErrReviewRequired,
+			errors.New("proposal checkpoint identity does not match its writes"),
+		)
+	}
+	canonicalItems, err := s.approvalItems(run, prepared.PlanVersion, interrupts)
 	if err != nil {
-		return approval.Approval{}, err
+		return errors.Join(proposal.ErrReviewRequired, err)
 	}
-	s.scheduleExpiration(created)
-	return created, nil
+	for index := range canonicalItems {
+		if !sameApprovalItem(prepared.Writes[index], canonicalItems[index]) {
+			return errors.Join(
+				proposal.ErrReviewRequired,
+				fmt.Errorf("proposal checkpoint write %d is not canonical", index),
+			)
+		}
+	}
+	expectedWritesDigest, err := approvalItemsDigest(prepared.Writes)
+	if err != nil {
+		return err
+	}
+	if prepared.WritesDigest != expectedWritesDigest {
+		return errors.Join(
+			proposal.ErrReviewRequired,
+			errors.New("proposal checkpoint writes digest does not match"),
+		)
+	}
+	compiler, err := proposal.NewCompiler(s.journal)
+	if err != nil {
+		return err
+	}
+	if err := compiler.Verify(ctx, run.RunID, prepared.Proposal); err != nil {
+		var validationErr *proposal.ValidationError
+		if errors.As(err, &validationErr) {
+			return errors.Join(proposal.ErrReviewRequired, err)
+		}
+		return err
+	}
+	return nil
+}
+
+func proposalEvidence(accepted proposal.Accepted) []approval.Evidence {
+	var evidence []approval.Evidence
+	for _, attribution := range accepted.Attribution {
+		for _, citation := range attribution.Evidence {
+			evidence = append(evidence, approval.Evidence{
+				Label: attribution.Factor,
+				Value: citation.DisplayValue,
+				Source: &approval.EvidenceSource{
+					ToolCallID: citation.ToolCallID,
+					FieldPath:  string(citation.FieldPath),
+					SourceSeq:  citation.SourceSeq,
+				},
+			})
+		}
+	}
+	return evidence
+}
+
+func approvalItemsDigest(items []approval.Item) (string, error) {
+	type digestItem struct {
+		CallID          string                      `json:"call_id"`
+		Action          domain.Action               `json:"action"`
+		WireName        string                      `json:"wire_name"`
+		ArgumentsHash   string                      `json:"arguments_hash"`
+		IdentityVersion idempotency.IdentityVersion `json:"identity_version,omitempty"`
+		EffectID        domain.EffectID             `json:"effect_id,omitempty"`
+		IdempotencyKey  domain.IdempotencyKey       `json:"idempotency_key"`
+	}
+	values := make([]digestItem, 0, len(items))
+	for _, item := range items {
+		values = append(values, digestItem{
+			CallID:          item.CallID,
+			Action:          item.Action,
+			WireName:        item.WireName,
+			ArgumentsHash:   item.ArgumentsHash,
+			IdentityVersion: item.IdentityVersion,
+			EffectID:        item.EffectID,
+			IdempotencyKey:  item.IdempotencyKey,
+		})
+	}
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return "", fmt.Errorf("marshal approval writes: %w", err)
+	}
+	sum := sha256.Sum256(append([]byte("waybill-proposal-writes-v1\n"), raw...))
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func sameApprovalItem(actual, expected approval.Item) bool {
+	return actual.CallID == expected.CallID &&
+		actual.Action == expected.Action &&
+		actual.WireName == expected.WireName &&
+		actual.ArgumentsHash == expected.ArgumentsHash &&
+		actual.IdentityVersion == expected.IdentityVersion &&
+		actual.EffectID == expected.EffectID &&
+		actual.IdempotencyKey == expected.IdempotencyKey
+}
+
+func samePreparedProposal(actual, expected proposalPreparedPayload) bool {
+	return actual.ProposalID == expected.ProposalID &&
+		actual.ApprovalID == expected.ApprovalID &&
+		actual.SDKRunID == expected.SDKRunID &&
+		actual.PlanVersion == expected.PlanVersion &&
+		actual.Proposal.Digest == expected.Proposal.Digest &&
+		actual.WritesDigest == expected.WritesDigest &&
+		actual.ExpiresAt.Equal(expected.ExpiresAt)
+}
+
+func proposalPreparedEventID(runID domain.RunID, planVersion int) string {
+	return fmt.Sprintf("run:%s:proposal:%d:prepared", runID, planVersion)
+}
+
+func proposalIDFor(approvalID domain.ApprovalID) string {
+	return "proposal:" + string(approvalID)
 }
 
 func (s *Service) rebuildRuns() error {
@@ -1298,6 +1665,68 @@ func (s *Service) recordFailure(runID domain.RunID, cause error) {
 		_ = release()
 	}()
 	s.recordFailureWithContext(ctx, runID, cause)
+}
+
+func (s *Service) recordRunError(runID domain.RunID, cause error) {
+	ctx, release, err := s.acquireRun(context.Background(), runID)
+	if err != nil {
+		return
+	}
+	defer func() {
+		_ = release()
+	}()
+	s.recordRunErrorWithContext(ctx, runID, cause)
+}
+
+func (s *Service) recordReviewRequired(runID domain.RunID, cause error) {
+	ctx, release, err := s.acquireRun(context.Background(), runID)
+	if err != nil {
+		return
+	}
+	defer func() {
+		_ = release()
+	}()
+	s.recordReviewRequiredWithContext(ctx, runID, cause)
+}
+
+func (s *Service) recordRunErrorWithContext(
+	ctx context.Context,
+	runID domain.RunID,
+	cause error,
+) {
+	if errors.Is(cause, proposal.ErrReviewRequired) {
+		s.recordReviewRequiredWithContext(ctx, runID, cause)
+		return
+	}
+	s.recordFailureWithContext(ctx, runID, cause)
+}
+
+func (s *Service) recordReviewRequiredWithContext(
+	ctx context.Context,
+	runID domain.RunID,
+	cause error,
+) {
+	payload := map[string]any{
+		"status": domain.RunReviewRequired,
+		"error":  cause.Error(),
+	}
+	var validationErr *proposal.ValidationError
+	if errors.As(cause, &validationErr) {
+		payload["issue_code"] = validationErr.Code
+	}
+	event, err := s.journal.Append(ctx, runID, audit.Draft{
+		EventID: "run:" + string(runID) + ":review_required",
+		Actor:   audit.ActorSystem,
+		Type:    audit.EventRunReviewRequired,
+		Payload: payload,
+	})
+	if err != nil {
+		return
+	}
+	run := s.run(runID)
+	run.Status = domain.RunReviewRequired
+	run.LastSeq = event.Seq
+	s.setRun(run)
 }
 
 func (s *Service) recordFailureWithContext(

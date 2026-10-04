@@ -50,6 +50,7 @@ const (
 	RunCompleted        RunStatus = "completed"
 	RunRejected         RunStatus = "rejected"
 	RunFailed           RunStatus = "failed"
+	RunReviewRequired   RunStatus = "review_required"
 	RunManualReview     RunStatus = "manual_review"
 )
 

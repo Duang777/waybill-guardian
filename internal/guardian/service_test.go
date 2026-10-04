@@ -548,6 +548,105 @@ func TestRecoverReplaysConfirmedApproval(t *testing.T) {
 	}
 }
 
+func TestRecoverUsesPreparedProposalWithoutCallingModelAgain(t *testing.T) {
+	clients, runtime, err := tools.NewDemoRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := Open(Config{
+		DataDir:      t.TempDir(),
+		Reads:        clients,
+		WriteRuntime: runtime,
+		StepDelay:    0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := source.StartRun(t.Context(), "YD2026101001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := waitForApproval(t, source, run.RunID)
+	events, err := source.Replay(t.Context(), run.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name              string
+		includeCheckpoint bool
+	}{
+		{name: "after checkpoint", includeCheckpoint: true},
+		{name: "before checkpoint", includeCheckpoint: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			now := replayEventPrefix(
+				t,
+				dataDir,
+				events,
+				audit.EventProposalPrepared,
+				test.includeCheckpoint,
+			)
+			reopened, err := Open(Config{
+				DataDir:      dataDir,
+				Reads:        clients,
+				WriteRuntime: runtime,
+				Clock:        func() time.Time { return now },
+				StepDelay:    0,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			before, err := reopened.Replay(t.Context(), run.RunID, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			modelCallsBefore := countEvents(before, audit.EventModelCallStarted)
+			if err := reopened.Recover(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			after, err := reopened.Replay(t.Context(), run.RunID, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := countEvents(after, audit.EventModelCallStarted); got != modelCallsBefore {
+				t.Fatalf("model call count = %d, want %d", got, modelCallsBefore)
+			}
+
+			if !test.includeCheckpoint {
+				recovered, err := reopened.GetRun(run.RunID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if recovered.Status != domain.RunReviewRequired {
+					t.Fatalf("run status = %q, want review_required", recovered.Status)
+				}
+				if _, err := reopened.CurrentApproval(run.RunID); !errors.Is(err, approval.ErrNotFound) {
+					t.Fatalf("CurrentApproval error = %v, want ErrNotFound", err)
+				}
+				return
+			}
+
+			recovered, err := reopened.CurrentApproval(run.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if recovered.ID != expected.ID ||
+				recovered.SDKRunID != expected.SDKRunID ||
+				recovered.ProposalRef == nil ||
+				recovered.ProposalRef.Digest != expected.ProposalRef.Digest ||
+				len(recovered.Items) != len(expected.Items) {
+				t.Fatalf("recovered approval = %+v, want checkpoint identity %+v", recovered, expected)
+			}
+		})
+	}
+}
+
 func TestRecoverRejectsChangedReadSource(t *testing.T) {
 	dataDir := t.TempDir()
 	reads, _, err := tools.NewDemoRuntime()
@@ -1260,6 +1359,56 @@ func fixtureBindingForItem(
 		t.Fatal(err)
 	}
 	return binding
+}
+
+func replayEventPrefix(
+	t *testing.T,
+	dataDir string,
+	events []audit.Event,
+	stopType audit.EventType,
+	includeStop bool,
+) time.Time {
+	t.Helper()
+	now := events[0].TS
+	store, err := audit.Open(dataDir, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range events {
+		if source.Type == stopType && !includeStop {
+			break
+		}
+		now = source.TS
+		replayed, err := store.Append(t.Context(), source.RunID, audit.Draft{
+			EventID: source.EventID,
+			Actor:   source.Actor,
+			Type:    source.Type,
+			Payload: source.Payload,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if replayed.Hash != source.Hash {
+			t.Fatalf("replayed event %q hash = %q, want %q", source.EventID, replayed.Hash, source.Hash)
+		}
+		if source.Type == stopType {
+			break
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return now
+}
+
+func countEvents(events []audit.Event, eventType audit.EventType) int {
+	count := 0
+	for _, event := range events {
+		if event.Type == eventType {
+			count++
+		}
+	}
+	return count
 }
 
 type failingActionRuntime struct {

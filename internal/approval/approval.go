@@ -49,8 +49,21 @@ const (
 )
 
 type Evidence struct {
-	Label string `json:"label"`
-	Value string `json:"value"`
+	Label  string          `json:"label"`
+	Value  string          `json:"value"`
+	Source *EvidenceSource `json:"source,omitempty"`
+}
+
+type EvidenceSource struct {
+	ToolCallID string    `json:"tool_call_id"`
+	FieldPath  string    `json:"field_path"`
+	SourceSeq  audit.Seq `json:"source_seq"`
+}
+
+type ProposalRef struct {
+	ProposalID string `json:"proposal_id"`
+	EventID    string `json:"event_id"`
+	Digest     string `json:"digest"`
 }
 
 type Item struct {
@@ -73,6 +86,7 @@ type Approval struct {
 	Items        []Item            `json:"items"`
 	Reason       string            `json:"reason"`
 	Evidence     []Evidence        `json:"evidence"`
+	ProposalRef  *ProposalRef      `json:"proposal_ref,omitempty"`
 	Status       Status            `json:"status"`
 	RequestedAt  time.Time         `json:"requested_at"`
 	ExpiresAt    time.Time         `json:"expires_at"`
@@ -221,6 +235,9 @@ func (s *Store) Create(ctx context.Context, value Approval) (Approval, error) {
 		return Approval{}, fmt.Errorf("approval id, run id, waybill id, and items are required")
 	}
 	if err := validateItems(value.Items); err != nil {
+		return Approval{}, err
+	}
+	if err := validateProposal(value); err != nil {
 		return Approval{}, err
 	}
 	s.mu.Lock()
@@ -514,6 +531,9 @@ func (s *Store) applyLocked(event audit.Event) error {
 		if err := validateItems(value.Items); err != nil {
 			return err
 		}
+		if err := validateProposal(value); err != nil {
+			return err
+		}
 		s.approvals[value.ID] = value
 	case audit.EventApprovalDecided:
 		var payload decisionPayload
@@ -678,6 +698,17 @@ func clone(value Approval) Approval {
 		value.Items[index] = cloneItem(value.Items[index])
 	}
 	value.Evidence = append([]Evidence(nil), value.Evidence...)
+	for index := range value.Evidence {
+		if value.Evidence[index].Source == nil {
+			continue
+		}
+		source := *value.Evidence[index].Source
+		value.Evidence[index].Source = &source
+	}
+	if value.ProposalRef != nil {
+		proposalRef := *value.ProposalRef
+		value.ProposalRef = &proposalRef
+	}
 	return value
 }
 
@@ -726,6 +757,31 @@ func validateItems(items []Item) error {
 			return ErrDuplicateEffect
 		}
 		effectIDs[item.EffectID] = struct{}{}
+	}
+	return nil
+}
+
+func validateProposal(value Approval) error {
+	if value.ProposalRef != nil {
+		if value.ProposalRef.ProposalID == "" ||
+			value.ProposalRef.EventID == "" ||
+			len(value.ProposalRef.Digest) != sha256.Size*2 {
+			return fmt.Errorf("approval proposal reference is incomplete")
+		}
+		if _, err := hex.DecodeString(value.ProposalRef.Digest); err != nil {
+			return fmt.Errorf("approval proposal digest is invalid")
+		}
+	}
+	for _, evidence := range value.Evidence {
+		if evidence.Source == nil {
+			continue
+		}
+		if value.ProposalRef == nil ||
+			evidence.Source.ToolCallID == "" ||
+			evidence.Source.FieldPath == "" ||
+			evidence.Source.SourceSeq == 0 {
+			return fmt.Errorf("approval evidence source is incomplete")
+		}
 	}
 	return nil
 }

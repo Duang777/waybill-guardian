@@ -261,6 +261,112 @@ func (c *Compiler) Compile(
 	return accepted, nil
 }
 
+func (c *Compiler) Verify(
+	ctx context.Context,
+	runID domain.RunID,
+	accepted Accepted,
+) error {
+	if runID == "" {
+		return validationError(IssueInvalidCitation, "", errors.New("run_id is required"))
+	}
+	draft := Draft{
+		SchemaVersion: accepted.SchemaVersion,
+		Summary:       accepted.Summary,
+		ConfidenceBPS: accepted.ConfidenceBPS,
+		Attribution:   make([]AttributionDraft, 0, len(accepted.Attribution)),
+		Alternatives:  append([]Alternative(nil), accepted.Alternatives...),
+		ExpectedImpact: ExpectedImpactDraft{
+			ETASavedMin: ImpactMetricDraft{
+				Availability: accepted.ExpectedImpact.ETASavedMin.Availability,
+				Reason:       accepted.ExpectedImpact.ETASavedMin.Reason,
+			},
+			CostDeltaCNY: ImpactMetricDraft{
+				Availability: accepted.ExpectedImpact.CostDeltaCNY.Availability,
+				Reason:       accepted.ExpectedImpact.CostDeltaCNY.Reason,
+			},
+		},
+	}
+	for _, item := range accepted.Attribution {
+		attribution := AttributionDraft{
+			Factor:        item.Factor,
+			ConfidenceBPS: item.ConfidenceBPS,
+			EvidenceRefs:  make([]EvidenceRef, 0, len(item.Evidence)),
+		}
+		for _, citation := range item.Evidence {
+			attribution.EvidenceRefs = append(attribution.EvidenceRefs, EvidenceRef{
+				ToolCallID: citation.ToolCallID,
+				FieldPath:  citation.FieldPath,
+				Quoted:     append(json.RawMessage(nil), citation.Value...),
+			})
+		}
+		draft.Attribution = append(draft.Attribution, attribution)
+	}
+	if err := validateDraft(draft); err != nil {
+		return err
+	}
+
+	events, err := c.journal.Replay(ctx, runID, 0)
+	if err != nil {
+		return fmt.Errorf("read proposal evidence: %w", err)
+	}
+	ledger, err := buildLedger(events)
+	if err != nil {
+		return err
+	}
+	for attributionIndex, item := range accepted.Attribution {
+		for evidenceIndex, citation := range item.Evidence {
+			expected, resolveErr := ledger.resolve(EvidenceRef{
+				ToolCallID: citation.ToolCallID,
+				FieldPath:  citation.FieldPath,
+				Quoted:     citation.Value,
+			})
+			if resolveErr != nil {
+				path := fmt.Sprintf("/attribution/%d/evidence/%d", attributionIndex, evidenceIndex)
+				return validationError(IssueInvalidCitation, path, resolveErr)
+			}
+			if !sameCitation(citation, expected) {
+				path := fmt.Sprintf("/attribution/%d/evidence/%d", attributionIndex, evidenceIndex)
+				return validationError(
+					IssueInvalidCitation,
+					path,
+					errors.New("citation source metadata does not match the audit event"),
+				)
+			}
+		}
+	}
+	for index, alternative := range accepted.Alternatives {
+		if _, ok := ledger.candidateCarriers[alternative.CarrierID]; !ok {
+			return validationError(
+				IssueInvalidAlternative,
+				fmt.Sprintf("/alternatives/%d/carrier_id", index),
+				fmt.Errorf("carrier %q is not present in audited waybill candidates", alternative.CarrierID),
+			)
+		}
+	}
+	expectedDigest, err := digest(accepted)
+	if err != nil {
+		return err
+	}
+	if accepted.Digest == "" || accepted.Digest != expectedDigest {
+		return validationError(
+			IssueInvalidSchema,
+			"/digest",
+			errors.New("does not match the accepted proposal"),
+		)
+	}
+	return nil
+}
+
+func sameCitation(actual, expected Citation) bool {
+	return actual.ToolCallID == expected.ToolCallID &&
+		actual.FieldPath == expected.FieldPath &&
+		bytes.Equal(actual.Value, expected.Value) &&
+		actual.DisplayValue == expected.DisplayValue &&
+		actual.SourceEventID == expected.SourceEventID &&
+		actual.SourceSeq == expected.SourceSeq &&
+		actual.SourceHash == expected.SourceHash
+}
+
 func validateDraft(draft Draft) error {
 	if draft.SchemaVersion != SchemaVersion {
 		return validationError(
