@@ -169,6 +169,9 @@ func Decode(raw []byte) (Draft, error) {
 			fmt.Errorf("proposal must contain between 1 and %d bytes", maxProposalBytes),
 		)
 	}
+	if !utf8.Valid(raw) {
+		return Draft{}, validationError(IssueInvalidJSON, "", errors.New("proposal must be valid UTF-8"))
+	}
 	if err := rejectDuplicateKeys(raw); err != nil {
 		return Draft{}, validationError(IssueInvalidJSON, "", err)
 	}
@@ -207,7 +210,15 @@ func (c *Compiler) Compile(
 	if err != nil {
 		return Accepted{}, fmt.Errorf("read proposal evidence: %w", err)
 	}
-	ledger, err := buildLedger(events)
+	currentEvents, err := currentEvidenceWindow(events)
+	if err != nil {
+		return Accepted{}, err
+	}
+	ledger, err := buildLedger(
+		currentEvents,
+		candidateCarriersLatest,
+		duplicateToolCallIDs(events),
+	)
 	if err != nil {
 		return Accepted{}, err
 	}
@@ -312,7 +323,11 @@ func (c *Compiler) Verify(
 	if err != nil {
 		return fmt.Errorf("read proposal evidence: %w", err)
 	}
-	ledger, err := buildLedger(events)
+	ledger, err := buildLedger(
+		events,
+		candidateCarriersAll,
+		duplicateToolCallIDs(events),
+	)
 	if err != nil {
 		return err
 	}
@@ -522,12 +537,49 @@ type evidenceLedger struct {
 	successfulReads   map[domain.Action]bool
 }
 
-func buildLedger(events []audit.Event) (evidenceLedger, error) {
+type candidateCarrierScope int
+
+const (
+	candidateCarriersAll candidateCarrierScope = iota
+	candidateCarriersLatest
+)
+
+func currentEvidenceWindow(events []audit.Event) ([]audit.Event, error) {
+	start := 0
+	for index, event := range events {
+		if event.Type != audit.EventApprovalDecided {
+			continue
+		}
+		var payload struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return nil, validationError(
+				IssueInvalidCitation,
+				"",
+				fmt.Errorf("decode approval decision %q: %w", event.EventID, err),
+			)
+		}
+		if payload.Status == "rejected" || payload.Status == "expired" {
+			start = index + 1
+		}
+	}
+	return events[start:], nil
+}
+
+func buildLedger(
+	events []audit.Event,
+	candidateScope candidateCarrierScope,
+	duplicateCallIDs map[string]struct{},
+) (evidenceLedger, error) {
 	ledger := evidenceLedger{
 		entries:           make(map[string]evidenceEntry),
-		duplicates:        make(map[string]struct{}),
+		duplicates:        duplicateCallIDs,
 		candidateCarriers: make(map[string]struct{}),
 		successfulReads:   make(map[domain.Action]bool),
+	}
+	if ledger.duplicates == nil {
+		ledger.duplicates = make(map[string]struct{})
 	}
 	for _, event := range events {
 		if event.Type != audit.EventToolResult {
@@ -542,29 +594,65 @@ func buildLedger(events []audit.Event) (evidenceLedger, error) {
 		if err := json.Unmarshal(event.Payload, &payload); err != nil || payload.CallID == "" {
 			continue
 		}
-		if _, exists := ledger.entries[payload.CallID]; exists {
-			ledger.duplicates[payload.CallID] = struct{}{}
+		if _, exists := ledger.entries[payload.CallID]; !exists {
+			ledger.entries[payload.CallID] = evidenceEntry{
+				action: payload.Action,
+				event:  event,
+			}
+		}
+		if _, duplicate := ledger.duplicates[payload.CallID]; duplicate {
 			continue
 		}
-		entry := evidenceEntry{action: payload.Action, event: event}
-		if payload.Error == "" && isReadAction(payload.Action) && len(payload.Result) > 0 {
-			result, err := decodeJSONValue(payload.Result)
-			if err != nil {
-				return evidenceLedger{}, validationError(
-					IssueInvalidCitation,
-					"",
-					fmt.Errorf("decode audited result for call %q: %w", payload.CallID, err),
-				)
-			}
-			entry.result = result
-			ledger.successfulReads[payload.Action] = true
-			if payload.Action == domain.ActionGetWaybill {
-				collectCandidateCarriers(result, ledger.candidateCarriers)
-			}
+		if payload.Error != "" || !isReadAction(payload.Action) || len(payload.Result) == 0 {
+			continue
 		}
-		ledger.entries[payload.CallID] = entry
+		result, err := decodeJSONValue(payload.Result)
+		if err != nil {
+			return evidenceLedger{}, validationError(
+				IssueInvalidCitation,
+				"",
+				fmt.Errorf("decode audited result for call %q: %w", payload.CallID, err),
+			)
+		}
+		object, ok := result.(map[string]any)
+		if !ok {
+			continue
+		}
+		ledger.entries[payload.CallID] = evidenceEntry{
+			action: payload.Action,
+			event:  event,
+			result: object,
+		}
+		ledger.successfulReads[payload.Action] = true
+		if payload.Action == domain.ActionGetWaybill {
+			if candidateScope == candidateCarriersLatest {
+				clear(ledger.candidateCarriers)
+			}
+			collectCandidateCarriers(object, ledger.candidateCarriers)
+		}
 	}
 	return ledger, nil
+}
+
+func duplicateToolCallIDs(events []audit.Event) map[string]struct{} {
+	counts := make(map[string]int)
+	duplicates := make(map[string]struct{})
+	for _, event := range events {
+		if event.Type != audit.EventToolResult {
+			continue
+		}
+		var payload struct {
+			CallID string `json:"call_id"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil || payload.CallID == "" {
+			continue
+		}
+		counts[payload.CallID]++
+		if counts[payload.CallID] > 1 {
+			duplicates[payload.CallID] = struct{}{}
+		}
+	}
+	return duplicates
 }
 
 func (l evidenceLedger) requireCompleteReadSet() error {

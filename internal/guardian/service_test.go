@@ -15,6 +15,7 @@ import (
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/idempotency"
 	"github.com/Duang777/waybill-guardian/internal/platform"
+	"github.com/Duang777/waybill-guardian/internal/proposal"
 	"github.com/Duang777/waybill-guardian/internal/tools"
 )
 
@@ -360,6 +361,48 @@ func TestRejectedReassignProducesAlternativePlan(t *testing.T) {
 	if params["carrier_id"] != "CARRIER-SW-19" {
 		t.Fatalf("alternative carrier = %v", params["carrier_id"])
 	}
+	events, err := service.Replay(t.Context(), run.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rejectedAt audit.Seq
+	for _, event := range events {
+		if event.Type != audit.EventApprovalDecided {
+			continue
+		}
+		var payload struct {
+			Status approval.Status `json:"status"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Status == approval.StatusRejected {
+			rejectedAt = event.Seq
+		}
+	}
+	freshReads := make(map[domain.Action]int)
+	for _, event := range events {
+		if event.Seq <= rejectedAt || event.Type != audit.EventToolResult {
+			continue
+		}
+		var payload struct {
+			Action domain.Action `json:"action"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		freshReads[payload.Action]++
+	}
+	for _, action := range []domain.Action{
+		domain.ActionGetWaybill,
+		domain.ActionGetTracking,
+		domain.ActionGetDriver,
+		domain.ActionGetRoadWeather,
+	} {
+		if freshReads[action] != 1 {
+			t.Fatalf("fresh %s results = %d, want 1", action, freshReads[action])
+		}
+	}
 	if runtime.WriteCount(domain.ActionReassign) != 0 {
 		t.Fatal("rejected plan executed a write")
 	}
@@ -655,6 +698,127 @@ func TestRecoverUsesPreparedProposalWithoutCallingModelAgain(t *testing.T) {
 				t.Fatalf("recovered approval = %+v, want checkpoint identity %+v", recovered, expected)
 			}
 		})
+	}
+}
+
+func TestRecoverSkipsPreparedProposalHeldByAnotherWorker(t *testing.T) {
+	clients, runtime, err := tools.NewDemoRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := Open(Config{
+		DataDir:      t.TempDir(),
+		Reads:        clients,
+		WriteRuntime: runtime,
+		StepDelay:    0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRun, err := source.StartRun(t.Context(), "YD2026101001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstApproval := waitForApproval(t, source, firstRun.RunID)
+	secondRun, err := source.StartRun(t.Context(), "YD2026101001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondApproval := waitForApproval(t, source, secondRun.RunID)
+	firstEvents, err := source.Replay(t.Context(), firstRun.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondEvents, err := source.Replay(t.Context(), secondRun.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dataDir := t.TempDir()
+	now := replayEventPrefix(
+		t,
+		dataDir,
+		firstEvents,
+		audit.EventProposalPrepared,
+		true,
+	)
+	replayEventPrefix(
+		t,
+		dataDir,
+		secondEvents,
+		audit.EventProposalPrepared,
+		true,
+	)
+	reopened, err := Open(Config{
+		DataDir:      dataDir,
+		Reads:        clients,
+		WriteRuntime: runtime,
+		Clock:        func() time.Time { return now },
+		StepDelay:    0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	reopened.coordinator = &selectiveUnavailableCoordinator{
+		blockedRun: firstRun.RunID,
+	}
+
+	if err := reopened.Recover(t.Context()); err != nil {
+		t.Fatalf("Recover stopped at another worker's run: %v", err)
+	}
+	if _, err := reopened.GetApproval(firstApproval.ID); !errors.Is(err, approval.ErrNotFound) {
+		t.Fatalf("blocked approval error = %v, want ErrNotFound", err)
+	}
+	recovered, err := reopened.GetApproval(secondApproval.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.ID != secondApproval.ID {
+		t.Fatalf("recovered approval = %q, want %q", recovered.ID, secondApproval.ID)
+	}
+}
+
+func TestRecordReviewRequiredReturnsAuditFailure(t *testing.T) {
+	clients, runtime, err := tools.NewDemoRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := Open(Config{
+		DataDir:      t.TempDir(),
+		Reads:        clients,
+		WriteRuntime: runtime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	runID := domain.RunID("run-review-audit-failure")
+	service.setRun(RunView{RunID: runID, Status: domain.RunInvestigating})
+	appendErr := errors.New("append review-required event")
+	service.journal = &failingEventJournal{
+		Journal:   service.journal,
+		eventType: audit.EventRunReviewRequired,
+		err:       appendErr,
+	}
+
+	err = service.recordReviewRequiredWithContext(
+		t.Context(),
+		runID,
+		errors.Join(proposal.ErrReviewRequired, errors.New("invalid proposal")),
+	)
+	if !errors.Is(err, appendErr) {
+		t.Fatalf("recordReviewRequiredWithContext error = %v, want append failure", err)
+	}
+	run, err := service.GetRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != domain.RunInvestigating {
+		t.Fatalf("run status = %q, want unchanged investigating", run.Status)
 	}
 }
 
@@ -1563,6 +1727,43 @@ type fixedRecoveryExecutor struct {
 	idempotency.Executor
 	command idempotency.Command
 	outcome idempotency.RecoveryOutcome
+}
+
+var errRunUnavailable = errors.New("run unavailable")
+
+type selectiveUnavailableCoordinator struct {
+	blockedRun domain.RunID
+}
+
+func (c *selectiveUnavailableCoordinator) AcquireRun(
+	ctx context.Context,
+	runID domain.RunID,
+) (context.Context, func() error, error) {
+	if runID == c.blockedRun {
+		return nil, nil, errRunUnavailable
+	}
+	return ctx, func() error { return nil }, nil
+}
+
+func (*selectiveUnavailableCoordinator) IsRunUnavailable(err error) bool {
+	return errors.Is(err, errRunUnavailable)
+}
+
+type failingEventJournal struct {
+	audit.Journal
+	eventType audit.EventType
+	err       error
+}
+
+func (j *failingEventJournal) Append(
+	ctx context.Context,
+	runID domain.RunID,
+	draft audit.Draft,
+) (audit.Event, error) {
+	if draft.Type == j.eventType {
+		return audit.Event{}, j.err
+	}
+	return j.Journal.Append(ctx, runID, draft)
 }
 
 func (e *fixedRecoveryExecutor) DueRecoveries(

@@ -404,13 +404,13 @@ func (s *Service) StartRun(
 		})
 		if err != nil {
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, agentkit.ErrEngineClosed) {
-				s.recordRunErrorWithContext(runCtx, runID, err)
+				_ = s.recordRunErrorWithContext(runCtx, runID, err)
 			}
 			return
 		}
 		if err := s.handleOutcome(runCtx, run, 1, outcome, false); err != nil {
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, agentkit.ErrEngineClosed) {
-				s.recordRunErrorWithContext(runCtx, runID, err)
+				_ = s.recordRunErrorWithContext(runCtx, runID, err)
 			}
 		}
 	}()
@@ -468,11 +468,12 @@ func (s *Service) Decide(
 		if errors.Is(err, approval.ErrDecisionConflict) && decided.Status == approval.StatusExpired {
 			s.cancelExpiration(id)
 			if _, resumeErr := s.resumeApproval(runCtx, decided, false); resumeErr != nil {
+				var recordErr error
 				if !errors.Is(resumeErr, context.Canceled) &&
 					!errors.Is(resumeErr, agentkit.ErrEngineClosed) {
-					s.recordRunErrorWithContext(runCtx, decided.RunID, resumeErr)
+					recordErr = s.recordRunErrorWithContext(runCtx, decided.RunID, resumeErr)
 				}
-				return approval.Approval{}, errors.Join(err, resumeErr)
+				return approval.Approval{}, errors.Join(err, resumeErr, recordErr)
 			}
 		}
 		return approval.Approval{}, err
@@ -498,10 +499,11 @@ func (s *Service) Decide(
 	}
 	result, err := s.resumeApproval(runCtx, decided, approved)
 	if err != nil {
+		var recordErr error
 		if !errors.Is(err, context.Canceled) && !errors.Is(err, agentkit.ErrEngineClosed) {
-			s.recordRunErrorWithContext(runCtx, decided.RunID, err)
+			recordErr = s.recordRunErrorWithContext(runCtx, decided.RunID, err)
 		}
-		return approval.Approval{}, err
+		return approval.Approval{}, errors.Join(err, recordErr)
 	}
 	return result, nil
 }
@@ -596,14 +598,18 @@ func (s *Service) Recover(ctx context.Context) error {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				s.recordRunError(value.RunID, err)
+				if recordErr := s.recordRunError(value.RunID, err); recordErr != nil {
+					return errors.Join(err, recordErr)
+				}
 			}
 		case approval.StatusConfirmed, approval.StatusReconciliationRequired:
 			if err := s.recoverConfirmedApproval(ctx, value); err != nil {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				s.recordRunError(value.RunID, err)
+				if recordErr := s.recordRunError(value.RunID, err); recordErr != nil {
+					return errors.Join(err, recordErr)
+				}
 			}
 		case approval.StatusRejected, approval.StatusExpired:
 			if value.PlanVersion < latestPlan[value.RunID] || isTerminal(s.run(value.RunID).Status) {
@@ -613,7 +619,9 @@ func (s *Service) Recover(ctx context.Context) error {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				s.recordRunError(value.RunID, err)
+				if recordErr := s.recordRunError(value.RunID, err); recordErr != nil {
+					return errors.Join(err, recordErr)
+				}
 			}
 		}
 	}
@@ -630,15 +638,30 @@ func (s *Service) Recover(ctx context.Context) error {
 			return err
 		}
 		if usesProposalProtocol {
-			s.recordReviewRequired(
+			if err := s.recordReviewRequired(
 				run.RunID,
 				errors.Join(
 					proposal.ErrReviewRequired,
 					errors.New("run stopped before a durable proposal checkpoint"),
 				),
-			)
+			); err != nil {
+				lock.Unlock()
+				if s.isRunUnavailable(err) {
+					continue
+				}
+				return err
+			}
 		} else {
-			s.recordFailure(run.RunID, errors.New("run stopped before a durable approval checkpoint"))
+			if err := s.recordFailure(
+				run.RunID,
+				errors.New("run stopped before a durable approval checkpoint"),
+			); err != nil {
+				lock.Unlock()
+				if s.isRunUnavailable(err) {
+					continue
+				}
+				return err
+			}
 		}
 		lock.Unlock()
 	}
@@ -672,16 +695,19 @@ func (s *Service) recoverPreparedApprovals(ctx context.Context) error {
 		runCtx, release, err := s.acquireRun(s.ctx, run.RunID)
 		if err != nil {
 			lock.Unlock()
+			if s.isRunUnavailable(err) {
+				continue
+			}
 			return err
 		}
 		_, materializeErr := s.materializePreparedProposal(runCtx, run, prepared)
 		if materializeErr != nil {
 			if errors.Is(materializeErr, proposal.ErrReviewRequired) {
-				s.recordReviewRequiredWithContext(runCtx, run.RunID, materializeErr)
+				recordErr := s.recordReviewRequiredWithContext(runCtx, run.RunID, materializeErr)
 				releaseErr := release()
 				lock.Unlock()
-				if releaseErr != nil {
-					return releaseErr
+				if err := errors.Join(recordErr, releaseErr); err != nil {
+					return err
 				}
 				continue
 			}
@@ -928,7 +954,7 @@ func (s *Service) recoverDecision(value approval.Approval, approved bool) error 
 	}
 	if _, err := s.resumeApproval(runCtx, current, approved); err != nil {
 		if !errors.Is(err, context.Canceled) {
-			s.recordRunErrorWithContext(runCtx, current.RunID, err)
+			return errors.Join(err, s.recordRunErrorWithContext(runCtx, current.RunID, err))
 		}
 		return err
 	}
@@ -967,8 +993,7 @@ func (s *Service) resumeApproval(
 				if markErr != nil {
 					return approval.Approval{}, errors.Join(err, markErr)
 				}
-				s.recordFailureWithContext(ctx, value.RunID, err)
-				return failed, nil
+				return failed, s.recordFailureWithContext(ctx, value.RunID, err)
 			}
 		}
 		return approval.Approval{}, err
@@ -988,12 +1013,12 @@ func (s *Service) resumeApproval(
 			if markErr != nil {
 				return approval.Approval{}, markErr
 			}
-			s.recordFailureWithContext(
+			recordErr := s.recordFailureWithContext(
 				ctx,
 				value.RunID,
 				fmt.Errorf("approval %q has incomplete effects", value.ID),
 			)
-			return failed, nil
+			return failed, recordErr
 		}
 	}
 	if err := s.handleOutcome(ctx, s.run(value.RunID), planVersion, outcome, !approved); err != nil {
@@ -1110,7 +1135,7 @@ func (s *Service) scheduleExpiration(value approval.Approval) {
 			s.removeExpiration(value.ID, cancel)
 			if err := s.expireApproval(s.ctx, value.ID); err != nil &&
 				!errors.Is(err, context.Canceled) {
-				s.recordRunError(value.RunID, err)
+				_ = s.recordRunError(value.RunID, err)
 			}
 		case <-cancel:
 		case <-s.ctx.Done():
@@ -1689,56 +1714,49 @@ func (s *Service) rebuildRuns() error {
 	return nil
 }
 
-func (s *Service) recordFailure(runID domain.RunID, cause error) {
+func (s *Service) recordFailure(runID domain.RunID, cause error) error {
 	ctx, release, err := s.acquireRun(context.Background(), runID)
 	if err != nil {
-		return
+		return err
 	}
-	defer func() {
-		_ = release()
-	}()
-	s.recordFailureWithContext(ctx, runID, cause)
+	recordErr := s.recordFailureWithContext(ctx, runID, cause)
+	return errors.Join(recordErr, release())
 }
 
-func (s *Service) recordRunError(runID domain.RunID, cause error) {
+func (s *Service) recordRunError(runID domain.RunID, cause error) error {
 	ctx, release, err := s.acquireRun(context.Background(), runID)
 	if err != nil {
-		return
+		return err
 	}
-	defer func() {
-		_ = release()
-	}()
-	s.recordRunErrorWithContext(ctx, runID, cause)
+	recordErr := s.recordRunErrorWithContext(ctx, runID, cause)
+	return errors.Join(recordErr, release())
 }
 
-func (s *Service) recordReviewRequired(runID domain.RunID, cause error) {
+func (s *Service) recordReviewRequired(runID domain.RunID, cause error) error {
 	ctx, release, err := s.acquireRun(context.Background(), runID)
 	if err != nil {
-		return
+		return err
 	}
-	defer func() {
-		_ = release()
-	}()
-	s.recordReviewRequiredWithContext(ctx, runID, cause)
+	recordErr := s.recordReviewRequiredWithContext(ctx, runID, cause)
+	return errors.Join(recordErr, release())
 }
 
 func (s *Service) recordRunErrorWithContext(
 	ctx context.Context,
 	runID domain.RunID,
 	cause error,
-) {
+) error {
 	if errors.Is(cause, proposal.ErrReviewRequired) {
-		s.recordReviewRequiredWithContext(ctx, runID, cause)
-		return
+		return s.recordReviewRequiredWithContext(ctx, runID, cause)
 	}
-	s.recordFailureWithContext(ctx, runID, cause)
+	return s.recordFailureWithContext(ctx, runID, cause)
 }
 
 func (s *Service) recordReviewRequiredWithContext(
 	ctx context.Context,
 	runID domain.RunID,
 	cause error,
-) {
+) error {
 	payload := map[string]any{
 		"status": domain.RunReviewRequired,
 		"error":  cause.Error(),
@@ -1754,19 +1772,20 @@ func (s *Service) recordReviewRequiredWithContext(
 		Payload: payload,
 	})
 	if err != nil {
-		return
+		return err
 	}
 	run := s.run(runID)
 	run.Status = domain.RunReviewRequired
 	run.LastSeq = event.Seq
 	s.setRun(run)
+	return nil
 }
 
 func (s *Service) recordFailureWithContext(
 	ctx context.Context,
 	runID domain.RunID,
 	cause error,
-) {
+) error {
 	event, err := s.journal.Append(ctx, runID, audit.Draft{
 		EventID: "run:" + string(runID) + ":failed",
 		Actor:   audit.ActorSystem,
@@ -1774,12 +1793,13 @@ func (s *Service) recordFailureWithContext(
 		Payload: map[string]any{"status": domain.RunFailed, "error": cause.Error()},
 	})
 	if err != nil {
-		return
+		return err
 	}
 	run := s.run(runID)
 	run.Status = domain.RunFailed
 	run.LastSeq = event.Seq
 	s.setRun(run)
+	return nil
 }
 
 func (s *Service) acquireRun(

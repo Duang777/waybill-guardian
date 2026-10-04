@@ -158,7 +158,7 @@ npm run record:demo
 ```bash
 git clone https://github.com/Duang777/waybill-guardian.git
 cd waybill-guardian
-docker compose up --build
+AGENT_MODE=offline docker compose up --build
 ```
 
 应用端口只发布到宿主机 loopback。审计与 Agent history 保存在 `app-data` 命名卷中。

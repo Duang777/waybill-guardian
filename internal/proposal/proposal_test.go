@@ -244,6 +244,14 @@ func TestDecodeRejectsInvalidProposalShape(t *testing.T) {
 	}
 }
 
+func TestDecodeRejectsInvalidUTF8(t *testing.T) {
+	_, err := Decode([]byte("{\"schema_version\":\"proposal.v1\",\"summary\":\"\xff\"}"))
+	if err == nil || CodeOf(err) != IssueInvalidJSON ||
+		!strings.Contains(err.Error(), "valid UTF-8") {
+		t.Fatalf("Decode error = %v, want invalid UTF-8", err)
+	}
+}
+
 func TestCompilerRejectsUntrustedCitations(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -415,6 +423,189 @@ func TestCompilerRejectsCarrierOutsideAuditedCandidates(t *testing.T) {
 	}
 }
 
+func TestCompilerRequiresUniqueObjectReadResults(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		appendWeather func(*testing.T, *audit.Store, domain.RunID)
+	}{
+		{
+			name: "duplicate call id",
+			appendWeather: func(t *testing.T, store *audit.Store, runID domain.RunID) {
+				appendToolResult(t, store, runID, "call-weather", domain.ActionGetRoadWeather,
+					map[string]any{"segments": []any{}}, "")
+				appendToolResultWithEventID(
+					t,
+					store,
+					runID,
+					"duplicate-weather",
+					"call-weather",
+					domain.ActionGetRoadWeather,
+					map[string]any{"segments": []any{}},
+					"",
+				)
+			},
+		},
+		{
+			name: "null result",
+			appendWeather: func(t *testing.T, store *audit.Store, runID domain.RunID) {
+				if _, err := store.Append(t.Context(), runID, audit.Draft{
+					EventID: "tool:call-weather:result",
+					Actor:   audit.ActorSystem,
+					Type:    audit.EventToolResult,
+					Payload: map[string]any{
+						"call_id": "call-weather",
+						"action":  domain.ActionGetRoadWeather,
+						"result":  nil,
+					},
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := openTestJournal(t)
+			runID := domain.RunID("run-invalid-read-result")
+			appendToolResult(t, store, runID, "call-waybill", domain.ActionGetWaybill,
+				map[string]any{"candidate_carriers": []any{}}, "")
+			appendToolResult(t, store, runID, "call-tracking", domain.ActionGetTracking,
+				map[string]any{"points": []any{}}, "")
+			appendValidDriver(t, store, runID)
+			test.appendWeather(t, store, runID)
+
+			draft := validDraft()
+			draft.Alternatives = nil
+			draft.Attribution = draft.Attribution[:1]
+			compiler, err := NewCompiler(store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = compiler.Compile(t.Context(), runID, mustMarshal(t, draft))
+			if err == nil || CodeOf(err) != IssueInvalidCitation ||
+				!strings.Contains(err.Error(), "missing successful ext.get_road_weather result") {
+				t.Fatalf("Compile error = %v, want missing road weather result", err)
+			}
+		})
+	}
+}
+
+func TestCompilerRequiresFreshEvidenceAfterRejectedDecision(t *testing.T) {
+	store := openTestJournal(t)
+	runID := domain.RunID("run-fresh-evidence")
+	appendCompleteReadSet(t, store, runID, "-old", "CARRIER-OLD")
+	compiler, err := NewCompiler(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDraft := draftForEvidence("-old", "CARRIER-OLD")
+	accepted, err := compiler.Compile(t.Context(), runID, mustMarshal(t, oldDraft))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(t.Context(), runID, audit.Draft{
+		EventID: "approval:old:rejected",
+		Actor:   audit.ActorHuman,
+		Type:    audit.EventApprovalDecided,
+		Payload: map[string]any{"status": "rejected"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	appendToolResult(t, store, runID, "call-driver-new", domain.ActionGetDriver, map[string]any{
+		"continuous_drive_hours": 9,
+		"fatigue_alert":          true,
+	}, "")
+
+	freshDraft := draftForEvidence("-new", "CARRIER-NEW")
+	freshDraft.Attribution = freshDraft.Attribution[:1]
+	freshDraft.Alternatives = nil
+	_, err = compiler.Compile(t.Context(), runID, mustMarshal(t, freshDraft))
+	if err == nil || CodeOf(err) != IssueInvalidCitation ||
+		!strings.Contains(err.Error(), "missing successful tms.get_waybill result") {
+		t.Fatalf("Compile error = %v, want fresh complete read set", err)
+	}
+
+	appendToolResult(t, store, runID, "call-waybill-new", domain.ActionGetWaybill, map[string]any{
+		"candidate_carriers": []any{
+			map[string]any{"carrier_id": "CARRIER-NEW"},
+		},
+	}, "")
+	appendToolResult(t, store, runID, "call-tracking-new", domain.ActionGetTracking, map[string]any{
+		"points": []any{
+			map[string]any{"label": "杭州"},
+			map[string]any{"label": "绵阳北服务区"},
+		},
+	}, "")
+	appendToolResult(t, store, runID, "call-weather-new", domain.ActionGetRoadWeather,
+		map[string]any{"segments": []any{}}, "")
+
+	staleCarrierDraft := draftForEvidence("-new", "CARRIER-OLD")
+	_, err = compiler.Compile(t.Context(), runID, mustMarshal(t, staleCarrierDraft))
+	if err == nil || CodeOf(err) != IssueInvalidAlternative {
+		t.Fatalf("Compile error = %v, want stale carrier rejection", err)
+	}
+	if _, err := compiler.Compile(
+		t.Context(),
+		runID,
+		mustMarshal(t, draftForEvidence("-new", "CARRIER-NEW")),
+	); err != nil {
+		t.Fatalf("Compile fresh proposal: %v", err)
+	}
+	if err := compiler.Verify(t.Context(), runID, accepted); err != nil {
+		t.Fatalf("Verify historical accepted proposal: %v", err)
+	}
+}
+
+func TestCompilerRejectsDuplicateCallIDAcrossDecisionBoundary(t *testing.T) {
+	store := openTestJournal(t)
+	runID := domain.RunID("run-cross-window-duplicate")
+	appendToolResult(t, store, runID, "call-driver-new", domain.ActionGetDriver, map[string]any{
+		"continuous_drive_hours": 9,
+		"fatigue_alert":          true,
+	}, "")
+	if _, err := store.Append(t.Context(), runID, audit.Draft{
+		EventID: "approval:old:rejected",
+		Actor:   audit.ActorHuman,
+		Type:    audit.EventApprovalDecided,
+		Payload: map[string]any{"status": "rejected"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	appendToolResult(t, store, runID, "call-waybill-new", domain.ActionGetWaybill, map[string]any{
+		"candidate_carriers": []any{
+			map[string]any{"carrier_id": "CARRIER-NEW"},
+		},
+	}, "")
+	appendToolResult(t, store, runID, "call-tracking-new", domain.ActionGetTracking,
+		map[string]any{"points": []any{}}, "")
+	appendToolResultWithEventID(
+		t,
+		store,
+		runID,
+		"tool:call-driver-new:result:reused",
+		"call-driver-new",
+		domain.ActionGetDriver,
+		map[string]any{
+			"continuous_drive_hours": 9,
+			"fatigue_alert":          true,
+		},
+		"",
+	)
+	appendToolResult(t, store, runID, "call-weather-new", domain.ActionGetRoadWeather,
+		map[string]any{"segments": []any{}}, "")
+
+	draft := draftForEvidence("-new", "CARRIER-NEW")
+	draft.Attribution = draft.Attribution[:1]
+	compiler, err := NewCompiler(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = compiler.Compile(t.Context(), runID, mustMarshal(t, draft))
+	if err == nil || CodeOf(err) != IssueInvalidCitation ||
+		!strings.Contains(err.Error(), "duplicate result events") {
+		t.Fatalf("Compile error = %v, want cross-window duplicate rejection", err)
+	}
+}
+
 func validDraft() Draft {
 	return Draft{
 		SchemaVersion: SchemaVersion,
@@ -462,6 +653,50 @@ func validDraft() Draft {
 			},
 		},
 	}
+}
+
+func appendCompleteReadSet(
+	t *testing.T,
+	store *audit.Store,
+	runID domain.RunID,
+	suffix string,
+	carrierID string,
+) {
+	t.Helper()
+	appendToolResult(t, store, runID, "call-waybill"+suffix, domain.ActionGetWaybill, map[string]any{
+		"candidate_carriers": []any{
+			map[string]any{"carrier_id": carrierID},
+		},
+	}, "")
+	appendToolResult(t, store, runID, "call-tracking"+suffix, domain.ActionGetTracking, map[string]any{
+		"points": []any{
+			map[string]any{"label": "杭州"},
+			map[string]any{"label": "绵阳北服务区"},
+		},
+	}, "")
+	appendToolResult(t, store, runID, "call-driver"+suffix, domain.ActionGetDriver, map[string]any{
+		"continuous_drive_hours": 9,
+		"fatigue_alert":          true,
+	}, "")
+	appendToolResult(t, store, runID, "call-weather"+suffix, domain.ActionGetRoadWeather,
+		map[string]any{"segments": []any{}}, "")
+}
+
+func draftForEvidence(suffix string, carrierID string) Draft {
+	draft := validDraft()
+	for attributionIndex := range draft.Attribution {
+		for evidenceIndex := range draft.Attribution[attributionIndex].EvidenceRefs {
+			ref := &draft.Attribution[attributionIndex].EvidenceRefs[evidenceIndex]
+			switch ref.ToolCallID {
+			case "call-driver":
+				ref.ToolCallID += suffix
+			case "call-tracking":
+				ref.ToolCallID += suffix
+			}
+		}
+	}
+	draft.Alternatives[0].CarrierID = carrierID
+	return draft
 }
 
 func mutateDraft(mutate func(*Draft)) Draft {

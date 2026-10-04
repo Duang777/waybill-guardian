@@ -40,6 +40,7 @@ const (
 	DefaultLLMRequestTimeout  = 45 * time.Second
 	DefaultLLMMaxOutputTokens = 4096
 	MaxLLMMaxOutputTokens     = 32768
+	maxAgentLoops             = 20
 )
 
 //go:embed prompts/system.md
@@ -277,7 +278,7 @@ func newEngine(
 ) *Engine {
 	toolCalls := &toolCallTracker{}
 	middlewares = append([]agents.Middleware{toolCalls}, middlewares...)
-	maxLoops := 12
+	maxLoops := maxAgentLoops
 	options := &agents.AgentOptions{
 		Name:        "waybill-guardian",
 		Instruction: hastekit.NewPrompt(SystemPrompt),

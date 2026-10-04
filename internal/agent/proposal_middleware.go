@@ -24,6 +24,7 @@ const (
 
 	maxAssistantResponseBytes = 32 << 10
 	maxRepairExcerptBytes     = 4 << 10
+	modelAuditWriteTimeout    = 5 * time.Second
 )
 
 type InferenceDescriptor struct {
@@ -285,7 +286,9 @@ func (m *ProposalBoundary) finish(
 			TotalTokens:  response.Usage.TotalTokens,
 		}
 	}
-	_, err := m.journal.Append(ctx, invocation.runID, audit.Draft{
+	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), modelAuditWriteTimeout)
+	defer cancel()
+	_, err := m.journal.Append(auditCtx, invocation.runID, audit.Draft{
 		EventID: invocation.callID + ":finished",
 		Actor:   audit.ActorSystem,
 		Type:    audit.EventModelCallFinished,

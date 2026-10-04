@@ -142,6 +142,55 @@ func TestProposalBoundaryRepairsOnceAndAuditsMetadata(t *testing.T) {
 	}
 }
 
+func TestProposalBoundaryAuditsFailedCallAfterContextCancellation(t *testing.T) {
+	store, registry, call := proposalBoundaryFixture(t, "run-canceled-model")
+	boundary, err := NewProposalBoundary(
+		store,
+		registry,
+		InferenceDescriptor{Mode: ModeOnline, Model: "model-1"},
+		time.Now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	wrapped := boundary.WrapModelCall(func(
+		ctx context.Context,
+		_ *agents.ModelCall,
+		_ *responses.Request,
+	) (*responses.Response, error) {
+		cancel()
+		return nil, ctx.Err()
+	})
+
+	if _, err := wrapped(ctx, call, &responses.Request{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("model call error = %v, want context cancellation", err)
+	}
+	events, err := store.Replay(t.Context(), domain.RunID("run-canceled-model"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started, finished int
+	for _, event := range events {
+		switch event.Type {
+		case audit.EventModelCallStarted:
+			started++
+		case audit.EventModelCallFinished:
+			finished++
+			var payload modelCallFinished
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Outcome != "failed" {
+				t.Fatalf("model outcome = %q, want failed", payload.Outcome)
+			}
+		}
+	}
+	if started != 1 || finished != 1 {
+		t.Fatalf("model events = started:%d finished:%d, want 1:1", started, finished)
+	}
+}
+
 func TestAssistantResponseTextJoinsOutputBlocksInOrder(t *testing.T) {
 	message := assistantText(`{"schema_`)
 	*message.OfOutputMessage.Content = append(

@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	agentkit "github.com/Duang777/waybill-guardian/internal/agent"
 	"github.com/Duang777/waybill-guardian/internal/approval"
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
@@ -1179,6 +1180,7 @@ func TestModelConfigFromEnvRejectsInvalidLimits(t *testing.T) {
 		{name: "tokens", key: "LLM_MAX_OUTPUT_TOKENS", value: "32769"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("AGENT_MODE", "online")
 			t.Setenv("LLM_REQUEST_TIMEOUT", "")
 			t.Setenv("LLM_MAX_OUTPUT_TOKENS", "")
 			t.Setenv(test.key, test.value)
@@ -1186,6 +1188,22 @@ func TestModelConfigFromEnvRejectsInvalidLimits(t *testing.T) {
 				t.Fatalf("%s=%q was accepted", test.key, test.value)
 			}
 		})
+	}
+}
+
+func TestModelConfigFromEnvIgnoresOnlineLimitsInOfflineMode(t *testing.T) {
+	t.Setenv("AGENT_MODE", "offline")
+	t.Setenv("LLM_REQUEST_TIMEOUT", "invalid")
+	t.Setenv("LLM_MAX_OUTPUT_TOKENS", "invalid")
+
+	config, err := modelConfigFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Mode != agentkit.ModeOffline ||
+		config.RequestTimeout != 0 ||
+		config.MaxOutputTokens != 0 {
+		t.Fatalf("offline model config = %+v", config)
 	}
 }
 

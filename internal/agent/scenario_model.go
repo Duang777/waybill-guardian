@@ -46,12 +46,17 @@ func (m *ScenarioModel) NewStreamingResponses(
 	if err != nil {
 		return nil, err
 	}
+	reassignWire, err := m.activeWireName(domain.ActionReassign)
+	if err != nil {
+		return nil, err
+	}
+	evidenceAfter := state.latestDeclinedIndex(reassignWire)
 
 	waybillWire, err := m.activeWireName(domain.ActionGetWaybill)
 	if err != nil {
 		return nil, err
 	}
-	if !state.hasResult(waybillWire) {
+	if !state.hasResultAfter(waybillWire, evidenceAfter) {
 		return toolCallResponse(
 			runContext,
 			waybillWire,
@@ -59,7 +64,7 @@ func (m *ScenarioModel) NewStreamingResponses(
 		), nil
 	}
 	var waybill guardtools.GetWaybillOutput
-	if err := state.latestResult(waybillWire, &waybill); err != nil {
+	if err := state.latestResultAfter(waybillWire, evidenceAfter, &waybill); err != nil {
 		return nil, err
 	}
 	if waybill.WaybillID != runContext.WaybillID {
@@ -70,7 +75,7 @@ func (m *ScenarioModel) NewStreamingResponses(
 	if err != nil {
 		return nil, err
 	}
-	if !state.hasResult(trackingWire) {
+	if !state.hasResultAfter(trackingWire, evidenceAfter) {
 		return toolCallResponse(
 			runContext,
 			trackingWire,
@@ -78,7 +83,7 @@ func (m *ScenarioModel) NewStreamingResponses(
 		), nil
 	}
 	var tracking guardtools.GetTrackingOutput
-	if err := state.latestResult(trackingWire, &tracking); err != nil {
+	if err := state.latestResultAfter(trackingWire, evidenceAfter, &tracking); err != nil {
 		return nil, err
 	}
 
@@ -86,7 +91,7 @@ func (m *ScenarioModel) NewStreamingResponses(
 	if err != nil {
 		return nil, err
 	}
-	if !state.hasResult(driverWire) {
+	if !state.hasResultAfter(driverWire, evidenceAfter) {
 		return toolCallResponse(
 			runContext,
 			driverWire,
@@ -94,7 +99,7 @@ func (m *ScenarioModel) NewStreamingResponses(
 		), nil
 	}
 	var driver guardtools.GetDriverOutput
-	if err := state.latestResult(driverWire, &driver); err != nil {
+	if err := state.latestResultAfter(driverWire, evidenceAfter, &driver); err != nil {
 		return nil, err
 	}
 	if driver.DriverID != waybill.DriverID {
@@ -106,7 +111,7 @@ func (m *ScenarioModel) NewStreamingResponses(
 		return nil, err
 	}
 	route := waybill.Origin + "-" + waybill.Destination
-	if !state.hasResult(weatherWire) {
+	if !state.hasResultAfter(weatherWire, evidenceAfter) {
 		return toolCallResponse(
 			runContext,
 			weatherWire,
@@ -114,17 +119,13 @@ func (m *ScenarioModel) NewStreamingResponses(
 		), nil
 	}
 	var weather guardtools.GetRoadWeatherOutput
-	if err := state.latestResult(weatherWire, &weather); err != nil {
+	if err := state.latestResultAfter(weatherWire, evidenceAfter, &weather); err != nil {
 		return nil, err
 	}
 	if len(waybill.CandidateCarriers) == 0 {
 		return nil, fmt.Errorf("waybill has no candidate carriers")
 	}
 
-	reassignWire, ok := m.registry.ActiveWireName(domain.ActionReassign)
-	if !ok {
-		return nil, fmt.Errorf("tool capability %q is unavailable", domain.ActionReassign)
-	}
 	smsWire, smsActive := m.registry.ActiveWireName(domain.ActionSendSMS)
 	reassignCalls := state.calls[reassignWire]
 	if reassignCalls == 0 {
@@ -431,6 +432,7 @@ func carrierAlternative(carrier guardtools.CarrierEvidence) proposal.Alternative
 type conversationResult struct {
 	callID string
 	output string
+	index  int
 }
 
 type conversationState struct {
@@ -444,7 +446,7 @@ func inspectConversation(messages responses.InputMessageList) conversationState 
 		results: make(map[string][]conversationResult),
 	}
 	callNames := make(map[string]string)
-	for _, message := range messages {
+	for index, message := range messages {
 		if message.OfFunctionCall != nil {
 			call := message.OfFunctionCall
 			callNames[call.CallID] = call.Name
@@ -459,20 +461,22 @@ func inspectConversation(messages responses.InputMessageList) conversationState 
 			state.results[name] = append(state.results[name], conversationResult{
 				callID: output.CallID,
 				output: *output.Output.OfString,
+				index:  index,
 			})
 		}
 	}
 	return state
 }
 
-func (s conversationState) hasResult(name string) bool {
-	return len(s.results[name]) > 0
+func (s conversationState) hasResultAfter(name string, index int) bool {
+	values := s.results[name]
+	return len(values) > 0 && values[len(values)-1].index > index
 }
 
-func (s conversationState) latestResult(name string, destination any) error {
+func (s conversationState) latestResultAfter(name string, index int, destination any) error {
 	values := s.results[name]
-	if len(values) == 0 {
-		return fmt.Errorf("tool %q has no result", name)
+	if len(values) == 0 || values[len(values)-1].index <= index {
+		return fmt.Errorf("tool %q has no current result", name)
 	}
 	if err := json.Unmarshal([]byte(values[len(values)-1].output), destination); err != nil {
 		return fmt.Errorf("decode tool %q result: %w", name, err)
@@ -491,6 +495,14 @@ func (s conversationState) latestCallID(name string) string {
 func (s conversationState) latestDeclined(name string) bool {
 	values := s.results[name]
 	return len(values) > 0 && strings.Contains(values[len(values)-1].output, "declined")
+}
+
+func (s conversationState) latestDeclinedIndex(name string) int {
+	values := s.results[name]
+	if len(values) == 0 || !strings.Contains(values[len(values)-1].output, "declined") {
+		return -1
+	}
+	return values[len(values)-1].index
 }
 
 func (s conversationState) hasSuccessfulResult(name string) bool {

@@ -603,6 +603,17 @@ func strictDurationEnv(name string, fallback time.Duration) (time.Duration, erro
 }
 
 func modelConfigFromEnv() (agentkit.ModelConfig, error) {
+	mode := envOr("AGENT_MODE", agentkit.ModeOffline)
+	config := agentkit.ModelConfig{
+		Mode:     mode,
+		APIStyle: envOr("LLM_API_STYLE", agentkit.APIStyleResponses),
+		BaseURL:  strings.TrimSpace(os.Getenv("LLM_BASE_URL")),
+		APIKey:   strings.TrimSpace(os.Getenv("LLM_API_KEY")),
+		Model:    strings.TrimSpace(os.Getenv("LLM_MODEL")),
+	}
+	if !strings.EqualFold(strings.TrimSpace(mode), agentkit.ModeOnline) {
+		return config, nil
+	}
 	requestTimeout, err := strictDurationEnv(
 		"LLM_REQUEST_TIMEOUT",
 		agentkit.DefaultLLMRequestTimeout,
@@ -618,15 +629,9 @@ func modelConfigFromEnv() (agentkit.ModelConfig, error) {
 	if err != nil {
 		return agentkit.ModelConfig{}, err
 	}
-	return agentkit.ModelConfig{
-		Mode:            envOr("AGENT_MODE", agentkit.ModeOffline),
-		APIStyle:        envOr("LLM_API_STYLE", agentkit.APIStyleResponses),
-		BaseURL:         strings.TrimSpace(os.Getenv("LLM_BASE_URL")),
-		APIKey:          strings.TrimSpace(os.Getenv("LLM_API_KEY")),
-		Model:           strings.TrimSpace(os.Getenv("LLM_MODEL")),
-		RequestTimeout:  requestTimeout,
-		MaxOutputTokens: maxOutputTokens,
-	}, nil
+	config.RequestTimeout = requestTimeout
+	config.MaxOutputTokens = maxOutputTokens
+	return config, nil
 }
 
 func serve(ctx context.Context, server *http.Server, listener net.Listener) error {

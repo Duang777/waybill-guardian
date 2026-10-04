@@ -158,7 +158,7 @@ With Docker installed, one command builds the image and serves the frontend and 
 ```bash
 git clone https://github.com/Duang777/waybill-guardian.git
 cd waybill-guardian
-docker compose up --build
+AGENT_MODE=offline docker compose up --build
 ```
 
 Compose publishes the application only on host loopback. The `app-data` volume stores the audit and
