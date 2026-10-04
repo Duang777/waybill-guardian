@@ -70,8 +70,9 @@ hastekit 自己根据 `RequiresApproval` 在首次写调用前暂停。项目 mi
 
 ## 模型配置
 
-`AGENT_MODE=demo` 使用 `ScenarioModel`。它根据持久化 conversation 中的工具结果决定下一步，
-所以重启后不依赖内存 step counter。该模式不需要 API key。
+`AGENT_MODE=offline` 使用 `ScenarioModel`。它根据持久化 conversation 中的工具结果决定下一步，
+所以重启后不依赖内存 step counter。该模式不需要 API key。`AGENT_MODE=demo` 是兼容别名。
+直接运行 `cmd/server` 默认使用该模式；`scripts/demo.sh`、录像脚本和容器默认使用 `online`。
 
 `AGENT_MODE=online` 需要：
 
@@ -82,3 +83,5 @@ hastekit 自己根据 `RequiresApproval` 在首次写调用前暂停。项目 mi
 
 在线模式安装 hastekit model retry，最多尝试三次。当前只配置一个 provider，因此不启用
 provider fallback。测试覆盖两个 API style、鉴权 header、模型名、配置校验和 503 重试。
+协议级 fake provider 还会让三张不同异常运单完成四类证据读取，并停在三个写操作的审批前。
+该测试不等同于真实模型服务验收。

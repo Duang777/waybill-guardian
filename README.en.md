@@ -32,9 +32,9 @@ The agent collects waybill, tracking, driver, and weather evidence before the pe
 
 The overview calculates labor saved, anomaly closure rate, average handling time, and approval rate from the documented formulas below. The data file does not yet provide ETA baselines or cost fields, so time recovered and cost impact are explicitly unavailable instead of being filled with simulated assumptions. The three scores on the waybill page come from `deriveAssessment` in [`internal/guardian/assessment.go`](internal/guardian/assessment.go), clamped to 0 through 100. Status matching ignores case. When it is not `delivered`, the ETA score starts at 20, adds 15 for each anomaly point, then adds stop hours times 8, rounded. The road score is continuous driving hours times 5, rounded, plus 30 when the fatigue alert is set. The weather score is the highest segment alert. `none`, `normal`, `green`, and an empty value are 0. `low`, `blue`, and `yellow` are 30. `medium` and `orange` are 60. `high`, `red`, and `critical` are 90. Any other value is 20. The embedded fixture therefore shows ETA 83, road 75, and weather 0.
 
-**The default demo is still a script.** `AGENT_MODE=demo` uses `ScenarioModel` in [`internal/agent/scenario_model.go`](internal/agent/scenario_model.go). It calls the four read tools in a fixed order, reads the driver, route, and candidate carriers from the tool results, and fills a fixed sentence template. Replacing that demo with real model inference is still open in [issue 59](https://github.com/Duang777/waybill-guardian/issues/59).
+`./scripts/demo.sh`, `npm run record:demo`, and the container use `AGENT_MODE=online` by default. The online model calls the four read tools before it returns a structured proposal and write-tool calls. The server checks the proposal schema, candidate carriers, write arguments, and every evidence reference. It allows one repair after a validation failure, then sends a second failure to manual review. The audit records the inference mode, model, API style, latency, and token usage.
 
-`AGENT_MODE=online` can call the OpenAI Responses API, or an OpenAI-compatible Chat Completions API. That wiring is in the tree. Issue 59 still asks for a real-model default demo, structured evidence references, and acceptance on a domestic model. Those items are still open.
+`AGENT_MODE=online` supports the OpenAI Responses API and OpenAI-compatible Chat Completions APIs. The repository stores no model credentials. Automated acceptance uses a local compatible fake and covers both API styles across three different anomalous waybills. This change has not been tested against a live domestic model because no provider credential was available, so the repository does not claim that acceptance. CI and credential-free demos explicitly use `AGENT_MODE=offline`, and the UI labels them as offline replay. `AGENT_MODE=demo` remains an alias for `offline`.
 
 `PLATFORM=mock` loads only the embedded waybill `YD2026101001` from [`internal/tools/testdata/demo.json`](internal/tools/testdata/demo.json). `PLATFORM=file` loads one JSON or CSV v1 file at startup and supports optional highway-port, vehicle, and route network entities. The page can select a waybill from that file and start a run. Writes in file mode stay on the in-memory fixture write runtime, and SMS is not actually sent.
 
@@ -48,7 +48,7 @@ The home page is a nationwide highway-port overview with the network, KPIs, anom
   <img alt="Phone width. The same scripted demo shows 处置完成 after confirmation, and the button reads 重新处置." src="docs/assets/console-completed-mobile.png" width="280">
 </p>
 
-Both screenshots come from `npm run verify:e2e` after merging current `main`, with no Amap key, so the map is the local track. `ScenarioModel` fills the approval sentence from tool results with a fixed template.
+Both screenshots come from `AGENT_MODE=offline npm run verify:e2e`, with no Amap key, so the map is the local track. `ScenarioModel` derives the approval sentence from tool results.
 
 ## Architecture
 
@@ -103,7 +103,7 @@ The status describes the code in this repository.
 | Local identity and JWT | Shipped | `AUTH_MODE=local` listens on loopback by default; the container also checks the Host and TCP peer. `jwt` checks RS256, issuer, audience, time, tenant, role, and waybill scope. |
 | Amap or a local track | Shipped | With no key, or if the SDK fails to load, the page draws local coordinates. |
 | Reassign HTTP sandbox | Shipped | `tms.reassign` only. Reads stay on the fixture. Not a production TMS. |
-| Online model calls | In progress | An OpenAI-compatible API can be configured. The default demo is still the script. See [issue 59](https://github.com/Duang777/waybill-guardian/issues/59). |
+| Online model calls | In progress | Formal demo entry points default to online inference. Compatible fake tests cover both APIs and three waybills. Live domestic-provider acceptance still needs a deployment credential. See [issue 59](https://github.com/Duang777/waybill-guardian/issues/59). |
 | File import | Shipped | `PLATFORM=file` loads JSON or CSV v1 at startup, and the page can select a waybill from the file. Writes stay on the in-memory fixture runtime. See closed [issue 60](https://github.com/Duang777/waybill-guardian/issues/60) and [`docs/file-data-source-design.md`](docs/file-data-source-design.md). |
 | Highway-port overview | Shipped | The home page shows the 72-port network, KPIs, anomaly queue, operating briefs, and batch start with per-run approval. See [issue 61](https://github.com/Duang777/waybill-guardian/issues/61). |
 | Apache-2.0 and dependency manifests | Shipped | The root has `LICENSE`. Transitive dependency manifests are in [`docs/licenses/`](docs/licenses/). |
@@ -114,20 +114,30 @@ The status describes the code in this repository.
 
 ## Demo
 
-The script is [`docs/demo-script.md`](docs/demo-script.md). Start the stack:
+The script is [`docs/demo-script.md`](docs/demo-script.md). The formal demo calls an online model by default:
 
 ```bash
+export LLM_API_STYLE=chat_completions
+export LLM_BASE_URL=https://api.deepseek.com
+export LLM_API_KEY=replace-me
+export LLM_MODEL=deepseek-v4-flash
 ./scripts/demo.sh
+```
+
+Without model credentials, start offline replay explicitly:
+
+```bash
+AGENT_MODE=offline ./scripts/demo.sh
 ```
 
 Open <http://127.0.0.1:5173> for the operating overview. Select anomalous waybills and click **交给 Agent**, or open `/waybills/:id` for one waybill. The workbench still offers **启动处置**. `POST /api/demo/trigger` starts the embedded waybill.
 
 1. The agent reads waybill `YD2026101001`, Hangzhou to Chengdu.
 2. The timeline records waybill, tracking, driver, and weather calls.
-3. The script fills a fixed sentence from the tool results. In the embedded fixture the driver has driven 9 hours with a fatigue alert, 绵阳北服务区 is a 6 hour stop, and the weather alert is `none`, so the card proposes reassignment to 川行快运 and notices to the shipper and the driver. Those writes have not run yet.
+3. The online model returns a structured attribution, alternatives, and evidence references from the tool results. In the embedded fixture the driver has driven 9 hours with a fatigue alert, 绵阳北服务区 is a 6 hour stop, and the weather alert is `none`. The write calls have not run yet.
 4. Click **确认并执行**. The timeline shows the platform writes, and the waybill status becomes completed.
 5. Use the replay control to watch from the first audit event, then click **实时** to return to the live end.
-6. If the first carrier is rejected, the script proposes 蜀道联运. `npm run verify:e2e` covers three confirmations and one rejection.
+6. If the first carrier is rejected, the agent continues from the human decision. The offline `ScenarioModel` proposes 蜀道联运, and `npm run verify:e2e` covers three confirmations and one rejection.
 
 A subtitled recording with no audio track:
 
@@ -136,7 +146,7 @@ cd web
 npm run record:demo
 ```
 
-The file is `web/artifacts/waybill-guardian-demo.mp4`, at 1600 by 900. That directory is gitignored. A dubbed narration is not in the repository. `RECORD_OUTPUT`, `RECORD_BACKEND_PORT`, and `RECORD_WEB_PORT` change the output path and ports.
+The recording script inherits the model settings above and defaults to `online`. To record without credentials, run `AGENT_MODE=offline npm run record:demo`. The file is `web/artifacts/waybill-guardian-demo.mp4`, at 1600 by 900. That directory is gitignored. A dubbed narration is not in the repository. `RECORD_OUTPUT`, `RECORD_BACKEND_PORT`, and `RECORD_WEB_PORT` change the output path and ports.
 
 ## Quick start
 
@@ -237,7 +247,11 @@ browser E2E suites and upload `web/artifacts/*.png`.
 | `ALLOW_NON_LOOPBACK_LOCAL` | `false` | Allow local mode to listen on a non-loopback IP, only for a container published on host loopback |
 | `LOCAL_TRUSTED_REMOTE` | empty | Required with the previous option. The TCP peer must match this IP, hostname, or `container-gateway` |
 | `DATA_DIR` | `data` | JSONL audit and hastekit history directory |
-| `AGENT_MODE` | `demo` | `demo` uses `ScenarioModel`. `online` calls an external model |
+| `AGENT_MODE` | Entry-specific | `demo.sh`, recording, and containers default to `online`; the server alone defaults to `offline`. `demo` is an alias for `offline` |
+| `LLM_API_STYLE` | `responses` | `responses` or `chat_completions` in online mode |
+| `LLM_BASE_URL` | empty | Required online. The model API root without a concrete endpoint |
+| `LLM_API_KEY` | empty | Required online. Read only from the process environment |
+| `LLM_MODEL` | empty | Required online. A current model ID from the provider |
 | `PLATFORM` | `mock` | `mock` uses the fixture. `file` loads `DATA_FILE`. `real` uses the reassign sandbox |
 | `DATA_FILE` | empty | Required for `PLATFORM=file`. One JSON or CSV v1 file |
 | `MAX_CONCURRENT_RUNS` | `8` | Maximum concurrent investigation runs, from 1 through 64 |
@@ -267,6 +281,7 @@ Start file mode after validation:
 PLATFORM=file \
 DATA_FILE=./data/templates/waybills-v1.csv \
 DATA_DIR=/tmp/waybill-file-demo \
+AGENT_MODE=offline \
 ./scripts/demo.sh
 ```
 
@@ -274,7 +289,7 @@ Compose mounts the repository's `data/` directory read-only at `/app/data`. Run 
 container with:
 
 ```bash
-COMPOSE_PROFILES= STORAGE=jsonl PLATFORM=file \
+COMPOSE_PROFILES= STORAGE=jsonl PLATFORM=file AGENT_MODE=offline \
 DATA_FILE=/app/data/templates/waybills-v1.json \
 docker compose up --build
 ```
@@ -324,18 +339,30 @@ provide the baseline, result, and cost fields required by those formulas.
 
 ### Online model
 
+This example uses the DeepSeek Chat Completions API:
+
 ```bash
 AGENT_MODE=online \
-LLM_API_STYLE=responses \
-LLM_BASE_URL=https://api.openai.com/v1 \
+LLM_API_STYLE=chat_completions \
+LLM_BASE_URL=https://api.deepseek.com \
 LLM_API_KEY=replace-me \
-LLM_MODEL=gpt-5-mini \
+LLM_MODEL=deepseek-v4-flash \
 ./scripts/demo.sh
 ```
 
-`LLM_API_STYLE` is `responses` or `chat_completions`. The default is `responses`. `LLM_BASE_URL` must be the API root. It must not end in `/`, and it must not include `/responses` or `/chat/completions`. Online mode configures one provider and does not enable provider fallback. A model call is attempted at most three times, including the first try.
+The following domestic providers expose compatible Chat Completions APIs. Model IDs, interface support, and prices can change. Check the linked provider documentation before running the demo.
 
-This is still not the real-model default demo in issue 59.
+| Provider | `LLM_API_STYLE` | `LLM_BASE_URL` | Example `LLM_MODEL` | Official resources |
+|---|---|---|---|---|
+| Alibaba Cloud Model Studio Qwen | `chat_completions` | `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | [Setup](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions) · [Pricing](https://help.aliyun.com/zh/model-studio/model-pricing) |
+| DeepSeek | `chat_completions` | `https://api.deepseek.com` | `deepseek-v4-flash` | [Setup](https://api-docs.deepseek.com/) · [Pricing](https://api-docs.deepseek.com/quick_start/pricing/) |
+| Volcengine Ark Doubao | `chat_completions` | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-1-6-251015` | [Setup](https://www.volcengine.com/docs/82379/1399008) · [Pricing](https://www.volcengine.com/docs/82379/1544106) |
+| Kimi | `chat_completions` | `https://api.moonshot.cn/v1` | `kimi-k3` | [Setup](https://platform.kimi.com/docs/get-api-key) · [Pricing](https://platform.kimi.com/docs/pricing/chat) |
+| Zhipu GLM | `chat_completions` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.3` | [Setup](https://docs.bigmodel.cn/cn/guide/develop/openai/introduction) · [Pricing](https://docs.bigmodel.cn/cn/guide/start/pricing) |
+
+`LLM_API_STYLE` defaults to `responses`. `LLM_BASE_URL` must be the API root. It must not end in `/`, and it must not include `/responses` or `/chat/completions`. Online mode configures one provider and does not enable provider fallback. A model call is attempted at most three times, including the first try. The audit records token usage and latency for every model call, but the server does not enforce a spending limit.
+
+Model calls incur provider charges and send redacted waybill evidence to the selected provider. Before a deployment calls a provider, the operator must review its current model IDs, prices, data rules, and service terms. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists the terms pages. The automated suite tests protocol compatibility, not a live provider.
 
 ### Platform
 

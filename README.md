@@ -32,9 +32,9 @@
 
 经营总览按下文口径计算人力节省、异常闭环率、平均处置时长和审批通过率。数据文件还没有时效基线与成本字段，因此时效挽回和成本影响会明确显示为不可用，不会用仿真假设补值。单运单页面的三项风险分由 [`internal/guardian/assessment.go`](internal/guardian/assessment.go) 的 `deriveAssessment` 计算，并限制在 0 到 100。运单状态的比较不区分大小写。状态不是 `delivered` 时，ETA 分先取 20，每个异常点再加 15，再加上停留小时乘以 8 后四舍五入。路况分是连续驾驶小时乘以 5 后四舍五入，疲劳预警再加 30。天气分取各段预警的最大值。`none`、`normal`、`green` 和空值为 0，`low`、`blue`、`yellow` 为 30，`medium`、`orange` 为 60，`high`、`red`、`critical` 为 90，其余为 20。内置样例因此显示 ETA 83、路况 75、天气 0。
 
-**默认演示仍是脚本。** `AGENT_MODE=demo` 使用 [`internal/agent/scenario_model.go`](internal/agent/scenario_model.go) 里的 `ScenarioModel`。它按固定顺序调用四个只读工具，从工具结果读取司机、路线和候选承运商，再用固定句子模板写出归因。把演示改成真实模型推理，见仍开放的 [issue 59](https://github.com/Duang777/waybill-guardian/issues/59)。
+`./scripts/demo.sh`、`npm run record:demo` 和容器默认使用 `AGENT_MODE=online`。在线模型先调用四个只读工具，再输出结构化提案和写工具调用。服务端校验提案 schema、候选承运商、写参数和每条证据引用；校验失败时只允许修复一次，第二次失败转人工复核。模型模式、模型名、API 风格、调用时延和 token 用量写入审计时间线。
 
-`AGENT_MODE=online` 可以调用 OpenAI Responses API，或 OpenAI 兼容的 Chat Completions API。这是已经接上的调用路径。issue 59 还要求默认演示走真实推理、结构化证据引用，以及国产模型验收。这些还没有做。
+`AGENT_MODE=online` 支持 OpenAI Responses API 和 OpenAI-compatible Chat Completions API。仓库不保存模型密钥。当前自动验收使用本地 compatible fake，已覆盖两种 API 风格和三张不同异常运单；本提交尚未取得可用于真实国产模型验收的凭据，因此不宣称已完成真实服务联调。CI 和无凭据演示显式使用 `AGENT_MODE=offline`，界面会标记“离线回放模式”。`AGENT_MODE=demo` 保留为 `offline` 的兼容别名。
 
 默认 `PLATFORM=mock` 只加载内置运单 `YD2026101001`，数据在 [`internal/tools/testdata/demo.json`](internal/tools/testdata/demo.json)。`PLATFORM=file` 在启动时加载一份 JSON 或 CSV v1，支持可选的公路港、车辆和线路网络。页面可以选择文件中的运单并启动处置。文件模式下的写操作仍走内存中的 fixture 写入运行时，短信不会真正发出。
 
@@ -48,7 +48,7 @@
   <img alt="手机宽度下，同一次脚本演示在确认后显示处置完成，按钮是重新处置。" src="docs/assets/console-completed-mobile.png" width="280">
 </p>
 
-上面两张图来自合并当前 `main` 之后的 `npm run verify:e2e`，没有配置高德 key，所以地图显示本地轨迹。审批卡上的归因句子由 `ScenarioModel` 用工具结果套固定模板生成。
+上面两张图来自 `AGENT_MODE=offline npm run verify:e2e`，没有配置高德 key，所以地图显示本地轨迹。审批卡上的归因句子由 `ScenarioModel` 根据工具结果生成。
 
 ## 架构
 
@@ -103,7 +103,7 @@ flowchart TD
 | 本地身份和 JWT | 已交付 | `AUTH_MODE=local` 默认监听 loopback；容器额外校验 Host 和 TCP 对端。`jwt` 校验 RS256、issuer、audience、时效、租户、角色和运单范围。 |
 | 高德地图或本地轨迹 | 已交付 | 没有 key，或 SDK 加载失败时，页面改用本地坐标。 |
 | 改派 HTTP 沙箱 | 已交付 | 仅 `tms.reassign`。读仍是内置样例。不是生产 TMS。 |
-| 在线模型调用 | 进行中 | 可以配置 OpenAI 兼容 API。默认演示仍是脚本。验收标准见 [issue 59](https://github.com/Duang777/waybill-guardian/issues/59)。 |
+| 在线模型调用 | 进行中 | 正式演示入口默认在线。两种兼容 API 和三运单 fake 验收已通过；真实国产模型联调仍需要部署方凭据。见 [issue 59](https://github.com/Duang777/waybill-guardian/issues/59)。 |
 | 文件导入 | 已交付 | `PLATFORM=file` 在启动时加载 JSON 或 CSV v1，页面可以选择其中的运单。写操作留在内存 fixture 运行时。见已关闭的 [issue 60](https://github.com/Duang777/waybill-guardian/issues/60) 和 [`docs/file-data-source-design.md`](docs/file-data-source-design.md)。 |
 | 公路港总览 | 已交付 | 首页展示 72 港网络、KPI、异常队列和经营简报，并支持批量启动后逐单审批。见 [issue 61](https://github.com/Duang777/waybill-guardian/issues/61)。 |
 | Apache-2.0 与依赖许可清单 | 已交付 | 根目录含 `LICENSE`，传递依赖清单位于 [`docs/licenses/`](docs/licenses/)。 |
@@ -114,20 +114,30 @@ flowchart TD
 
 ## 演示
 
-讲稿在 [`docs/demo-script.md`](docs/demo-script.md)。启动：
+讲稿在 [`docs/demo-script.md`](docs/demo-script.md)。正式演示默认调用在线模型：
 
 ```bash
+export LLM_API_STYLE=chat_completions
+export LLM_BASE_URL=https://api.deepseek.com
+export LLM_API_KEY=replace-me
+export LLM_MODEL=deepseek-v4-flash
 ./scripts/demo.sh
+```
+
+无模型凭据时，显式启动离线回放：
+
+```bash
+AGENT_MODE=offline ./scripts/demo.sh
 ```
 
 打开 <http://127.0.0.1:5173> 查看经营总览。选择异常运单后点击 **交给 Agent**，或下钻到 `/waybills/:id` 处理单张运单。单运单工作台仍可点击 **启动处置**。`POST /api/demo/trigger` 会启动内置运单。
 
 1. Agent 查询杭州到成都运单 `YD2026101001`。
 2. 时间线记下运单、轨迹、司机和天气四次工具调用。
-3. 脚本把工具结果套进固定句子。内置样例里连续驾驶 9 小时并有疲劳预警，绵阳北服务区停留 6 小时，天气预警是 `none`，所以审批卡建议改派到川行快运，再通知货主和司机。这三个写操作此时还没有执行。
+3. 在线模型根据工具结果输出结构化归因、候选方案和证据引用。内置样例里连续驾驶 9 小时并有疲劳预警，绵阳北服务区停留 6 小时，天气预警是 `none`。这三个写操作此时还没有执行。
 4. 点击 **确认并执行**。时间线出现平台写入，运单状态变为处置完成。
 5. 用回放控件从第一条审计事件再看一遍，然后点 **实时** 回到末尾。
-6. 如果驳回首选承运商，脚本会改提蜀道联运。`npm run verify:e2e` 覆盖了确认三次和驳回一次。
+6. 如果驳回首选承运商，Agent 会继续处理人工决定。离线 `ScenarioModel` 会改提蜀道联运，`npm run verify:e2e` 覆盖了确认三次和驳回一次。
 
 带中文字幕、没有音轨的录像：
 
@@ -136,7 +146,7 @@ cd web
 npm run record:demo
 ```
 
-输出在 `web/artifacts/waybill-guardian-demo.mp4`，1600×900。这个目录被 git 忽略。正式配音还不在仓库里。可用 `RECORD_OUTPUT`、`RECORD_BACKEND_PORT` 和 `RECORD_WEB_PORT` 改输出路径和端口。
+录像脚本继承上面的模型配置，并默认使用 `online`。无凭据试录时运行 `AGENT_MODE=offline npm run record:demo`。输出在 `web/artifacts/waybill-guardian-demo.mp4`，1600×900。这个目录被 git 忽略。正式配音还不在仓库里。可用 `RECORD_OUTPUT`、`RECORD_BACKEND_PORT` 和 `RECORD_WEB_PORT` 改输出路径和端口。
 
 ## 快速开始
 
@@ -238,7 +248,11 @@ GitHub Actions 会在 pull request 和 `main` 推送上运行 Go race、恢复�
 | `ALLOW_NON_LOOPBACK_LOCAL` | `false` | 允许 local 模式监听非 loopback IP，只供端口绑定到宿主机 loopback 的容器使用 |
 | `LOCAL_TRUSTED_REMOTE` | 空 | 上一项为 `true` 时必填。请求 TCP 对端必须匹配该 IP、主机名或 `container-gateway` |
 | `DATA_DIR` | `data` | JSONL 审计和 hastekit history 目录 |
-| `AGENT_MODE` | `demo` | `demo` 使用 `ScenarioModel`。`online` 调用外部模型 |
+| `AGENT_MODE` | 入口相关 | `demo.sh`、录像和容器默认 `online`；直接运行服务默认 `offline`。`demo` 是 `offline` 的兼容别名 |
+| `LLM_API_STYLE` | `responses` | `online` 模式使用 `responses` 或 `chat_completions` |
+| `LLM_BASE_URL` | 空 | `online` 模式必填。模型 API 根路径，不能包含具体 endpoint |
+| `LLM_API_KEY` | 空 | `online` 模式必填。只从运行环境读取 |
+| `LLM_MODEL` | 空 | `online` 模式必填。提供商当前可用的模型 ID |
 | `PLATFORM` | `mock` | `mock` 使用内置样例。`file` 加载 `DATA_FILE`。`real` 使用改派沙箱，见下文 |
 | `DATA_FILE` | 空 | `PLATFORM=file` 时必填，指向一份 JSON 或 CSV v1 |
 | `MAX_CONCURRENT_RUNS` | `8` | 同时执行调查阶段的 run 数量，范围 1 到 64 |
@@ -268,13 +282,14 @@ go run ./cmd/dataimport validate --data ./data/templates/waybills-v1.json
 PLATFORM=file \
 DATA_FILE=./data/templates/waybills-v1.csv \
 DATA_DIR=/tmp/waybill-file-demo \
+AGENT_MODE=offline \
 ./scripts/demo.sh
 ```
 
 Compose 将仓库的 `data/` 目录只读挂载到 `/app/data`。容器内运行模板数据：
 
 ```bash
-COMPOSE_PROFILES= STORAGE=jsonl PLATFORM=file \
+COMPOSE_PROFILES= STORAGE=jsonl PLATFORM=file AGENT_MODE=offline \
 DATA_FILE=/app/data/templates/waybills-v1.json \
 docker compose up --build
 ```
@@ -322,18 +337,30 @@ run 使用独立的 `run_id`、审批记录和 SSE 时间线。
 
 ### 在线模型
 
+以下示例使用 DeepSeek 的 Chat Completions 接口：
+
 ```bash
 AGENT_MODE=online \
-LLM_API_STYLE=responses \
-LLM_BASE_URL=https://api.openai.com/v1 \
+LLM_API_STYLE=chat_completions \
+LLM_BASE_URL=https://api.deepseek.com \
 LLM_API_KEY=replace-me \
-LLM_MODEL=gpt-5-mini \
+LLM_MODEL=deepseek-v4-flash \
 ./scripts/demo.sh
 ```
 
-`LLM_API_STYLE` 可以是 `responses` 或 `chat_completions`，默认 `responses`。`LLM_BASE_URL` 必须是 API 根路径，不能以 `/` 结尾，也不能带上 `/responses` 或 `/chat/completions`。在线模式只配置一个 provider，没有 provider fallback。一次模型调用最多尝试三次，包含第一次。
+可选国产模型的 Chat Completions 配置如下。模型 ID、接口能力和价格会调整，运行前查看对应官方文档。
 
-这仍不是 issue 59 里的默认真实推理演示。
+| 提供商 | `LLM_API_STYLE` | `LLM_BASE_URL` | `LLM_MODEL` 示例 | 官方资料 |
+|---|---|---|---|---|
+| 阿里云百炼千问 | `chat_completions` | `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | [接入](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions) · [计费](https://help.aliyun.com/zh/model-studio/model-pricing) |
+| DeepSeek | `chat_completions` | `https://api.deepseek.com` | `deepseek-v4-flash` | [接入](https://api-docs.deepseek.com/zh-cn/) · [计费](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) |
+| 火山方舟豆包 | `chat_completions` | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-1-6-251015` | [接入](https://www.volcengine.com/docs/82379/1399008) · [计费](https://www.volcengine.com/docs/82379/1544106) |
+| Kimi | `chat_completions` | `https://api.moonshot.cn/v1` | `kimi-k3` | [接入](https://platform.kimi.com/docs/get-api-key) · [计费](https://platform.kimi.com/docs/pricing/chat) |
+| 智谱 GLM | `chat_completions` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.3` | [接入](https://docs.bigmodel.cn/cn/guide/develop/openai/introduction) · [计费](https://docs.bigmodel.cn/cn/guide/start/pricing) |
+
+`LLM_API_STYLE` 默认是 `responses`。`LLM_BASE_URL` 必须是 API 根路径，不能以 `/` 结尾，也不能带上 `/responses` 或 `/chat/completions`。在线模式只配置一个 provider，没有 provider fallback。一次模型调用最多尝试三次，包含第一次。服务会把每次调用的 token 用量和时延写入审计事件，但不会设置消费限额。
+
+调用模型会产生费用，并把脱敏后的运单证据发送给所选提供商。部署方必须在调用前核对当前模型名、价格、数据处理规则和服务条款。各家的条款入口登记在 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。仓库的自动测试只验证兼容协议，不替代真实服务验收。
 
 ### 平台
 

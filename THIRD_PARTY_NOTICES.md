@@ -51,13 +51,24 @@ provider fallback middleware，但当前实现没有配置 fallback。
 
 ## 外部服务
 
-仓库默认使用确定性模型和本地轨迹视图，不要求连接外部服务。启用以下服务时，部署方需要
-自行取得账号、密钥和许可，并遵守服务方当时有效的条款：
+正式演示入口默认使用在线模型，但仓库不捆绑模型服务，也不保存 API key。CI 和无凭据演示
+使用 `AGENT_MODE=offline`。部署方选择在线服务后，需要自行取得账号、密钥和许可，并遵守
+调用时有效的价格、数据规则和服务条款。只有部署方实际配置的服务会收到脱敏后的运单证据。
+
+| 可选服务 | 接口用途 | 官方计费 | 官方条款 |
+|---|---|---|---|
+| 阿里云百炼千问 | OpenAI-compatible Chat Completions | [模型调用价格](https://help.aliyun.com/zh/model-studio/model-pricing) | [阿里云百炼服务协议](https://terms.alicdn.com/legal-agreement/terms/common_platform_service/20230728213935489/20230728213935489.html) |
+| DeepSeek | OpenAI-compatible Chat Completions | [模型与价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) | [开放平台服务条款](https://cdn.deepseek.com/policies/zh-CN/deepseek-open-platform-terms-of-service.html) |
+| 火山方舟豆包 | OpenAI-compatible Chat Completions | [模型服务价格](https://www.volcengine.com/docs/82379/1544106) | [火山方舟专用条款](https://www.volcengine.com/docs/82379/1104498) |
+| Kimi | OpenAI-compatible Chat Completions | [模型推理价格](https://platform.kimi.com/docs/pricing/chat) | [Kimi 开放平台服务协议](https://platform.kimi.com/docs/agreement/modeluse) |
+| 智谱 GLM | OpenAI-compatible Chat Completions | [API 定价](https://docs.bigmodel.cn/cn/guide/start/pricing) | [大模型开放平台服务协议](https://docs.bigmodel.cn/cn/terms/service-agreement) |
+| OpenAI | Responses API 或 Chat Completions | [API 定价](https://openai.com/api/pricing/) | [Service Terms](https://openai.com/policies/service-terms/) |
+
+上表是配置入口，不表示仓库已用每个服务完成真实调用验收。模型名、价格和条款可能变化，
+部署方必须在运行前复核官方页面。
 
 - 在线模型：`AGENT_MODE=online` 支持 OpenAI Responses API 和 OpenAI-compatible Chat
-  Completions API。仓库不捆绑模型服务。使用 OpenAI 时适用其
-  [Service Terms](https://openai.com/policies/service-terms/)；使用兼容服务时适用对应
-  提供商的条款。
+  Completions API。
 - 地图和底图：配置 `VITE_AMAP_KEY` 后，浏览器加载高德地图 JS API。地图、底图和接口数据
   不随仓库再分发，使用时适用
   [高德地图开放平台服务协议](https://lbs.amap.com/pages/terms/)。

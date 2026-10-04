@@ -11,7 +11,8 @@ The three candidates converged on the same core design:
 - Use Hastekit's native pause/resume protocol.
 - Keep the business approval record outside SDK history.
 - Project approval, idempotency, audit, and SSE from one append-only business journal.
-- Use a deterministic model provider for the default demo.
+- Keep a deterministic model provider for CI and explicit offline replay.
+- Use an online model for the formal demo entry points.
 - Require downstream idempotency for real writes.
 
 ## Adapted ideas

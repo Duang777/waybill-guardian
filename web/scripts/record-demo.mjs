@@ -117,7 +117,8 @@ try {
     "系统依次查询运单、轨迹、司机和天气，工具调用实时写入审计日志。",
   );
   await page.getByRole("button", { name: "启动处置", exact: true }).click();
-  await page.getByText("改派至川行快运", { exact: true }).waitFor();
+  const proposalHeading = page.getByRole("heading", { name: /^改派至/ });
+  await proposalHeading.waitFor();
   await page.getByText("待确认", { exact: true }).waitFor();
   await hold(page, 2_000);
 
@@ -163,14 +164,25 @@ try {
     "驳回必须填写原因，Agent 会读取决定并提交第二个候选运力。",
   );
   await page.getByRole("button", { name: "重新处置", exact: true }).click();
-  await page.getByText("改派至川行快运", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "驳回方案", exact: true }).waitFor();
+  await page.getByText("待确认", { exact: true }).waitFor();
+  const rejectedProposalTitle = await proposalHeading.textContent();
   await page.getByRole("button", { name: "驳回方案", exact: true }).click();
   await page
     .getByLabel("驳回原因")
     .fill("首选承运商当前无可用车辆");
   await hold(page, 1_500);
   await page.getByRole("button", { name: "确认驳回", exact: true }).click();
-  await page.getByText("改派至蜀道联运", { exact: true }).waitFor();
+  await page.waitForFunction(
+    (previousTitle) =>
+      [...document.querySelectorAll("h2")].some(
+        (heading) =>
+          heading.textContent?.startsWith("改派至") &&
+          heading.textContent !== previousTitle,
+      ),
+    rejectedProposalTitle,
+  );
+  await page.getByText("待确认", { exact: true }).waitFor();
   await hold(page, 4_000);
 
   await scene(
