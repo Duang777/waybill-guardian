@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
+	"encoding/base32"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -46,26 +46,78 @@ func (m *ScenarioModel) NewStreamingResponses(
 		return nil, err
 	}
 
-	for _, step := range []struct {
-		action domain.Action
-		args   any
-	}{
-		{domain.ActionGetWaybill, guardtools.GetWaybillInput{WaybillID: string(runContext.WaybillID)}},
-		{domain.ActionGetTracking, guardtools.GetTrackingInput{WaybillID: string(runContext.WaybillID)}},
-		{domain.ActionGetDriver, guardtools.GetDriverInput{DriverID: "DRV-0286"}},
-		{domain.ActionGetRoadWeather, guardtools.GetRoadWeatherInput{Route: "杭州-成都"}},
-	} {
-		wireName, ok := m.registry.ActiveWireName(step.action)
-		if !ok {
-			return nil, fmt.Errorf("tool capability %q is unavailable", step.action)
-		}
-		if !state.hasResult(wireName) {
-			return &responses.Response{
-				Output: []responses.OutputMessageUnion{
-					toolCall(runContext.RunID, wireName, 1, step.args),
-				},
-			}, nil
-		}
+	waybillWire, err := m.activeWireName(domain.ActionGetWaybill)
+	if err != nil {
+		return nil, err
+	}
+	if !state.hasResult(waybillWire) {
+		return toolCallResponse(
+			runContext,
+			waybillWire,
+			guardtools.GetWaybillInput{WaybillID: string(runContext.WaybillID)},
+		), nil
+	}
+	var waybill guardtools.GetWaybillOutput
+	if err := state.latestResult(waybillWire, &waybill); err != nil {
+		return nil, err
+	}
+	if waybill.WaybillID != runContext.WaybillID {
+		return nil, fmt.Errorf("waybill evidence does not match the run target")
+	}
+
+	trackingWire, err := m.activeWireName(domain.ActionGetTracking)
+	if err != nil {
+		return nil, err
+	}
+	if !state.hasResult(trackingWire) {
+		return toolCallResponse(
+			runContext,
+			trackingWire,
+			guardtools.GetTrackingInput{WaybillID: string(runContext.WaybillID)},
+		), nil
+	}
+	var tracking guardtools.GetTrackingOutput
+	if err := state.latestResult(trackingWire, &tracking); err != nil {
+		return nil, err
+	}
+
+	driverWire, err := m.activeWireName(domain.ActionGetDriver)
+	if err != nil {
+		return nil, err
+	}
+	if !state.hasResult(driverWire) {
+		return toolCallResponse(
+			runContext,
+			driverWire,
+			guardtools.GetDriverInput{DriverID: string(waybill.DriverID)},
+		), nil
+	}
+	var driver guardtools.GetDriverOutput
+	if err := state.latestResult(driverWire, &driver); err != nil {
+		return nil, err
+	}
+	if driver.DriverID != waybill.DriverID {
+		return nil, fmt.Errorf("driver evidence does not match the waybill")
+	}
+
+	weatherWire, err := m.activeWireName(domain.ActionGetRoadWeather)
+	if err != nil {
+		return nil, err
+	}
+	route := waybill.Origin + "-" + waybill.Destination
+	if !state.hasResult(weatherWire) {
+		return toolCallResponse(
+			runContext,
+			weatherWire,
+			guardtools.GetRoadWeatherInput{Route: route},
+		), nil
+	}
+	var weather guardtools.GetRoadWeatherOutput
+	if err := state.latestResult(weatherWire, &weather); err != nil {
+		return nil, err
+	}
+	if len(waybill.CandidateCarriers) == 0 {
+		return nil, fmt.Errorf("waybill has no candidate carriers")
 	}
 
 	reassignWire, ok := m.registry.ActiveWireName(domain.ActionReassign)
@@ -75,15 +127,25 @@ func (m *ScenarioModel) NewStreamingResponses(
 	smsWire, smsActive := m.registry.ActiveWireName(domain.ActionSendSMS)
 	reassignCalls := state.calls[reassignWire]
 	if reassignCalls == 0 {
-		return m.proposal(runContext, 1, "CARRIER-SW-42",
-			"司机连续驾驶 9 小时且绵阳北服务区停留 6 小时，天气无预警，建议改派川行快运。"), nil
+		carrier := waybill.CandidateCarriers[0]
+		return m.proposal(
+			runContext,
+			runContext.PlanVersion,
+			string(carrier.ID),
+			proposalSummary(carrier, tracking, driver, weather),
+		), nil
 	}
 	if state.latestDeclined(reassignWire) {
-		if reassignCalls == 1 {
-			return m.proposal(runContext, 2, "CARRIER-SW-19",
-				"首选改派已驳回，改用蜀道联运作为备选运力。"), nil
+		if reassignCalls < len(waybill.CandidateCarriers) {
+			carrier := waybill.CandidateCarriers[reassignCalls]
+			return m.proposal(
+				runContext,
+				runContext.PlanVersion,
+				string(carrier.ID),
+				fmt.Sprintf("上一改派方案已驳回，改用%s作为备选运力。", carrier.Name),
+			), nil
 		}
-		return textResponse("两个改派方案均被驳回，本次处置结束并转人工跟进。"), nil
+		return textResponse("候选改派方案均被驳回，本次处置结束并转人工跟进。"), nil
 	}
 	if state.hasSuccessfulResult(reassignWire) {
 		if !smsActive {
@@ -94,6 +156,69 @@ func (m *ScenarioModel) NewStreamingResponses(
 		}
 	}
 	return textResponse("写操作未全部成功，本次处置转人工检查。"), nil
+}
+
+func (m *ScenarioModel) activeWireName(action domain.Action) (string, error) {
+	wireName, ok := m.registry.ActiveWireName(action)
+	if !ok {
+		return "", fmt.Errorf("tool capability %q is unavailable", action)
+	}
+	return wireName, nil
+}
+
+func toolCallResponse(
+	runContext domain.RunContext,
+	wireName string,
+	arguments any,
+) *responses.Response {
+	return &responses.Response{
+		Output: []responses.OutputMessageUnion{
+			toolCall(runContext.RunID, wireName, runContext.PlanVersion, arguments),
+		},
+	}
+}
+
+func proposalSummary(
+	carrier guardtools.CarrierEvidence,
+	tracking guardtools.GetTrackingOutput,
+	driver guardtools.GetDriverOutput,
+	weather guardtools.GetRoadWeatherOutput,
+) string {
+	evidence := make([]string, 0, 3)
+	if driver.FatigueAlert {
+		evidence = append(
+			evidence,
+			fmt.Sprintf("司机连续驾驶%s小时并触发疲劳预警", formatNumber(driver.ContinuousDriveHrs)),
+		)
+	}
+	for _, point := range tracking.Points {
+		if !point.Anomaly {
+			continue
+		}
+		value := point.Label
+		if point.StopHours > 0 {
+			value += fmt.Sprintf("停留%s小时", formatNumber(point.StopHours))
+		}
+		evidence = append(evidence, value)
+	}
+	for _, segment := range weather.Segments {
+		if strings.EqualFold(segment.AlertLevel, "none") {
+			continue
+		}
+		evidence = append(
+			evidence,
+			fmt.Sprintf("%s预警级别%s", segment.Segment, segment.AlertLevel),
+		)
+	}
+	prefix := "已完成运单、轨迹、司机和天气核验"
+	if len(evidence) > 0 {
+		prefix = strings.Join(evidence, "，")
+	}
+	return fmt.Sprintf("%s，建议改派%s。", prefix, carrier.Name)
+}
+
+func formatNumber(value float64) string {
+	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.2f", value), "0"), ".")
 }
 
 func (m *ScenarioModel) proposal(
@@ -163,6 +288,17 @@ func inspectConversation(messages responses.InputMessageList) conversationState 
 
 func (s conversationState) hasResult(name string) bool {
 	return len(s.results[name]) > 0
+}
+
+func (s conversationState) latestResult(name string, destination any) error {
+	values := s.results[name]
+	if len(values) == 0 {
+		return fmt.Errorf("tool %q has no result", name)
+	}
+	if err := json.Unmarshal([]byte(values[len(values)-1]), destination); err != nil {
+		return fmt.Errorf("decode tool %q result: %w", name, err)
+	}
+	return nil
 }
 
 func (s conversationState) latestDeclined(name string) bool {
@@ -250,7 +386,9 @@ func assistantText(text string) responses.OutputMessageUnion {
 
 func stableID(value string) string {
 	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:8])
+	return strings.ToLower(
+		base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:8]),
+	)
 }
 
 var _ agents.LLM = (*ScenarioModel)(nil)

@@ -3,13 +3,11 @@ import { z } from "zod";
 const runIdSchema = z.string().min(1).brand<"RunID">();
 const approvalIdSchema = z.string().min(1).brand<"ApprovalID">();
 const effectIdSchema = z.string().min(1).brand<"EffectID">();
-const waybillIdSchema = z.string().regex(/^YD\d{10}$/).brand<"WaybillID">();
+export const waybillIdSchema = z.string().regex(/^YD\d{10}$/).brand<"WaybillID">();
 
 export type RunID = z.infer<typeof runIdSchema>;
 export type ApprovalID = z.infer<typeof approvalIdSchema>;
 export type WaybillID = z.infer<typeof waybillIdSchema>;
-
-export const DEFAULT_WAYBILL_ID = waybillIdSchema.parse("YD2026101001");
 
 const runStatusSchema = z.enum([
   "started",
@@ -43,6 +41,20 @@ export const runSummarySchema = runSchema
 
 export type RunSummary = z.infer<typeof runSummarySchema>;
 
+const waybillCatalogItemSchema = z
+  .object({
+    waybill_id: waybillIdSchema,
+    origin: z.string().min(1),
+    destination: z.string().min(1),
+    status: z.string().min(1),
+    has_anomaly: z.boolean(),
+    anomaly_label: z.string().min(1).optional(),
+    last_recorded_at: z.string().min(1),
+  })
+  .strict();
+
+export type WaybillCatalogItem = z.infer<typeof waybillCatalogItemSchema>;
+
 const carrierSchema = z
   .object({
     carrier_id: z.string().min(1),
@@ -61,7 +73,7 @@ const waybillSchema = z
     carrier_id: z.string().min(1),
     driver_id: z.string().min(1),
     status: z.string().min(1),
-    sla_hours: z.number().int().positive(),
+    sla_hours: z.number().int().nonnegative(),
     shipper_phone: z.string().min(1),
     candidate_carriers: z.array(carrierSchema),
   })
@@ -224,7 +236,7 @@ export const auditEventSchema = z
 
 export type AuditEvent = z.infer<typeof auditEventSchema>;
 
-const pendingApprovalSummarySchema = z
+export const pendingApprovalSummarySchema = z
   .object({
     id: approvalIdSchema,
     run_id: runIdSchema,
@@ -288,6 +300,9 @@ export const runSnapshotSchema = z.union([
 export type RunSnapshot = z.infer<typeof runSnapshotSchema>;
 
 const activeRunsSchema = z.object({ runs: z.array(runSummarySchema) }).strict();
+const waybillCatalogSchema = z
+  .object({ waybills: z.array(waybillCatalogItemSchema) })
+  .strict();
 const pendingApprovalsSchema = z
   .object({ approvals: z.array(pendingApprovalSummarySchema) })
   .strict();
@@ -336,12 +351,22 @@ async function request<T>(
   return schema.parse(raw);
 }
 
-export function getWaybill(id: WaybillID): Promise<WaybillView> {
-  return request(`/api/waybills/${encodeURIComponent(id)}`, waybillViewSchema);
+export function getWaybill(id: WaybillID, signal?: AbortSignal): Promise<WaybillView> {
+  return request(`/api/waybills/${encodeURIComponent(id)}`, waybillViewSchema, { signal });
 }
 
-export function triggerDemo(): Promise<Run> {
-  return request("/api/demo/trigger", runSchema, { method: "POST" });
+export async function listWaybills(signal?: AbortSignal): Promise<WaybillCatalogItem[]> {
+  const response = await request("/api/waybills", waybillCatalogSchema, { signal });
+  return response.waybills;
+}
+
+export function startRun(waybillID: WaybillID, signal?: AbortSignal): Promise<Run> {
+  return request("/api/runs", runSchema, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ waybill_id: waybillID }),
+    signal,
+  });
 }
 
 export async function listActiveRuns(signal?: AbortSignal): Promise<RunSummary[]> {
