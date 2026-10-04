@@ -1,7 +1,9 @@
 package filestore
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"os"
@@ -112,6 +114,283 @@ func TestCatalogIsSortedByWaybillID(t *testing.T) {
 		catalog[0].WaybillID != "YD2026101001" ||
 		catalog[1].WaybillID != "YD2026101002" {
 		t.Fatalf("catalog order = %+v", catalog)
+	}
+}
+
+func TestNetworkExtensionBuildsTypedCatalog(t *testing.T) {
+	draft := validDraft()
+	draft.Hubs = []hubDraft{
+		{
+			HubID:         "HUB-HGH",
+			Name:          "杭州公路港",
+			Province:      "浙江",
+			City:          "杭州",
+			Longitude:     120.1551,
+			Latitude:      30.2741,
+			DailyCapacity: 2400,
+		},
+		{
+			HubID:         "HUB-CTU",
+			Name:          "成都公路港",
+			Province:      "四川",
+			City:          "成都",
+			Longitude:     104.0665,
+			Latitude:      30.5723,
+			DailyCapacity: 2100,
+		},
+		{
+			HubID:         "HUB-NGB",
+			Name:          "宁波公路港",
+			Province:      "浙江",
+			City:          "宁波",
+			Longitude:     121.5503,
+			Latitude:      29.8746,
+			DailyCapacity: 1900,
+		},
+		{
+			HubID:         "HUB-XIY",
+			Name:          "西安公路港",
+			Province:      "陕西",
+			City:          "西安",
+			Longitude:     108.9398,
+			Latitude:      34.3416,
+			DailyCapacity: 1800,
+		},
+	}
+	draft.Vehicles = []vehicleDraft{
+		{
+			VehicleID:        "VEHICLE-1",
+			MaskedPlate:      "浙A****1",
+			Type:             "厢式货车",
+			LoadCapacityTons: 18,
+		},
+		{
+			VehicleID:        "VEHICLE-2",
+			MaskedPlate:      "浙B****2",
+			Type:             "冷链货车",
+			LoadCapacityTons: 12,
+		},
+	}
+	draft.Routes = []routeDraft{
+		{
+			RouteID:          "ROUTE-HGH-CTU",
+			OriginHubID:      "HUB-HGH",
+			DestinationHubID: "HUB-CTU",
+			DistanceKM:       1860,
+			StandardHours:    31,
+		},
+		{
+			RouteID:          "ROUTE-NGB-XIY",
+			OriginHubID:      "HUB-NGB",
+			DestinationHubID: "HUB-XIY",
+			DistanceKM:       1510,
+			StandardHours:    25,
+		},
+	}
+	draft.Waybills[0].OriginHubID = "HUB-HGH"
+	draft.Waybills[0].DestinationHubID = "HUB-CTU"
+	draft.Waybills[0].RouteID = "ROUTE-HGH-CTU"
+	draft.Waybills[0].VehicleID = "VEHICLE-1"
+	draft.Waybills[1].OriginHubID = "HUB-NGB"
+	draft.Waybills[1].DestinationHubID = "HUB-XIY"
+	draft.Waybills[1].RouteID = "ROUTE-NGB-XIY"
+	draft.Waybills[1].VehicleID = "VEHICLE-2"
+	draft.Weather[0].RouteID = "ROUTE-HGH-CTU"
+	draft.Weather[1].RouteID = "ROUTE-NGB-XIY"
+
+	raw, err := json.Marshal(draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadEmbeddedJSON("network.json", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Stats != (Stats{
+		Waybills: 2,
+		Hubs:     4,
+		Vehicles: 2,
+		Routes:   2,
+	}) {
+		t.Fatalf("stats = %+v", loaded.Stats)
+	}
+	hubs, err := loaded.Reads.Network.ListHubs(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes, err := loaded.Reads.Network.ListRoutes(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	vehicles, err := loaded.Reads.Network.ListVehicles(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hubs) != 4 || hubs[0].ID != "HUB-CTU" {
+		t.Fatalf("hubs = %+v", hubs)
+	}
+	if len(routes) != 2 || routes[0].ID != "ROUTE-HGH-CTU" {
+		t.Fatalf("routes = %+v", routes)
+	}
+	if len(vehicles) != 2 || vehicles[0].ID != "VEHICLE-1" {
+		t.Fatalf("vehicles = %+v", vehicles)
+	}
+	waybill, err := loaded.Reads.TMS.GetWaybill(
+		t.Context(),
+		platform.GetWaybillRequest{WaybillID: "YD2026101001"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waybill.OriginHubID != "HUB-HGH" ||
+		waybill.DestinationHubID != "HUB-CTU" ||
+		waybill.RouteID != "ROUTE-HGH-CTU" ||
+		waybill.VehicleID != "VEHICLE-1" {
+		t.Fatalf("network references = %+v", waybill)
+	}
+}
+
+func TestNetworkExtensionRejectsBrokenReferences(t *testing.T) {
+	draft := validDraft()
+	draft.Hubs = []hubDraft{{
+		HubID:         "HUB-HGH",
+		Name:          "杭州公路港",
+		Province:      "浙江",
+		City:          "杭州",
+		Longitude:     120.1551,
+		Latitude:      30.2741,
+		DailyCapacity: 2400,
+	}}
+	draft.Vehicles = []vehicleDraft{{
+		VehicleID:        "VEHICLE-1",
+		MaskedPlate:      "浙A****1",
+		Type:             "厢式货车",
+		LoadCapacityTons: 18,
+	}}
+	draft.Routes = []routeDraft{{
+		RouteID:          "ROUTE-HGH-MISSING",
+		OriginHubID:      "HUB-HGH",
+		DestinationHubID: "HUB-MISSING",
+		DistanceKM:       100,
+		StandardHours:    2,
+	}}
+	for index := range draft.Waybills {
+		draft.Waybills[index].OriginHubID = "HUB-HGH"
+		draft.Waybills[index].DestinationHubID = "HUB-MISSING"
+		draft.Waybills[index].RouteID = "ROUTE-HGH-MISSING"
+		draft.Waybills[index].VehicleID = "VEHICLE-1"
+	}
+	for index := range draft.Weather {
+		draft.Weather[index].RouteID = "ROUTE-HGH-MISSING"
+	}
+
+	raw, err := json.Marshal(draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = LoadEmbeddedJSON("invalid-network.json", raw)
+	if err == nil ||
+		!strings.Contains(err.Error(), "destination_hub_id: references an unknown hub") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestCSVNetworkExtension(t *testing.T) {
+	records := []map[string]string{
+		{
+			"record_type":    "dataset",
+			"schema_version": "v1",
+			"dataset_id":     "network-csv",
+		},
+		{
+			"record_type": "hub", "hub_id": "HUB-1", "hub_name": "南京公路港",
+			"province": "江苏", "city": "南京", "longitude": "118.7969",
+			"latitude": "32.0603", "daily_capacity": "1800",
+		},
+		{
+			"record_type": "hub", "hub_id": "HUB-2", "hub_name": "青岛公路港",
+			"province": "山东", "city": "青岛", "longitude": "120.3826",
+			"latitude": "36.0671", "daily_capacity": "1700",
+		},
+		{
+			"record_type": "vehicle", "vehicle_id": "VEHICLE-1",
+			"vehicle_plate": "苏A****1", "vehicle_type": "厢式货车",
+			"load_capacity_tons": "18",
+		},
+		{
+			"record_type": "route", "route_id": "ROUTE-1",
+			"origin_hub_id": "HUB-1", "destination_hub_id": "HUB-2",
+			"distance_km": "570", "standard_hours": "10",
+		},
+		{
+			"record_type": "waybill", "waybill_id": "YD2026101041",
+			"origin": "南京", "destination": "青岛", "origin_hub_id": "HUB-1",
+			"destination_hub_id": "HUB-2", "route_id": "ROUTE-1",
+			"vehicle_id": "VEHICLE-1", "cargo": "医疗器械",
+			"current_carrier_id": "CARRIER-1", "driver_id": "DRIVER-1",
+			"status": "delay", "sla_hours": "18", "shipper_phone": "13800004101",
+		},
+		{
+			"record_type": "driver", "driver_id": "DRIVER-1",
+			"driver_name": "顾师傅", "driver_phone": "13900004101",
+			"driver_plate": "苏A4Q101", "continuous_drive_hours": "7.5",
+			"fatigue_alert": "false",
+		},
+		{
+			"record_type": "candidate", "waybill_id": "YD2026101041",
+			"priority": "1", "carrier_id": "CARRIER-2", "carrier_name": "海岱物流",
+			"eta_hours": "9", "reliability_pct": "96.8",
+		},
+		{
+			"record_type": "tracking", "waybill_id": "YD2026101041",
+			"tracking_sequence": "1", "label": "南京公路港",
+			"recorded_at": "2026-10-10T01:00:00Z", "longitude": "118.7969",
+			"latitude": "32.0603", "speed_kph": "0", "anomaly": "false",
+		},
+		{
+			"record_type": "tracking", "waybill_id": "YD2026101041",
+			"tracking_sequence": "2", "label": "临沂服务区",
+			"recorded_at": "2026-10-10T06:30:00Z", "longitude": "118.3564",
+			"latitude": "35.1047", "speed_kph": "0", "stop_hours": "3",
+			"anomaly": "true", "anomaly_type": "delay",
+		},
+		{
+			"record_type": "weather", "origin": "南京", "destination": "青岛",
+			"route_id": "ROUTE-1", "weather_sequence": "1",
+			"segment": "沈海高速", "condition": "多云", "alert_level": "none",
+		},
+	}
+	var raw bytes.Buffer
+	writer := csv.NewWriter(&raw)
+	if err := writer.Write(csvColumns); err != nil {
+		t.Fatal(err)
+	}
+	for _, values := range records {
+		record := make([]string, len(csvColumns))
+		for index, field := range csvColumns {
+			record[index] = values[field]
+		}
+		if err := writer.Write(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := loadBytes("csv", raw.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Stats != (Stats{
+		Waybills:  1,
+		Anomalies: 1,
+		Hubs:      2,
+		Vehicles:  1,
+		Routes:    1,
+	}) {
+		t.Fatalf("stats = %+v", loaded.Stats)
 	}
 }
 

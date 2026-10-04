@@ -47,7 +47,7 @@ CLI 和服务端都调用 `filestore.Load`。CLI 校验成功意味着同一文�
 成功输出只包含数据集标识和数量：
 
 ```text
-valid dataset=contest-v1 format=csv waybills=200 anomalies=17
+valid dataset=contest-v1 format=csv waybills=200 anomalies=17 hubs=72 vehicles=200 routes=72
 ```
 
 失败输出包含文件内位置，不输出手机号、车牌或绝对路径：
@@ -57,6 +57,18 @@ row 18 recorded_at: must be later than the previous point for waybill "YD2026101
 header: missing required column "driver_id"
 row 9 longitude: must be between -180 and 180
 ```
+
+仓库内的非官方仿真数据由固定规则生成：
+
+```bash
+go run ./cmd/datagenerate \
+  --output ./data/simulated/waybills-v1.json \
+  --waybills 200
+```
+
+默认结果包含 72 个公路港、72 条线路、200 台车辆、200 张运单和
+`delay`、`damage`、`loss`、`weather`、`fatigue` 五类异常。生成结果仍必须通过
+`cmd/dataimport validate`，不能绕过运行时校验。
 
 ### 选择和启动运单
 
@@ -175,6 +187,9 @@ Guardian 或 HTTP 公共类型中。
 {
   "schema_version": "v1",
   "dataset_id": "contest-v1",
+  "hubs": [],
+  "vehicles": [],
+  "routes": [],
   "waybills": [],
   "drivers": [],
   "waybill_candidates": [],
@@ -191,25 +206,35 @@ current_carrier_id,driver_id,status,sla_hours,shipper_phone,priority,carrier_id,
 carrier_name,eta_hours,reliability_pct,tracking_sequence,label,recorded_at,
 longitude,latitude,speed_kph,stop_hours,anomaly,driver_name,driver_phone,
 driver_plate,continuous_drive_hours,fatigue_alert,weather_sequence,segment,
-condition,alert_level
+condition,alert_level,origin_hub_id,destination_hub_id,route_id,vehicle_id,
+hub_id,hub_name,province,city,daily_capacity,vehicle_plate,vehicle_type,
+load_capacity_tons,distance_km,standard_hours,anomaly_type
 ```
 
 `record_type` 取以下值：
 
 - `dataset`：声明一次 `schema_version` 和 `dataset_id`。
+- `hub`：公路港主数据，包含省市、坐标和日作业能力。
+- `vehicle`：车辆主数据，车牌只保存脱敏值。
+- `route`：公路港之间的线路、里程和标准时效。
 - `waybill`：运单主数据。
 - `driver`：司机主数据。
 - `candidate`：运单与候选承运商关系，包含优先级、ETA 和可靠性。
 - `tracking`：轨迹点，包含显式序号。
 - `weather`：按起讫地关联的天气路段，包含显式序号。
 
-每种记录的字段矩阵如下。`record_type` 在每行必填；`stop_hours` 是唯一允许为空的已列字段。
-表中未列出的字段必须为空。
+每种记录的字段矩阵如下。`record_type` 在每行必填；`stop_hours` 和 `anomaly_type`
+按轨迹状态选填。网络扩展列可以不出现在旧 CSV header 中；一旦出现网络实体，
+`origin_hub_id`、`destination_hub_id`、`route_id` 和 `vehicle_id` 必须完整。表中未列出的
+字段必须为空。
 
 | record_type | 数量 | 必填字段 |
 |---|---:|---|
 | `dataset` | 恰好 1 行 | `schema_version`, `dataset_id` |
-| `waybill` | 每个 `waybill_id` 1 行 | `waybill_id`, `origin`, `destination`, `cargo`, `current_carrier_id`, `driver_id`, `status`, `sla_hours`, `shipper_phone` |
+| `hub` | 每个 `hub_id` 1 行 | `hub_id`, `hub_name`, `province`, `city`, `longitude`, `latitude`, `daily_capacity` |
+| `vehicle` | 每个 `vehicle_id` 1 行 | `vehicle_id`, `vehicle_plate`, `vehicle_type`, `load_capacity_tons` |
+| `route` | 每个 `route_id` 1 行 | `route_id`, `origin_hub_id`, `destination_hub_id`, `distance_km`, `standard_hours` |
+| `waybill` | 每个 `waybill_id` 1 行 | 原字段；网络扩展启用后另需 `origin_hub_id`, `destination_hub_id`, `route_id`, `vehicle_id` |
 | `driver` | 每个 `driver_id` 1 行 | `driver_id`, `driver_name`, `driver_phone`, `driver_plate`, `continuous_drive_hours`, `fatigue_alert` |
 | `candidate` | 每个运单至少 1 行 | `waybill_id`, `priority`, `carrier_id`, `carrier_name`, `eta_hours`, `reliability_pct` |
 | `tracking` | 每个运单至少 1 行 | `waybill_id`, `tracking_sequence`, `label`, `recorded_at`, `longitude`, `latitude`, `speed_kph`, `anomaly` |
@@ -425,7 +450,7 @@ internal/guardian
 - `/api/demo/trigger`、详情、审批、run snapshot 和 SSE 响应保持兼容。
 - 运单 ID 语法保持不变。
 - 不实现热更新、通用 mapping DSL、数据库导入或真实只读 TMS。
-- Hub、Vehicle 和 Route 等实体等到 #61 有真实消费者时再加入 v2 数据契约。
+- v1 网络扩展保持向后兼容：旧文件可不含网络列；带网络数据的文件必须提供完整实体和引用。
 
 ## 实施切片
 

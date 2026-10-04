@@ -12,10 +12,25 @@ import (
 func validateAndBuild(draft datasetDraft) (*snapshot, Stats, error) {
 	var collector issueCollector
 	validateDataset(&collector, draft)
+	hubs := validateHubs(&collector, draft.Hubs)
+	vehicles := validateVehicles(&collector, draft.Vehicles)
+	routes := validateRoutes(&collector, draft.Routes, hubs)
+	hasNetwork := len(draft.Hubs) > 0 || len(draft.Vehicles) > 0 || len(draft.Routes) > 0
+	if hasNetwork {
+		if len(draft.Hubs) == 0 {
+			collector.add("dataset", "hubs", "required", "network data requires hubs")
+		}
+		if len(draft.Vehicles) == 0 {
+			collector.add("dataset", "vehicles", "required", "network data requires vehicles")
+		}
+		if len(draft.Routes) == 0 {
+			collector.add("dataset", "routes", "required", "network data requires routes")
+		}
+	}
 
 	waybills := make(map[string]waybillDraft, len(draft.Waybills))
 	for _, waybill := range draft.Waybills {
-		validateWaybill(&collector, waybill)
+		validateWaybill(&collector, waybill, hasNetwork, hubs, vehicles, routes)
 		if _, exists := waybills[waybill.WaybillID]; exists {
 			collector.add(
 				waybill.location,
@@ -44,8 +59,8 @@ func validateAndBuild(draft datasetDraft) (*snapshot, Stats, error) {
 	}
 
 	candidates := validateCandidates(&collector, draft.WaybillCandidates, waybills)
-	tracking := validateTracking(&collector, draft.Tracking, waybills)
-	weather := validateWeather(&collector, draft.Weather)
+	tracking := validateTracking(&collector, draft.Tracking, waybills, hasNetwork)
+	weather := validateWeather(&collector, draft.Weather, hasNetwork, hubs, routes)
 
 	for _, waybill := range draft.Waybills {
 		if _, exists := drivers[waybill.DriverID]; !exists {
@@ -115,7 +130,14 @@ func validateDataset(collector *issueCollector, draft datasetDraft) {
 	}
 }
 
-func validateWaybill(collector *issueCollector, waybill waybillDraft) {
+func validateWaybill(
+	collector *issueCollector,
+	waybill waybillDraft,
+	hasNetwork bool,
+	hubs map[string]hubDraft,
+	vehicles map[string]vehicleDraft,
+	routes map[string]routeDraft,
+) {
 	if err := domain.ValidateWaybillID(domain.WaybillID(waybill.WaybillID)); err != nil {
 		collector.add(
 			waybill.location,
@@ -131,6 +153,34 @@ func validateWaybill(collector *issueCollector, waybill waybillDraft) {
 		"destination",
 		waybill.Destination,
 	)
+	if hasNetwork {
+		validateIdentifier(collector, waybill.location, "origin_hub_id", waybill.OriginHubID)
+		validateIdentifier(
+			collector,
+			waybill.location,
+			"destination_hub_id",
+			waybill.DestinationHubID,
+		)
+		validateIdentifier(collector, waybill.location, "route_id", waybill.RouteID)
+		validateIdentifier(collector, waybill.location, "vehicle_id", waybill.VehicleID)
+		validateNetworkReferences(collector, waybill, hubs, vehicles, routes)
+	} else {
+		for field, value := range map[string]string{
+			"origin_hub_id":      waybill.OriginHubID,
+			"destination_hub_id": waybill.DestinationHubID,
+			"route_id":           waybill.RouteID,
+			"vehicle_id":         waybill.VehicleID,
+		} {
+			if value != "" {
+				collector.add(
+					waybill.location,
+					field,
+					"network_required",
+					"requires hubs, vehicles, and routes",
+				)
+			}
+		}
+	}
 	validateRequiredText(collector, waybill.location, "cargo", waybill.Cargo)
 	validateIdentifier(
 		collector,
@@ -159,6 +209,237 @@ func validateWaybill(collector *issueCollector, waybill waybillDraft) {
 		"shipper_phone",
 		waybill.ShipperPhone,
 	)
+}
+
+func validateHubs(
+	collector *issueCollector,
+	items []hubDraft,
+) map[string]hubDraft {
+	result := make(map[string]hubDraft, len(items))
+	for _, hub := range items {
+		validateIdentifier(collector, hub.location, "hub_id", hub.HubID)
+		validateRequiredText(collector, hub.location, "name", hub.Name)
+		validateRequiredText(collector, hub.location, "province", hub.Province)
+		validateRequiredText(collector, hub.location, "city", hub.City)
+		validateCoordinate(
+			collector,
+			hub.location,
+			"longitude",
+			hub.Longitude,
+			-180,
+			180,
+		)
+		validateCoordinate(
+			collector,
+			hub.location,
+			"latitude",
+			hub.Latitude,
+			-90,
+			90,
+		)
+		if hub.DailyCapacity <= 0 {
+			collector.add(
+				hub.location,
+				"daily_capacity",
+				"invalid_capacity",
+				"must be greater than zero",
+			)
+		}
+		if _, exists := result[hub.HubID]; exists {
+			collector.add(
+				hub.location,
+				"hub_id",
+				"duplicate",
+				"duplicates another hub",
+			)
+		} else {
+			result[hub.HubID] = hub
+		}
+	}
+	return result
+}
+
+func validateVehicles(
+	collector *issueCollector,
+	items []vehicleDraft,
+) map[string]vehicleDraft {
+	result := make(map[string]vehicleDraft, len(items))
+	for _, vehicle := range items {
+		validateIdentifier(
+			collector,
+			vehicle.location,
+			"vehicle_id",
+			vehicle.VehicleID,
+		)
+		validateRequiredText(
+			collector,
+			vehicle.location,
+			"masked_plate",
+			vehicle.MaskedPlate,
+		)
+		validateRequiredText(collector, vehicle.location, "type", vehicle.Type)
+		if !finite(vehicle.LoadCapacityTons) || vehicle.LoadCapacityTons <= 0 {
+			collector.add(
+				vehicle.location,
+				"load_capacity_tons",
+				"invalid_capacity",
+				"must be a finite number greater than zero",
+			)
+		}
+		if _, exists := result[vehicle.VehicleID]; exists {
+			collector.add(
+				vehicle.location,
+				"vehicle_id",
+				"duplicate",
+				"duplicates another vehicle",
+			)
+		} else {
+			result[vehicle.VehicleID] = vehicle
+		}
+	}
+	return result
+}
+
+func validateRoutes(
+	collector *issueCollector,
+	items []routeDraft,
+	hubs map[string]hubDraft,
+) map[string]routeDraft {
+	result := make(map[string]routeDraft, len(items))
+	for _, route := range items {
+		validateIdentifier(collector, route.location, "route_id", route.RouteID)
+		validateIdentifier(
+			collector,
+			route.location,
+			"origin_hub_id",
+			route.OriginHubID,
+		)
+		validateIdentifier(
+			collector,
+			route.location,
+			"destination_hub_id",
+			route.DestinationHubID,
+		)
+		if route.OriginHubID == route.DestinationHubID && route.OriginHubID != "" {
+			collector.add(
+				route.location,
+				"destination_hub_id",
+				"same_endpoint",
+				"must differ from origin_hub_id",
+			)
+		}
+		if _, exists := hubs[route.OriginHubID]; !exists {
+			collector.add(
+				route.location,
+				"origin_hub_id",
+				"unknown_reference",
+				"references an unknown hub",
+			)
+		}
+		if _, exists := hubs[route.DestinationHubID]; !exists {
+			collector.add(
+				route.location,
+				"destination_hub_id",
+				"unknown_reference",
+				"references an unknown hub",
+			)
+		}
+		if route.DistanceKM <= 0 {
+			collector.add(
+				route.location,
+				"distance_km",
+				"invalid_distance",
+				"must be greater than zero",
+			)
+		}
+		if route.StandardHours <= 0 {
+			collector.add(
+				route.location,
+				"standard_hours",
+				"invalid_duration",
+				"must be greater than zero",
+			)
+		}
+		if _, exists := result[route.RouteID]; exists {
+			collector.add(
+				route.location,
+				"route_id",
+				"duplicate",
+				"duplicates another route",
+			)
+		} else {
+			result[route.RouteID] = route
+		}
+	}
+	return result
+}
+
+func validateNetworkReferences(
+	collector *issueCollector,
+	waybill waybillDraft,
+	hubs map[string]hubDraft,
+	vehicles map[string]vehicleDraft,
+	routes map[string]routeDraft,
+) {
+	origin, originOK := hubs[waybill.OriginHubID]
+	if !originOK {
+		collector.add(
+			waybill.location,
+			"origin_hub_id",
+			"unknown_reference",
+			"references an unknown hub",
+		)
+	} else if origin.City != waybill.Origin {
+		collector.add(
+			waybill.location,
+			"origin",
+			"hub_mismatch",
+			"must match the origin hub city",
+		)
+	}
+	destination, destinationOK := hubs[waybill.DestinationHubID]
+	if !destinationOK {
+		collector.add(
+			waybill.location,
+			"destination_hub_id",
+			"unknown_reference",
+			"references an unknown hub",
+		)
+	} else if destination.City != waybill.Destination {
+		collector.add(
+			waybill.location,
+			"destination",
+			"hub_mismatch",
+			"must match the destination hub city",
+		)
+	}
+	if _, exists := vehicles[waybill.VehicleID]; !exists {
+		collector.add(
+			waybill.location,
+			"vehicle_id",
+			"unknown_reference",
+			"references an unknown vehicle",
+		)
+	}
+	route, exists := routes[waybill.RouteID]
+	if !exists {
+		collector.add(
+			waybill.location,
+			"route_id",
+			"unknown_reference",
+			"references an unknown route",
+		)
+		return
+	}
+	if route.OriginHubID != waybill.OriginHubID ||
+		route.DestinationHubID != waybill.DestinationHubID {
+		collector.add(
+			waybill.location,
+			"route_id",
+			"endpoint_mismatch",
+			"route endpoints must match the waybill hubs",
+		)
+	}
 }
 
 func validateDriver(collector *issueCollector, driver driverDraft) {
@@ -272,6 +553,7 @@ func validateTracking(
 	collector *issueCollector,
 	items []trackingDraft,
 	waybills map[string]waybillDraft,
+	hasNetwork bool,
 ) map[string][]trackingDraft {
 	grouped := make(map[string][]trackingDraft)
 	for _, point := range items {
@@ -331,6 +613,21 @@ func validateTracking(
 				"must be a finite non-negative number",
 			)
 		}
+		if point.Anomaly && hasNetwork {
+			validateRequiredText(
+				collector,
+				point.location,
+				"anomaly_type",
+				point.AnomalyType,
+			)
+		} else if point.AnomalyType != "" {
+			collector.add(
+				point.location,
+				"anomaly_type",
+				"unexpected_value",
+				"must be empty when anomaly is false",
+			)
+		}
 		grouped[point.WaybillID] = append(grouped[point.WaybillID], point)
 	}
 	for _, points := range grouped {
@@ -369,10 +666,44 @@ func validateTracking(
 func validateWeather(
 	collector *issueCollector,
 	items []weatherDraft,
+	hasNetwork bool,
+	hubs map[string]hubDraft,
+	routes map[string]routeDraft,
 ) map[routeKey][]weatherDraft {
 	grouped := make(map[routeKey][]weatherDraft)
 	aliases := make(map[string]routeKey)
 	for _, item := range items {
+		if hasNetwork {
+			validateIdentifier(collector, item.location, "route_id", item.RouteID)
+			route, exists := routes[item.RouteID]
+			if !exists {
+				collector.add(
+					item.location,
+					"route_id",
+					"unknown_reference",
+					"references an unknown route",
+				)
+			} else {
+				origin, originOK := hubs[route.OriginHubID]
+				destination, destinationOK := hubs[route.DestinationHubID]
+				if originOK && destinationOK &&
+					(origin.City != item.Origin || destination.City != item.Destination) {
+					collector.add(
+						item.location,
+						"route_id",
+						"endpoint_mismatch",
+						"route hubs must match the weather origin and destination",
+					)
+				}
+			}
+		} else if item.RouteID != "" {
+			collector.add(
+				item.location,
+				"route_id",
+				"network_required",
+				"requires hubs, vehicles, and routes",
+			)
+		}
 		validateRequiredText(collector, item.location, "origin", item.Origin)
 		validateRequiredText(
 			collector,
@@ -501,4 +832,24 @@ func validateRequiredText(
 
 func finite(value float64) bool {
 	return !math.IsInf(value, 0) && !math.IsNaN(value)
+}
+
+func validateCoordinate(
+	collector *issueCollector,
+	location string,
+	field string,
+	value float64,
+	minimum float64,
+	maximum float64,
+) {
+	if !finite(value) || value < minimum || value > maximum {
+		collector.add(
+			location,
+			field,
+			"out_of_range",
+			"must be between %v and %v",
+			minimum,
+			maximum,
+		)
+	}
 }

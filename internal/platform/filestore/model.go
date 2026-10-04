@@ -34,6 +34,9 @@ func (s SourceDescriptor) String() string {
 type Stats struct {
 	Waybills  int
 	Anomalies int
+	Hubs      int
+	Vehicles  int
+	Routes    int
 }
 
 type sourceRef struct {
@@ -43,6 +46,9 @@ type sourceRef struct {
 type datasetDraft struct {
 	SchemaVersion     string           `json:"schema_version"`
 	DatasetID         string           `json:"dataset_id"`
+	Hubs              []hubDraft       `json:"hubs,omitempty"`
+	Vehicles          []vehicleDraft   `json:"vehicles,omitempty"`
+	Routes            []routeDraft     `json:"routes,omitempty"`
 	Waybills          []waybillDraft   `json:"waybills"`
 	Drivers           []driverDraft    `json:"drivers"`
 	WaybillCandidates []candidateDraft `json:"waybill_candidates"`
@@ -54,12 +60,44 @@ type waybillDraft struct {
 	WaybillID        string `json:"waybill_id"`
 	Origin           string `json:"origin"`
 	Destination      string `json:"destination"`
+	OriginHubID      string `json:"origin_hub_id,omitempty"`
+	DestinationHubID string `json:"destination_hub_id,omitempty"`
+	RouteID          string `json:"route_id,omitempty"`
+	VehicleID        string `json:"vehicle_id,omitempty"`
 	Cargo            string `json:"cargo"`
 	CurrentCarrierID string `json:"current_carrier_id"`
 	DriverID         string `json:"driver_id"`
 	Status           string `json:"status"`
 	SLAHours         int    `json:"sla_hours"`
 	ShipperPhone     string `json:"shipper_phone"`
+	sourceRef
+}
+
+type hubDraft struct {
+	HubID         string  `json:"hub_id"`
+	Name          string  `json:"name"`
+	Province      string  `json:"province"`
+	City          string  `json:"city"`
+	Longitude     float64 `json:"longitude"`
+	Latitude      float64 `json:"latitude"`
+	DailyCapacity int     `json:"daily_capacity"`
+	sourceRef
+}
+
+type vehicleDraft struct {
+	VehicleID        string  `json:"vehicle_id"`
+	MaskedPlate      string  `json:"masked_plate"`
+	Type             string  `json:"type"`
+	LoadCapacityTons float64 `json:"load_capacity_tons"`
+	sourceRef
+}
+
+type routeDraft struct {
+	RouteID          string `json:"route_id"`
+	OriginHubID      string `json:"origin_hub_id"`
+	DestinationHubID string `json:"destination_hub_id"`
+	DistanceKM       int    `json:"distance_km"`
+	StandardHours    int    `json:"standard_hours"`
 	sourceRef
 }
 
@@ -84,19 +122,21 @@ type candidateDraft struct {
 }
 
 type trackingDraft struct {
-	WaybillID  string   `json:"waybill_id"`
-	Sequence   int      `json:"sequence"`
-	Label      string   `json:"label"`
-	RecordedAt string   `json:"recorded_at"`
-	Longitude  float64  `json:"longitude"`
-	Latitude   float64  `json:"latitude"`
-	SpeedKPH   int      `json:"speed_kph"`
-	StopHours  *float64 `json:"stop_hours,omitempty"`
-	Anomaly    bool     `json:"anomaly"`
+	WaybillID   string   `json:"waybill_id"`
+	Sequence    int      `json:"sequence"`
+	Label       string   `json:"label"`
+	RecordedAt  string   `json:"recorded_at"`
+	Longitude   float64  `json:"longitude"`
+	Latitude    float64  `json:"latitude"`
+	SpeedKPH    int      `json:"speed_kph"`
+	StopHours   *float64 `json:"stop_hours,omitempty"`
+	Anomaly     bool     `json:"anomaly"`
+	AnomalyType string   `json:"anomaly_type,omitempty"`
 	sourceRef
 }
 
 type weatherDraft struct {
+	RouteID     string `json:"route_id,omitempty"`
 	Origin      string `json:"origin"`
 	Destination string `json:"destination"`
 	Sequence    int    `json:"sequence"`

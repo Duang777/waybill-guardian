@@ -115,6 +115,22 @@ DATA_DIR=/tmp/waybill-file-demo \
 运行期间不会热更新数据；替换文件后需要重启。格式、字段矩阵与校验规则见
 [`docs/file-data-source-design.md`](./docs/file-data-source-design.md)。
 
+仓库还提供固定生成规则的非官方仿真数据，包含 72 个公路港、72 条线路、200 台车辆、
+200 张运单和 5 类异常：
+
+```bash
+env -u GOROOT go run ./cmd/datagenerate \
+  --output ./data/simulated/waybills-v1.json \
+  --waybills 200
+
+env -u GOROOT go run ./cmd/dataimport validate \
+  --data ./data/simulated/waybills-v1.json
+```
+
+`hubs`、`vehicles`、`routes` 以及运单上的港口、线路、车辆引用是 v1 的可选网络扩展。
+一旦文件提供任一网络实体，校验器会要求三类实体和全部引用同时完整，避免聚合视图读取到
+半套拓扑。仿真数据只用于产品演示和容量验证，不代表真实经营数据。
+
 `AUTH_MODE=local` 时，`BACKEND_HOST` 必须是 loopback IP 字面量。直接运行
 `go run ./cmd/server` 时，`HTTP_ADDR` 默认是 `127.0.0.1:8080`。local 模式拒绝空 host、
 主机名、通配地址、非 loopback 地址，以及 Host 不是 loopback IP 的请求。审批审计主体固定为

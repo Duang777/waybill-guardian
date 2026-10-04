@@ -19,6 +19,8 @@ web/.env.local
 data/*
 !data/templates/
 !data/templates/**
+!data/simulated/
+!data/simulated/**
 
 # IDE
 .idea/

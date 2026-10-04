@@ -26,6 +26,10 @@ type Waybill struct {
 	ID                domain.WaybillID
 	Origin            string
 	Destination       string
+	OriginHubID       HubID
+	DestinationHubID  HubID
+	RouteID           RouteID
+	VehicleID         VehicleID
 	Cargo             string
 	CarrierID         domain.CarrierID
 	DriverID          domain.DriverID
@@ -43,13 +47,14 @@ type Carrier struct {
 }
 
 type TrackPoint struct {
-	Label      string
-	RecordedAt string
-	Longitude  float64
-	Latitude   float64
-	SpeedKPH   int
-	StopHours  float64
-	Anomaly    bool
+	Label       string
+	RecordedAt  string
+	Longitude   float64
+	Latitude    float64
+	SpeedKPH    int
+	StopHours   float64
+	Anomaly     bool
+	AnomalyType string
 }
 
 type Driver struct {
@@ -65,6 +70,37 @@ type RoadWeather struct {
 	Segment    string
 	Condition  string
 	AlertLevel string
+}
+
+type HubID string
+
+type VehicleID string
+
+type RouteID string
+
+type Hub struct {
+	ID            HubID
+	Name          string
+	Province      string
+	City          string
+	Longitude     float64
+	Latitude      float64
+	DailyCapacity int
+}
+
+type Vehicle struct {
+	ID               VehicleID
+	MaskedPlate      string
+	Type             string
+	LoadCapacityTons float64
+}
+
+type Route struct {
+	ID               RouteID
+	OriginHubID      HubID
+	DestinationHubID HubID
+	DistanceKM       int
+	StandardHours    int
 }
 
 type ReassignOrder struct {
@@ -103,13 +139,17 @@ type GetRoadWeatherRequest struct {
 }
 
 type WaybillSummary struct {
-	WaybillID      domain.WaybillID
-	Origin         string
-	Destination    string
-	Status         string
-	HasAnomaly     bool
-	AnomalyLabel   string
-	LastRecordedAt time.Time
+	WaybillID        domain.WaybillID
+	Origin           string
+	Destination      string
+	OriginHubID      HubID
+	DestinationHubID HubID
+	RouteID          RouteID
+	Status           string
+	HasAnomaly       bool
+	AnomalyLabel     string
+	AnomalyType      string
+	LastRecordedAt   time.Time
 }
 
 type TMSReader interface {
@@ -126,8 +166,15 @@ type WaybillCatalog interface {
 	ListWaybills(context.Context) ([]WaybillSummary, error)
 }
 
+type NetworkCatalog interface {
+	ListHubs(context.Context) ([]Hub, error)
+	ListVehicles(context.Context) ([]Vehicle, error)
+	ListRoutes(context.Context) ([]Route, error)
+}
+
 type ReadSet struct {
 	TMS     TMSReader
 	Weather WeatherReader
 	Catalog WaybillCatalog
+	Network NetworkCatalog
 }

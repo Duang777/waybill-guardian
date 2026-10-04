@@ -77,6 +77,15 @@ func rejectDuplicateTopLevelFields(raw []byte) error {
 }
 
 func assignJSONLocations(draft *datasetDraft) {
+	for index := range draft.Hubs {
+		draft.Hubs[index].location = fmt.Sprintf("hubs[%d]", index)
+	}
+	for index := range draft.Vehicles {
+		draft.Vehicles[index].location = fmt.Sprintf("vehicles[%d]", index)
+	}
+	for index := range draft.Routes {
+		draft.Routes[index].location = fmt.Sprintf("routes[%d]", index)
+	}
 	for index := range draft.Waybills {
 		draft.Waybills[index].location = fmt.Sprintf("waybills[%d]", index)
 	}

@@ -35,11 +35,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(
 		stdout,
-		"valid dataset=%s format=%s waybills=%d anomalies=%d\n",
+		"valid dataset=%s format=%s waybills=%d anomalies=%d hubs=%d vehicles=%d routes=%d\n",
 		loaded.Source.DatasetID,
 		loaded.Source.Format,
 		loaded.Stats.Waybills,
 		loaded.Stats.Anomalies,
+		loaded.Stats.Hubs,
+		loaded.Stats.Vehicles,
+		loaded.Stats.Routes,
 	)
 	return 0
 }

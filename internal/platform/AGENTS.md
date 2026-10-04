@@ -26,6 +26,7 @@ type ReadSet struct {
     TMS     TMSReader
     Weather WeatherReader
     Catalog WaybillCatalog
+    Network NetworkCatalog
 }
 ```
 
@@ -36,6 +37,8 @@ type ReadSet struct {
 
 `internal/platform/filestore` 将 JSON/CSV v1 完整校验后发布为不可变 `ReadSet`。`mock`
 加载内嵌 JSON，`file` 加载 `DATA_FILE`。读取方法返回副本，运行期间不热更新。
+v1 可选网络扩展包含 Hub、Vehicle、Route 和运单引用；出现任一网络实体时，三类实体与引用
+必须完整。`cmd/datagenerate` 可复现生成 72 港、200 运单的非官方仿真数据。
 
 `tools.FixtureWriteRuntime` 为 mock/file 模式提供确定性 effect 结果，并使用自己的互斥锁保护
 幂等结果 map。它不修改读快照、不调用外部系统，也不发送真实短信。

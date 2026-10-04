@@ -15,6 +15,7 @@ matches="$(
 		--glob '*.tsx' \
 		--glob '!**/*_test.go' \
 		--glob '!**/*.test.ts' \
+		--glob '!cmd/datagenerate/**' \
 		"$PATTERN" \
 		cmd internal web/src
 )"
