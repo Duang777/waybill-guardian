@@ -24,6 +24,16 @@ type ProjectedPoint = TrackPoint & {
 
 type Coordinate = [longitude: number, latitude: number];
 
+type PointSelection = {
+  points: readonly TrackPoint[];
+  index: number;
+};
+
+type CanvasPoint = {
+  x: number;
+  y: number;
+};
+
 export function RouteMap({
   points,
   origin,
@@ -31,7 +41,15 @@ export function RouteMap({
   resourceKind,
 }: RouteMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const preferredIndex = preferredPointIndex(points);
+  const [selection, setSelection] = useState<PointSelection>(() => ({
+    points,
+    index: preferredIndex,
+  }));
+  const selectedIndex =
+    selection.points === points && selection.index < points.length
+      ? selection.index
+      : preferredIndex;
   const [mode, setMode] = useState<MapMode>(
     hasAMapKey()
       ? { kind: "loading" }
@@ -39,11 +57,6 @@ export function RouteMap({
   );
   const selected = points[selectedIndex] ?? null;
   const projected = useMemo(() => projectPoints(points), [points]);
-
-  useEffect(() => {
-    const anomaly = points.findIndex((point) => point.anomaly);
-    setSelectedIndex(anomaly >= 0 ? anomaly : 0);
-  }, [points]);
 
   useEffect(() => {
     if (!hasAMapKey() || mapElement.current === null || points.length === 0) {
@@ -83,7 +96,7 @@ export function RouteMap({
             fillOpacity: 1,
             zIndex: point.anomaly ? 30 : 20,
           });
-          marker.on("click", () => setSelectedIndex(index));
+          marker.on("click", () => setSelection({ points, index }));
           return marker;
         });
         map.add([route, ...markers]);
@@ -130,7 +143,7 @@ export function RouteMap({
             origin={origin}
             destination={destination}
             selectedIndex={selectedIndex}
-            onSelect={setSelectedIndex}
+            onSelect={(index) => setSelection({ points, index })}
           />
         )}
         {mode.kind === "loading" && (
@@ -142,10 +155,12 @@ export function RouteMap({
             <span>本地轨迹视图</span>
           </div>
         )}
-        <div className={styles.mapCoordinates} aria-hidden="true">
-          <span>N 31.23°</span>
-          <span>E 121.47°</span>
-        </div>
+        {selected !== null && (
+          <div className={styles.mapCoordinates} aria-hidden="true">
+            <span>{formatCoordinate(selected.latitude, "N", "S")}</span>
+            <span>{formatCoordinate(selected.longitude, "E", "W")}</span>
+          </div>
+        )}
       </div>
       {selected !== null && (
         <div className={styles.pointInspector} aria-live="polite">
@@ -224,7 +239,7 @@ function FallbackMap({
   selectedIndex,
   onSelect,
 }: FallbackMapProps) {
-  const route = points.map((point) => `${point.x},${point.y}`).join(" ");
+  const route = buildSmoothRoutePath(points);
   const firstPoint = points[0];
   const lastPoint = points.at(-1);
   return (
@@ -255,14 +270,14 @@ function FallbackMap({
         preserveAspectRatio="none"
         aria-hidden="true"
       >
-        <polyline
+        <path
           className={styles.routeCorridor}
-          points={route}
+          d={route}
           vectorEffect="non-scaling-stroke"
         />
-        <polyline
+        <path
           className={styles.routePath}
-          points={route}
+          d={route}
           vectorEffect="non-scaling-stroke"
         />
       </svg>
@@ -289,6 +304,11 @@ function coordinate(point: TrackPoint): Coordinate {
   return [point.longitude, point.latitude];
 }
 
+function preferredPointIndex(points: readonly TrackPoint[]): number {
+  const anomaly = points.findIndex((point) => point.anomaly);
+  return anomaly >= 0 ? anomaly : 0;
+}
+
 function projectPoints(points: readonly TrackPoint[]): readonly ProjectedPoint[] {
   if (points.length === 0) {
     return [];
@@ -306,6 +326,56 @@ function projectPoints(points: readonly TrackPoint[]): readonly ProjectedPoint[]
     x: 8 + ((point.longitude - minimumLongitude) / longitudeRange) * 84,
     y: 14 + ((maximumLatitude - point.latitude) / latitudeRange) * 58,
   }));
+}
+
+export function buildSmoothRoutePath(points: readonly CanvasPoint[]): string {
+  const first = points[0];
+  if (first === undefined) {
+    return "";
+  }
+  const move = `M ${formatPathNumber(first.x)} ${formatPathNumber(first.y)}`;
+  if (points.length === 1) {
+    return move;
+  }
+  if (points.length === 2) {
+    const last = points[1];
+    return `${move} L ${formatPathNumber(last.x)} ${formatPathNumber(last.y)}`;
+  }
+
+  const commands = [move];
+  for (let index = 0; index < points.length - 1; index++) {
+    const previous = points[Math.max(0, index - 1)] ?? first;
+    const current = points[index] ?? first;
+    const next = points[index + 1] ?? current;
+    const afterNext = points[Math.min(points.length - 1, index + 2)] ?? next;
+    const firstControl = {
+      x: current.x + (next.x - previous.x) / 6,
+      y: current.y + (next.y - previous.y) / 6,
+    };
+    const secondControl = {
+      x: next.x - (afterNext.x - current.x) / 6,
+      y: next.y - (afterNext.y - current.y) / 6,
+    };
+    commands.push(
+      `C ${formatPathNumber(firstControl.x)} ${formatPathNumber(firstControl.y)} ` +
+        `${formatPathNumber(secondControl.x)} ${formatPathNumber(secondControl.y)} ` +
+        `${formatPathNumber(next.x)} ${formatPathNumber(next.y)}`,
+    );
+  }
+  return commands.join(" ");
+}
+
+function formatPathNumber(value: number): string {
+  return Number(value.toFixed(3)).toString();
+}
+
+function formatCoordinate(
+  value: number,
+  positiveDirection: "N" | "E",
+  negativeDirection: "S" | "W",
+): string {
+  const direction = value >= 0 ? positiveDirection : negativeDirection;
+  return `${direction} ${Math.abs(value).toFixed(4)}°`;
 }
 
 function formatTimestamp(value: string): string {

@@ -529,11 +529,13 @@
   inset: 0;
   z-index: 2;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 240ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .mapVisible {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .localMap {
@@ -588,7 +590,7 @@
   overflow: visible;
 }
 
-.routeLine polyline {
+.routeLine path {
   fill: none;
   stroke-linecap: round;
   stroke-linejoin: round;
