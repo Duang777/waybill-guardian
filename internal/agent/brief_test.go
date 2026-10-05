@@ -47,12 +47,14 @@ func TestModelBriefGeneratorUsesStatelessReadOnlyRequest(t *testing.T) {
 
 func TestModelBriefGeneratorRejectsInvalidOrUnsafeOutput(t *testing.T) {
 	tests := []struct {
-		name string
-		text string
+		name       string
+		text       string
+		wantReason BriefFailureReason
 	}{
 		{
-			name: "wrong item count",
-			text: `{"items":[{"headline":"一","body":"二","evidence_ids":["fleet_scope"]}]}`,
+			name:       "wrong item count",
+			text:       `{"items":[{"headline":"一","body":"二","evidence_ids":["fleet_scope"]}]}`,
+			wantReason: BriefFailureSchema,
 		},
 		{
 			name: "unknown evidence",
@@ -62,6 +64,7 @@ func TestModelBriefGeneratorRejectsInvalidOrUnsafeOutput(t *testing.T) {
 				`"waybill_identity"`,
 				1,
 			),
+			wantReason: BriefFailureEvidence,
 		},
 		{
 			name: "unsafe prose",
@@ -71,6 +74,7 @@ func TestModelBriefGeneratorRejectsInvalidOrUnsafeOutput(t *testing.T) {
 				`"联系 13800138000"`,
 				1,
 			),
+			wantReason: BriefFailureSchema,
 		},
 	}
 	for _, test := range tests {
@@ -79,22 +83,27 @@ func TestModelBriefGeneratorRejectsInvalidOrUnsafeOutput(t *testing.T) {
 				responses: []*responses.Response{agents.ModelCallText(test.text)},
 			}
 			generator := newModelBriefGenerator(model, time.Second)
-			if _, err := generator.Generate(t.Context(), sampleBriefInput()); err == nil {
+			_, err := generator.Generate(t.Context(), sampleBriefInput())
+			if err == nil {
 				t.Fatal("Generate accepted invalid output")
+			}
+			if got := BriefFailureOf(err); got != test.wantReason {
+				t.Fatalf("failure reason = %q, want %q", got, test.wantReason)
 			}
 		})
 	}
 }
 
-func TestModelBriefGeneratorRetriesProviderErrorsWithinOneDeadline(t *testing.T) {
+func TestModelBriefGeneratorRetriesProviderErrorsWithFreshAttemptDeadlines(t *testing.T) {
 	model := &briefModelStub{
 		errors: []error{
 			errors.New("temporary one"),
 			errors.New("temporary two"),
 		},
 		responses: []*responses.Response{agents.ModelCallText(validBriefJSON())},
+		delays:    []time.Duration{25 * time.Millisecond, 25 * time.Millisecond},
 	}
-	generator := newModelBriefGenerator(model, time.Second)
+	generator := newModelBriefGenerator(model, 40*time.Millisecond)
 
 	if _, err := generator.Generate(t.Context(), sampleBriefInput()); err != nil {
 		t.Fatal(err)
@@ -106,9 +115,25 @@ func TestModelBriefGeneratorRetriesProviderErrorsWithinOneDeadline(t *testing.T)
 		t.Fatalf("deadlines = %d, want %d", len(model.deadlines), maxBriefAttempts)
 	}
 	for index := 1; index < len(model.deadlines); index++ {
-		if !model.deadlines[index].Equal(model.deadlines[0]) {
-			t.Fatalf("attempts did not share one total deadline: %v", model.deadlines)
+		if !model.deadlines[index].After(model.deadlines[index-1]) {
+			t.Fatalf("attempt deadlines did not reset: %v", model.deadlines)
 		}
+	}
+}
+
+func TestModelBriefGeneratorClassifiesAttemptTimeout(t *testing.T) {
+	model := &briefModelStub{
+		responses: []*responses.Response{agents.ModelCallText(validBriefJSON())},
+		delays:    []time.Duration{100 * time.Millisecond},
+	}
+	generator := newModelBriefGenerator(model, 20*time.Millisecond)
+
+	_, err := generator.Generate(t.Context(), sampleBriefInput())
+	if got := BriefFailureOf(err); got != BriefFailureTimeout {
+		t.Fatalf("failure reason = %q, want %q", got, BriefFailureTimeout)
+	}
+	if model.calls != 1 {
+		t.Fatalf("model calls = %d, want 1", model.calls)
 	}
 }
 
@@ -133,6 +158,7 @@ type briefModelStub struct {
 	responses []*responses.Response
 	requests  []*responses.Request
 	deadlines []time.Time
+	delays    []time.Duration
 }
 
 func (s *briefModelStub) NewResponses(
@@ -143,6 +169,17 @@ func (s *briefModelStub) NewResponses(
 	s.requests = append(s.requests, request)
 	if deadline, ok := ctx.Deadline(); ok {
 		s.deadlines = append(s.deadlines, deadline)
+	}
+	if len(s.delays) > 0 {
+		delay := s.delays[0]
+		s.delays = s.delays[1:]
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
 	}
 	if len(s.errors) > 0 {
 		err := s.errors[0]

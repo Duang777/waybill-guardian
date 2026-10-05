@@ -143,6 +143,31 @@ const executiveBriefItemSchema = z
   })
   .strict();
 
+const briefFallbackReasonSchema = z.enum([
+  "timeout",
+  "provider_error",
+  "schema",
+  "evidence",
+]);
+
+const executiveBriefSchema = z.discriminatedUnion("mode", [
+  z
+    .object({
+      mode: z.literal("deterministic_read_only"),
+      source: z.literal("rules"),
+      fallback_reason: briefFallbackReasonSchema.optional(),
+      items: z.array(executiveBriefItemSchema).length(3),
+    })
+    .strict(),
+  z
+    .object({
+      mode: z.literal("model_read_only"),
+      source: z.string().min(1).refine((source) => source !== "rules"),
+      items: z.array(executiveBriefItemSchema).length(3),
+    })
+    .strict(),
+]);
+
 export const overviewSchema = z
   .object({
     as_of: z.string().min(1),
@@ -168,12 +193,7 @@ export const overviewSchema = z
         })
         .strict(),
     ),
-    brief: z
-      .object({
-        mode: z.enum(["deterministic_read_only", "model_read_only"]),
-        items: z.array(executiveBriefItemSchema),
-      })
-      .strict(),
+    brief: executiveBriefSchema,
   })
   .strict();
 

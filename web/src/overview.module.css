@@ -1117,8 +1117,26 @@
   background: oklch(0.965 0.004 120);
 }
 
+.briefMeta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+}
+
 .readOnly {
   color: oklch(0.42 0.095 155);
+}
+
+.briefSource {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .briefGrid {
@@ -1331,6 +1349,16 @@
 
   .mapFacts .operationalFact:first-child {
     border-left: 0;
+  }
+
+  .briefMeta {
+    max-width: 52%;
+  }
+
+  .briefSource {
+    justify-content: flex-end;
+    font-size: 10px;
+    text-align: right;
   }
 
   .briefGrid {

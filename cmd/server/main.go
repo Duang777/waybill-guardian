@@ -621,6 +621,13 @@ func modelConfigFromEnv() (agentkit.ModelConfig, error) {
 	if err != nil {
 		return agentkit.ModelConfig{}, err
 	}
+	briefTimeout, err := strictDurationEnv(
+		"BRIEF_TIMEOUT",
+		agentkit.DefaultBriefTimeout,
+	)
+	if err != nil {
+		return agentkit.ModelConfig{}, err
+	}
 	maxOutputTokens, err := positiveIntEnv(
 		"LLM_MAX_OUTPUT_TOKENS",
 		agentkit.DefaultLLMMaxOutputTokens,
@@ -630,6 +637,7 @@ func modelConfigFromEnv() (agentkit.ModelConfig, error) {
 		return agentkit.ModelConfig{}, err
 	}
 	config.RequestTimeout = requestTimeout
+	config.BriefTimeout = briefTimeout
 	config.MaxOutputTokens = maxOutputTokens
 	return config, nil
 }

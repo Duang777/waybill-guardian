@@ -94,4 +94,5 @@ provider fallback。`ModelRequestBudget` 位于 `ProposalBoundary` 外层，首�
 经营简报使用独立的 `BriefGenerator` 直接调用同一 provider。它只接收授权范围内的聚合计数，
 不创建 Agent、thread 或 session，不加载或保存 history，不注册工具，并固定 `Store=false`。
 请求和响应都经过同一隐私校验；三条建议必须引用服务端提供的语义 evidence ID，展示标签和值
-由 `internal/guardian` 重建。总调用预算为 1.5 秒，失败时总览保留确定性简报。
+由 `internal/guardian` 重建。`BRIEF_TIMEOUT` 默认是 8 秒，每次 provider 尝试分别计时；
+失败时总览保留确定性简报并返回稳定的 `fallback_reason`。

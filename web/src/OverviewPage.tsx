@@ -5,6 +5,7 @@ import {
   ChevronRight,
   CircleGauge,
   Clock3,
+  FileText,
   RefreshCw,
   Route,
   ShieldCheck,
@@ -498,10 +499,23 @@ export function OverviewPage() {
                     <span className={styles.eyebrow}>Read-only intelligence</span>
                     <h2 id="brief-heading">经营简报</h2>
                   </div>
-                  <span className={styles.readOnly}>
-                    <ShieldCheck aria-hidden="true" size={15} />
-                    只读聚合
-                  </span>
+                  <div className={styles.briefMeta}>
+                    <span className={styles.readOnly}>
+                      <ShieldCheck aria-hidden="true" size={15} />
+                      只读聚合
+                    </span>
+                    <span
+                      className={styles.briefSource}
+                      title={briefFallbackDetail(resource.overview.brief)}
+                    >
+                      {resource.overview.brief.mode === "model_read_only" ? (
+                        <Bot aria-hidden="true" size={15} />
+                      ) : (
+                        <FileText aria-hidden="true" size={15} />
+                      )}
+                      {briefSourceLabel(resource.overview.brief)}
+                    </span>
+                  </div>
                 </div>
                 <div className={styles.briefGrid}>
                   {resource.overview.brief.items.map((item, index) => (
@@ -544,6 +558,31 @@ function KPI({ metric }: { metric: KPIMetric }) {
       <span className={styles.kpiFoot}>{detail}</span>
     </article>
   );
+}
+
+function briefSourceLabel(brief: Overview["brief"]): string {
+  if (brief.mode === "model_read_only") {
+    return `模型生成 · ${brief.source}`;
+  }
+  return "规则模板";
+}
+
+function briefFallbackDetail(brief: Overview["brief"]): string {
+  if (brief.mode === "model_read_only") {
+    return `模型：${brief.source}`;
+  }
+  switch (brief.fallback_reason) {
+    case "timeout":
+      return "模型生成超时，已使用规则模板";
+    case "provider_error":
+      return "模型服务不可用，已使用规则模板";
+    case "schema":
+      return "模型输出格式无效，已使用规则模板";
+    case "evidence":
+      return "模型引用证据无效，已使用规则模板";
+    default:
+      return "规则模板";
+  }
 }
 
 function OperationalFact({

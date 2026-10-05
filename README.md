@@ -30,7 +30,7 @@
 
 调度员少做的是在几个系统之间来回查证据。人仍然决定是否改派、是否赔付、是否发通知。复核时按审计序号重放。
 
-经营总览按下文口径计算时效挽回、成本影响、人力节省、异常闭环率、平均处置时长和审批通过率。仿真数据为异常运单提供可复现的时效与成本影响字段；外部数据缺少完整影响记录时，两项 KPI 显示 `unavailable`，服务不会补值。单运单页面的三项风险分由 [`internal/guardian/assessment.go`](internal/guardian/assessment.go) 的 `deriveAssessment` 计算，并限制在 0 到 100。运单状态的比较不区分大小写。状态不是 `delivered` 时，ETA 分先取 20，每个异常点再加 15，再加上停留小时乘以 8 后四舍五入。路况分是连续驾驶小时乘以 5 后四舍五入，疲劳预警再加 30。天气分取各段预警的最大值。`none`、`normal`、`green` 和空值为 0，`low`、`blue`、`yellow` 为 30，`medium` 和 `orange` 为 60，`high`、`red` 和 `critical` 为 90，其余为 20。内置样例因此显示 ETA 83、路况 75、天气 0。
+经营总览按下文口径计算时效挽回、成本影响、人力节省、异常闭环率、平均处置时长和审批通过率。时效与成本只统计最新 run 已完成且同一 run 已执行人工审批写操作的运单，金额和时效值仍是仿真字段给出的执行后估算。外部数据缺少完整影响记录时，两项 KPI 显示 `unavailable`，服务不会补值。单运单页面的三项风险分由 [`internal/guardian/assessment.go`](internal/guardian/assessment.go) 的 `deriveAssessment` 计算，并限制在 0 到 100。运单状态的比较不区分大小写。状态不是 `delivered` 时，ETA 分先取 20，每个异常点再加 15，再加上停留小时乘以 8 后四舍五入。路况分是连续驾驶小时乘以 5 后四舍五入，疲劳预警再加 30。天气分取各段预警的最大值。`none`、`normal`、`green` 和空值为 0，`low`、`blue`、`yellow` 为 30，`medium` 和 `orange` 为 60，`high`、`red` 和 `critical` 为 90，其余为 20。内置样例因此显示 ETA 83、路况 75、天气 0。
 
 `./scripts/demo.sh`、`npm run record:demo` 和容器默认使用 `AGENT_MODE=online`。在线模型先调用四个只读工具，再输出结构化提案和写工具调用。服务端校验提案 schema、候选承运商、写参数和每条证据引用；校验失败时只允许修复一次，第二次失败转人工复核。模型模式、模型名、API 风格、调用时延和 token 用量写入审计时间线。
 
@@ -320,7 +320,9 @@ env -u GOROOT go run ./cmd/dataimport validate \
 `demo` 是兼容别名。
 `AGENT_MODE=online` 使用独立的无工具、无历史模型调用生成简报。模型只接收不含运单、线路、
 港口、人员或车辆身份的聚合计数，并只能引用服务端提供的证据 ID。服务端据此重建展示引用。
-模型调用、解析、隐私或引用校验失败时，接口仍以 HTTP 200 返回确定性简报。
+服务按授权运单范围、数据时间和模型可见聚合内容缓存结果，相同内容的连续请求只生成一次。
+模型调用、解析、隐私或引用校验失败时，接口仍以 HTTP 200 返回确定性简报，并返回稳定的
+`fallback_reason`。页面显示配置的模型名或“规则模板”。`BRIEF_TIMEOUT` 默认是 `8s`。
 
 `POST /api/runs:batch` 接受最多 20 个 `waybill_id`。服务为每个运单调用一次 `StartRun`，
 并返回逐项成功或失败结果。`MAX_CONCURRENT_RUNS` 限制同时执行的调查任务。每个已接受的
@@ -331,17 +333,17 @@ run 使用独立的 `run_id`、审批记录和 SSE 时间线。
 
 | KPI | 公式 | 数据不足时的结果 |
 |---|---|---|
-| 时效挽回 | `sum(no_action_eta_hours - post_action_eta_hours)` | 窗口内任一异常运单缺少完整影响数据时返回 `unavailable` |
-| 成本影响 | `sum(avoided_penalty_cents - reassign_delta_cents - handling_cost_cents) / 100` | 窗口内任一异常运单缺少完整影响数据时返回 `unavailable` |
+| 已实现时效挽回 | 最新 run 已完成，且同一 approval 先有人工 `confirmed`、再有系统 `approval_executed`，`sum(no_action_eta_hours - post_action_eta_hours)` | 任一入选运单缺少完整影响数据时返回 `unavailable`；没有入选运单时返回 `0` |
+| 已实现成本影响 | 最新 run 已完成，且同一 approval 先有人工 `confirmed`、再有系统 `approval_executed`，`sum(avoided_penalty_cents - reassign_delta_cents - handling_cost_cents) / 100` | 任一入选运单缺少完整影响数据时返回 `unavailable`；没有入选运单时返回 `0` |
 | 人力节省 | `成功自动证据采集步数 * EVIDENCE_STEP_MINUTES / 60` | 没有采集事件时返回 `0` 小时 |
 | 异常闭环率 | `已完成或已驳回处置的异常运单数 / 窗口内异常运单数 * 100%` | 没有异常运单时返回 `0%` |
 | 平均处置时长 | `sum(终态时间 - 启动时间) / 窗口内闭环 run 数` | 没有闭环 run 时返回 `unavailable` |
 | 人工审批通过率 | `人工确认数 / 人工决定数 * 100%` | 没有人工决定时返回 `unavailable` |
 
 JSON 运单可选提供完整 `impact` 对象；CSV 可选提供同名的五列扩展。五个值必须整组出现。
-ETA 使用小时，金额使用整数分，服务先以整数分求和，最后统一换算为元。仿真数据为异常
-运单提供可复现的演示值；正式 adapter 必须提供同一口径的基线、结果和成本事实，服务不会
-用均值或默认值补齐缺失记录。窗口内没有异常时，两项指标均为可用的零值。
+ETA 使用小时，金额使用整数分，服务先以整数分求和，最后统一换算为元。仿真数据为已执行
+运单提供可复现的执行后估算；正式 adapter 必须提供同一口径的基线、结果和成本事实，服务
+不会用均值或默认值补齐缺失记录。没有符合执行条件的运单时，两项指标均为可用的零值。
 
 ### 在线模型
 
@@ -366,7 +368,7 @@ LLM_MODEL=deepseek-v4-flash \
 | Kimi | `chat_completions` | `https://api.moonshot.cn/v1` | `kimi-k3` | [接入](https://platform.kimi.com/docs/get-api-key) · [计费](https://platform.kimi.com/docs/pricing/chat) |
 | 智谱 GLM | `chat_completions` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.3` | [接入](https://docs.bigmodel.cn/cn/guide/develop/openai/introduction) · [计费](https://docs.bigmodel.cn/cn/guide/start/pricing) |
 
-`LLM_API_STYLE` 默认是 `responses`。`LLM_BASE_URL` 必须是 API 根路径，不能以 `/` 结尾，也不能带上 `/responses` 或 `/chat/completions`。在线模式只配置一个 provider，没有 provider fallback。每次 provider 请求最多输出 4096 token；一次逻辑模型调用最多持续 45 秒，期间首次请求和一次结构修复各自最多尝试三次。服务还把 assistant 提案文本限制为 32 KiB，修复请求最多回灌 4 KiB 失败文本。读工具只返回白名单字段，并限制文本和数组大小；模型必须把其中的文字视为不可信业务数据，不能当作指令执行。服务会把每次逻辑调用的 token 用量和时延写入审计事件。
+`LLM_API_STYLE` 默认是 `responses`。`LLM_BASE_URL` 必须是 API 根路径，不能以 `/` 结尾，也不能带上 `/responses` 或 `/chat/completions`。在线模式只配置一个 provider，没有 provider fallback。每次 provider 请求最多输出 4096 token；一次处置 Agent 逻辑调用最多持续 45 秒，期间首次请求和一次结构修复各自最多尝试三次。经营简报使用独立的 `BRIEF_TIMEOUT`，默认 `8s`，每次 provider 尝试分别计时。服务还把 assistant 提案文本限制为 32 KiB，修复请求最多回灌 4 KiB 失败文本。读工具只返回白名单字段，并限制文本和数组大小；模型必须把其中的文字视为不可信业务数据，不能当作指令执行。服务会把每次逻辑调用的 token 用量和时延写入审计事件。
 
 调用模型会产生费用，并把脱敏后的运单证据发送给所选提供商。部署方必须在调用前核对当前模型名、价格、数据处理规则和服务条款。各家的条款入口登记在 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。仓库的自动测试只验证兼容协议，不替代真实服务验收。
 

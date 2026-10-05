@@ -67,6 +67,7 @@ Prometheus listener。两项都要求 PostgreSQL 模式。
 `PLATFORM=file` 要求 `DATA_FILE`、local auth 和 JSONL storage，并在监听端口前完成文件校验。
 `MAX_CONCURRENT_RUNS` 默认是 8，限制同时执行的 Agent 调查任务。`EVIDENCE_STEP_MINUTES`
 默认是 8，用于计算人力节省 KPI。
+`BRIEF_TIMEOUT` 默认是 8 秒，限制经营简报每次 provider 尝试的等待时间。
 local 模式默认只接受 loopback IP 字面量。容器可显式设置
 `ALLOW_NON_LOOPBACK_LOCAL=true` 监听通配地址，但 HTTP handler 仍拒绝 Host 不是 loopback
 IP 的请求，并要求 TCP 对端匹配 `LOCAL_TRUSTED_REMOTE` 指定的地址。Compose 使用

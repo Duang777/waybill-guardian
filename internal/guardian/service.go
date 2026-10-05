@@ -123,6 +123,8 @@ type Service struct {
 	registry        *guardtools.Registry
 	engine          *agentkit.Engine
 	briefGenerator  agentkit.BriefGenerator
+	briefCache      *briefCache
+	briefSource     string
 	coordinator     RunCoordinator
 	recovery        audit.RecoveryJournal
 
@@ -269,6 +271,8 @@ func openService(
 		registry:            registry,
 		engine:              engine,
 		briefGenerator:      briefGenerator,
+		briefCache:          newBriefCache(),
+		briefSource:         briefModelSource(config.Model.Model),
 		coordinator:         coordinator,
 		recovery:            recovery,
 		runs:                make(map[domain.RunID]RunView),

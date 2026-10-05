@@ -255,6 +255,7 @@ describe("waybill API", () => {
       anomaly_distribution: [],
       brief: {
         mode: "model_read_only",
+        source: "deepseek-v4-flash",
         items: [
           {
             id: "model-brief-1",
@@ -268,11 +269,100 @@ describe("waybill API", () => {
               },
             ],
           },
+          {
+            id: "model-brief-2",
+            headline: "聚焦线路风险",
+            body: "建议前置预案",
+            evidence: [
+              {
+                label: "最高热度线路",
+                value: "3 单异常，热度 100%",
+                source: "routes",
+              },
+            ],
+          },
+          {
+            id: "model-brief-3",
+            headline: "平衡节点资源",
+            body: "建议调整排班",
+            evidence: [
+              {
+                label: "异常最集中公路港",
+                value: "4 单异常，2 单处置中",
+                source: "hubs",
+              },
+            ],
+          },
         ],
       },
     });
 
     expect(parsed.brief.mode).toBe("model_read_only");
+    expect(parsed.brief.source).toBe("deepseek-v4-flash");
+    expect(parsed.brief.items).toHaveLength(3);
+  });
+
+  it("accepts a stable deterministic brief fallback reason", () => {
+    const brief = overviewSchema.shape.brief.parse({
+      mode: "deterministic_read_only",
+      source: "rules",
+      fallback_reason: "timeout",
+      items: [1, 2, 3].map((index) => ({
+        id: `rules-${index}`,
+        headline: `规则建议 ${index}`,
+        body: "使用确定性聚合结果。",
+        evidence: [
+          {
+            label: "异常运单",
+            value: "1 单",
+            source: "totals.anomalies",
+          },
+        ],
+      })),
+    });
+
+    if (brief.mode !== "deterministic_read_only") {
+      throw new Error(`unexpected brief mode: ${brief.mode}`);
+    }
+    expect(brief.fallback_reason).toBe("timeout");
+  });
+
+  it("rejects contradictory brief provenance", () => {
+    const items = [1, 2, 3].map((index) => ({
+      id: `brief-${index}`,
+      headline: `建议 ${index}`,
+      body: "使用聚合结果。",
+      evidence: [
+        {
+          label: "异常运单",
+          value: "1 单",
+          source: "totals.anomalies",
+        },
+      ],
+    }));
+
+    expect(() =>
+      overviewSchema.shape.brief.parse({
+        mode: "model_read_only",
+        source: "deepseek-v4-flash",
+        fallback_reason: "timeout",
+        items,
+      }),
+    ).toThrow();
+    expect(() =>
+      overviewSchema.shape.brief.parse({
+        mode: "deterministic_read_only",
+        source: "deepseek-v4-flash",
+        items,
+      }),
+    ).toThrow();
+    expect(() =>
+      overviewSchema.shape.brief.parse({
+        mode: "model_read_only",
+        source: "rules",
+        items,
+      }),
+    ).toThrow();
   });
 
   it("posts batch IDs and parses independent run outcomes", async () => {

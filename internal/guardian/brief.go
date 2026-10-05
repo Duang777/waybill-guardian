@@ -1,10 +1,20 @@
 package guardian
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	agentkit "github.com/Duang777/waybill-guardian/internal/agent"
+	"github.com/Duang777/waybill-guardian/internal/domain"
+)
+
+var (
+	errBriefSchema   = errors.New("brief schema is invalid")
+	errBriefEvidence = errors.New("brief evidence is invalid")
 )
 
 func buildExecutiveBrief(overview Overview) ExecutiveBrief {
@@ -91,7 +101,102 @@ func buildExecutiveBrief(overview Overview) ExecutiveBrief {
 			}},
 		})
 	}
-	return ExecutiveBrief{Mode: "deterministic_read_only", Items: items}
+	return ExecutiveBrief{
+		Mode:   "deterministic_read_only",
+		Source: "rules",
+		Items:  items,
+	}
+}
+
+func (s *Service) resolveExecutiveBrief(
+	ctx context.Context,
+	waybillIDs []domain.WaybillID,
+	overview Overview,
+) ExecutiveBrief {
+	fallback := buildExecutiveBrief(overview)
+	if s.briefGenerator == nil {
+		return fallback
+	}
+	input := briefInputForOverview(overview)
+	key, err := newBriefCacheKey(
+		waybillIDs,
+		overview.AsOf.UTC().Format(time.RFC3339Nano),
+		input,
+	)
+	if err != nil {
+		fallback.FallbackReason = BriefFallbackSchema
+		slog.WarnContext(s.ctx, "executive brief fell back", "reason", fallback.FallbackReason)
+		return fallback
+	}
+	outcome, err := s.briefCache.getOrLoad(ctx, key, func() briefCacheOutcome {
+		generated, generateErr := s.briefGenerator.Generate(s.ctx, input)
+		if generateErr != nil {
+			reason := guardianBriefFailure(agentkit.BriefFailureOf(generateErr))
+			slog.WarnContext(
+				s.ctx,
+				"executive brief fell back",
+				"reason",
+				reason,
+				"cache_key",
+				fmt.Sprintf("%x", key[:6]),
+			)
+			return briefCacheOutcome{Failure: reason}
+		}
+		brief, materializeErr := materializeGeneratedBrief(
+			input,
+			generated,
+			s.briefSource,
+		)
+		if materializeErr != nil {
+			reason := materializedBriefFailure(materializeErr)
+			slog.WarnContext(
+				s.ctx,
+				"executive brief fell back",
+				"reason",
+				reason,
+				"cache_key",
+				fmt.Sprintf("%x", key[:6]),
+			)
+			return briefCacheOutcome{Failure: reason}
+		}
+		return briefCacheOutcome{Brief: brief}
+	})
+	if err != nil {
+		return fallback
+	}
+	if outcome.Failure != "" {
+		fallback.FallbackReason = outcome.Failure
+		return fallback
+	}
+	return outcome.Brief
+}
+
+func guardianBriefFailure(reason agentkit.BriefFailureReason) BriefFallbackReason {
+	switch reason {
+	case agentkit.BriefFailureTimeout:
+		return BriefFallbackTimeout
+	case agentkit.BriefFailureSchema:
+		return BriefFallbackSchema
+	case agentkit.BriefFailureEvidence:
+		return BriefFallbackEvidence
+	default:
+		return BriefFallbackProvider
+	}
+}
+
+func materializedBriefFailure(err error) BriefFallbackReason {
+	if errors.Is(err, errBriefEvidence) {
+		return BriefFallbackEvidence
+	}
+	return BriefFallbackSchema
+}
+
+func briefModelSource(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return "model"
+	}
+	return model
 }
 
 func briefInputForOverview(overview Overview) agentkit.BriefInput {
@@ -129,9 +234,13 @@ func briefAnomalyCategory(value string) string {
 func materializeGeneratedBrief(
 	input agentkit.BriefInput,
 	generated agentkit.GeneratedBrief,
+	source string,
 ) (ExecutiveBrief, error) {
 	if len(generated.Items) != 3 {
-		return ExecutiveBrief{}, fmt.Errorf("generated brief requires exactly three items")
+		return ExecutiveBrief{}, fmt.Errorf(
+			"%w: generated brief requires exactly three items",
+			errBriefSchema,
+		)
 	}
 	anomalyLabel := anomalyTypeLabel(input.TopAnomalyType)
 	if anomalyLabel == "" {
@@ -173,21 +282,27 @@ func materializeGeneratedBrief(
 		},
 	}
 	result := ExecutiveBrief{
-		Mode:  "model_read_only",
-		Items: make([]ExecutiveBriefItem, 0, len(generated.Items)),
+		Mode:   "model_read_only",
+		Source: briefModelSource(source),
+		Items:  make([]ExecutiveBriefItem, 0, len(generated.Items)),
 	}
 	for index, item := range generated.Items {
 		if strings.TrimSpace(item.Headline) == "" ||
 			strings.TrimSpace(item.Body) == "" ||
 			len(item.EvidenceIDs) == 0 {
-			return ExecutiveBrief{}, fmt.Errorf("generated brief item %d is incomplete", index)
+			return ExecutiveBrief{}, fmt.Errorf(
+				"%w: generated brief item %d is incomplete",
+				errBriefSchema,
+				index,
+			)
 		}
 		evidence := make([]EvidenceCitation, 0, len(item.EvidenceIDs))
 		for _, evidenceID := range item.EvidenceIDs {
 			citation, ok := ledger[evidenceID]
 			if !ok {
 				return ExecutiveBrief{}, fmt.Errorf(
-					"generated brief item %d cites unknown evidence",
+					"%w: generated brief item %d cites unknown evidence",
+					errBriefEvidence,
 					index,
 				)
 			}

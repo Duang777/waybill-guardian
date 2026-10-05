@@ -1153,6 +1153,7 @@ func TestModelConfigFromEnv(t *testing.T) {
 	t.Setenv("LLM_API_KEY", " secret ")
 	t.Setenv("LLM_MODEL", " model-1 ")
 	t.Setenv("LLM_REQUEST_TIMEOUT", "750ms")
+	t.Setenv("BRIEF_TIMEOUT", "8s")
 	t.Setenv("LLM_MAX_OUTPUT_TOKENS", "2048")
 
 	config, err := modelConfigFromEnv()
@@ -1165,6 +1166,7 @@ func TestModelConfigFromEnv(t *testing.T) {
 		config.APIKey != "secret" ||
 		config.Model != "model-1" ||
 		config.RequestTimeout != 750*time.Millisecond ||
+		config.BriefTimeout != 8*time.Second ||
 		config.MaxOutputTokens != 2048 {
 		t.Fatalf("model config = %+v", config)
 	}
@@ -1177,11 +1179,13 @@ func TestModelConfigFromEnvRejectsInvalidLimits(t *testing.T) {
 		value string
 	}{
 		{name: "timeout", key: "LLM_REQUEST_TIMEOUT", value: "0s"},
+		{name: "brief timeout", key: "BRIEF_TIMEOUT", value: "0s"},
 		{name: "tokens", key: "LLM_MAX_OUTPUT_TOKENS", value: "32769"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("AGENT_MODE", "online")
 			t.Setenv("LLM_REQUEST_TIMEOUT", "")
+			t.Setenv("BRIEF_TIMEOUT", "")
 			t.Setenv("LLM_MAX_OUTPUT_TOKENS", "")
 			t.Setenv(test.key, test.value)
 			if _, err := modelConfigFromEnv(); err == nil {
@@ -1194,6 +1198,7 @@ func TestModelConfigFromEnvRejectsInvalidLimits(t *testing.T) {
 func TestModelConfigFromEnvIgnoresOnlineLimitsInOfflineMode(t *testing.T) {
 	t.Setenv("AGENT_MODE", "offline")
 	t.Setenv("LLM_REQUEST_TIMEOUT", "invalid")
+	t.Setenv("BRIEF_TIMEOUT", "invalid")
 	t.Setenv("LLM_MAX_OUTPUT_TOKENS", "invalid")
 
 	config, err := modelConfigFromEnv()
@@ -1202,6 +1207,7 @@ func TestModelConfigFromEnvIgnoresOnlineLimitsInOfflineMode(t *testing.T) {
 	}
 	if config.Mode != agentkit.ModeOffline ||
 		config.RequestTimeout != 0 ||
+		config.BriefTimeout != 0 ||
 		config.MaxOutputTokens != 0 {
 		t.Fatalf("offline model config = %+v", config)
 	}
