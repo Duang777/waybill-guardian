@@ -167,11 +167,68 @@ try {
   const firstHub = overviewBody.hubs[0];
   const hubPicker = page.getByLabel("选择公路港", { exact: true });
   await hubPicker.selectOption(firstHub.hub_id);
+  await page.waitForFunction(
+    () => {
+      const stage = document.querySelector('[data-network-renderer="webgl"]');
+      return (
+        stage?.getAttribute("data-scene-mode") === "facility" &&
+        stage.getAttribute("data-scene-hubs") === "1" &&
+        stage.getAttribute("data-scene-routes") === "0" &&
+        stage.getAttribute("data-scene-markers") === "0"
+      );
+    },
+  );
   await page
     .locator('[role="status"]')
     .getByText(firstHub.name, { exact: true })
     .waitFor();
-  await hubPicker.selectOption("");
+  const detailStats = {
+    hubs: Number(await networkMap.getAttribute("data-scene-hubs")),
+    routes: Number(await networkMap.getAttribute("data-scene-routes")),
+    markers: Number(await networkMap.getAttribute("data-scene-markers")),
+    facilityParts: Number(
+      await networkMap.getAttribute("data-scene-facility-parts"),
+    ),
+    detailParts: Number(
+      await networkMap.getAttribute("data-scene-detail-parts"),
+    ),
+    dockBays: Number(await networkMap.getAttribute("data-scene-dock-bays")),
+    storageSlots: Number(
+      await networkMap.getAttribute("data-scene-storage-slots"),
+    ),
+  };
+  assert(
+    detailStats.hubs === 1 &&
+      detailStats.routes === 0 &&
+      detailStats.markers === 0 &&
+      detailStats.facilityParts > 0 &&
+      detailStats.detailParts > 20 &&
+      detailStats.dockBays >= 4 &&
+      detailStats.storageSlots >= 6,
+    `facility detail layers are incomplete: ${JSON.stringify(detailStats)}`,
+  );
+  await page.waitForTimeout(1_400);
+  const detailPixelProbe = await probeCanvasPixels(networkCanvas);
+  assert(
+    detailPixelProbe !== null && detailPixelProbe.colors >= 3,
+    `facility detail canvas is blank: ${JSON.stringify(detailPixelProbe)}`,
+  );
+  await page.screenshot({
+    path: join(artifactDir, "overview-facility-detail.png"),
+  });
+  await page
+    .getByRole("button", { name: "返回全国视角", exact: true })
+    .click();
+  await page.waitForFunction(
+    (expectedHubs) => {
+      const stage = document.querySelector('[data-network-renderer="webgl"]');
+      return (
+        stage?.getAttribute("data-scene-mode") === "network" &&
+        Number(stage.getAttribute("data-scene-hubs")) === expectedHubs
+      );
+    },
+    expectedSceneCounts.hubs,
+  );
   const mapBounds = await networkMap.boundingBox();
   assert(
     mapBounds !== null && mapBounds.width > 600 && mapBounds.height > 400,
@@ -228,11 +285,13 @@ try {
     fullPage: true,
   });
   await page.setViewportSize({ width: 1600, height: 900 });
+  await page.waitForTimeout(800);
   assert(!(await hasHorizontalOverflow(page)), "1600px overview overflowed horizontally");
   await page.screenshot({
     path: join(artifactDir, "overview-desktop-1600.png"),
   });
   await page.setViewportSize({ width: 1280, height: 900 });
+  await page.waitForTimeout(800);
   assert(!(await hasHorizontalOverflow(page)), "1280px overview overflowed horizontally");
   const clippedKPIText = await clippedText(
     page,
@@ -378,12 +437,14 @@ try {
   assert(anomalyPoint !== undefined, "map drilldown waybill has no anomaly point");
 
   await page.setViewportSize({ width: 375, height: 812 });
+  await page.waitForTimeout(1_000);
   assert(!(await hasHorizontalOverflow(page)), "375px overview overflowed horizontally");
   await page.screenshot({
     path: join(artifactDir, "overview-mobile-375.png"),
     fullPage: true,
   });
   await page.setViewportSize({ width: 320, height: 812 });
+  await page.waitForTimeout(1_000);
   assert(!(await hasHorizontalOverflow(page)), "320px overview overflowed horizontally");
   const undersized = await undersizedControls(page);
   assert(
@@ -430,6 +491,7 @@ try {
         markers: sceneCounts.markers,
         facility_parts: facilityParts,
         facility_archetypes: archetypeCounts,
+        facility_detail: detailStats,
         renderer: "webgl",
         draw_calls: drawCalls,
         sampled_canvas_colors: pixelProbe.colors,
@@ -662,6 +724,24 @@ async function verifyWebGLFallback(webURL) {
       (await networkMap.locator("line").count()) === 72,
       "SVG fallback did not render all routes",
     );
+    await page
+      .getByLabel("选择公路港", { exact: true })
+      .selectOption({ index: 1 });
+    await page.locator('[data-fallback-mode="facility"]').waitFor();
+    const facilityMap = fallback.getByRole("img", {
+      name: /园区详情/,
+    });
+    await facilityMap.waitFor();
+    assert(
+      (await facilityMap.locator("rect").count()) >= 20,
+      "SVG fallback did not render facility structures",
+    );
+    await page
+      .getByRole("button", { name: "返回全国视角", exact: true })
+      .click();
+    await fallback.getByRole("img", {
+      name: /全国公路港异常网络/,
+    }).waitFor();
     assert(
       (await fallback.locator("canvas").count()) === 0,
       "WebGL-disabled page still rendered a canvas",

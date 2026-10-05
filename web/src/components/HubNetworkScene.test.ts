@@ -5,7 +5,7 @@ import {
   type HubOverview,
   type RouteOverview,
 } from "../api";
-import { buildSceneModel } from "./HubNetworkScene";
+import { buildSceneModel, buildSceneView } from "./HubNetworkScene";
 
 const hubs = [
   {
@@ -215,5 +215,110 @@ describe("buildSceneModel", () => {
       );
 
     expect(summarize(reversed)).toEqual(summarize(forward));
+  });
+});
+
+describe("buildSceneView", () => {
+  it("keeps the complete network when no hub is selected", () => {
+    const model = buildSceneModel(hubs, routes, []);
+    const view = buildSceneView(model, null);
+
+    expect(view.mode).toBe("network");
+    expect(view.hubs).toHaveLength(2);
+    expect(view.routes).toHaveLength(1);
+    expect(view.markers).toHaveLength(4);
+    expect(view.detail).toBeUndefined();
+  });
+
+  it("isolates one facility and removes nationwide traffic layers", () => {
+    const model = buildSceneModel(hubs, routes, []);
+    const view = buildSceneView(model, "HUB-A");
+
+    expect(view.mode).toBe("facility");
+    if (view.mode !== "facility") {
+      throw new Error("expected a facility scene");
+    }
+    expect(view.hubs.map((item) => item.hub.hub_id)).toEqual(["HUB-A"]);
+    expect(view.routes).toHaveLength(0);
+    expect(view.markers).toHaveLength(0);
+    expect(view.riskHubs).toHaveLength(0);
+    expect(
+      new Set(view.facilityParts.map((part) => part.sceneHub.hub.hub_id)),
+    ).toEqual(new Set(["HUB-A"]));
+    expect(new Set(view.detail.parts.map((part) => part.kind))).toEqual(
+      new Set([
+        "ground",
+        "road",
+        "apron",
+        "dock",
+        "slot",
+        "cargo",
+        "marking",
+        "tower",
+        "beacon",
+      ]),
+    );
+  });
+
+  it("derives dock and storage detail from facility capacity and activity", () => {
+    const model = buildSceneModel(
+      [
+        facilityHub({
+          hubID: "HUB-LOCAL",
+          capacity: 1_000,
+          inFlight: 0,
+          anomalies: 0,
+        }),
+        facilityHub({
+          hubID: "HUB-REGIONAL",
+          capacity: 2_000,
+          inFlight: 1,
+          anomalies: 1,
+        }),
+        facilityHub({
+          hubID: "HUB-GATEWAY",
+          capacity: 3_000,
+          inFlight: 2,
+          anomalies: 2,
+        }),
+        facilityHub({
+          hubID: "HUB-YARD",
+          capacity: 4_000,
+          inFlight: 4,
+          anomalies: 4,
+        }),
+      ],
+      [],
+      [],
+    );
+    const details = [
+      "HUB-LOCAL",
+      "HUB-REGIONAL",
+      "HUB-GATEWAY",
+      "HUB-YARD",
+    ].map((hubID) => {
+      const view = buildSceneView(model, hubID);
+      if (view.mode !== "facility") {
+        throw new Error(`expected facility scene for ${hubID}`);
+      }
+      return {
+        dockBays: view.detail.dockBays,
+        storageSlots: view.detail.storageSlots,
+        occupiedSlots: view.detail.occupiedSlots,
+      };
+    });
+
+    expect(details).toEqual([
+      { dockBays: 4, storageSlots: 6, occupiedSlots: 0 },
+      { dockBays: 6, storageSlots: 8, occupiedSlots: 2 },
+      { dockBays: 8, storageSlots: 10, occupiedSlots: 5 },
+      { dockBays: 10, storageSlots: 12, occupiedSlots: 12 },
+    ]);
+  });
+
+  it("falls back to the network for an unknown hub", () => {
+    const model = buildSceneModel(hubs, routes, []);
+
+    expect(buildSceneView(model, "HUB-UNKNOWN").mode).toBe("network");
   });
 });

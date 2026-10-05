@@ -10,6 +10,8 @@ type NetworkMapProps = {
   hubs: readonly HubOverview[];
   routes: readonly RouteOverview[];
   anomalies: readonly AnomalyOverview[];
+  selectedHubID: string | null;
+  onSelectHub: (hubID: string) => void;
 };
 
 const bounds = {
@@ -19,14 +21,23 @@ const bounds = {
   maxLatitude: 54,
 };
 
-export function NetworkMap({ hubs, routes, anomalies }: NetworkMapProps) {
+export function NetworkMap({
+  hubs,
+  routes,
+  anomalies,
+  selectedHubID,
+  onSelectHub,
+}: NetworkMapProps) {
   const hubByID = new Map(hubs.map((hub) => [hub.hub_id, hub]));
-  const anomalyByWaybill = new Map(
-    anomalies.map((item) => [item.waybill_id, item]),
-  );
+  const selectedHub =
+    selectedHubID === null ? undefined : hubByID.get(selectedHubID);
+
+  if (selectedHub !== undefined) {
+    return <FacilityDetailMap hub={selectedHub} hubs={hubs} />;
+  }
 
   return (
-    <div className={styles.networkMapFrame}>
+    <div className={styles.networkMapFrame} data-fallback-mode="network">
       <svg
         className={styles.networkMap}
         viewBox="0 0 1000 560"
@@ -36,7 +47,8 @@ export function NetworkMap({ hubs, routes, anomalies }: NetworkMapProps) {
       >
         <title id="network-map-title">全国公路港异常网络</title>
         <desc id="network-map-description">
-          展示公路港节点、运输线路与异常热度，橙红色线路代表异常集中。
+          展示公路港节点、运输线路与 {anomalies.length} 个异常，
+          橙红色线路代表异常集中。
         </desc>
         <defs>
           <pattern
@@ -88,12 +100,20 @@ export function NetworkMap({ hubs, routes, anomalies }: NetworkMapProps) {
         <g className={styles.hubLayer}>
           {hubs.map((hub) => {
             const point = project(hub);
-            const focus =
-              hub.focus_waybill_id === undefined
-                ? undefined
-                : anomalyByWaybill.get(hub.focus_waybill_id);
-            const marker = (
-              <>
+            return (
+              <g
+                key={hub.hub_id}
+                role="button"
+                tabIndex={0}
+                aria-label={`查看 ${hub.name} 园区`}
+                onClick={() => onSelectHub(hub.hub_id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelectHub(hub.hub_id);
+                  }
+                }}
+              >
                 <circle
                   cx={point.x}
                   cy={point.y}
@@ -113,19 +133,7 @@ export function NetworkMap({ hubs, routes, anomalies }: NetworkMapProps) {
                 <title>
                   {hub.name} · {hub.waybills} 单 · {hub.anomalies} 单异常
                 </title>
-              </>
-            );
-            if (focus === undefined) {
-              return <g key={hub.hub_id}>{marker}</g>;
-            }
-            return (
-              <a
-                key={hub.hub_id}
-                href={`/waybills/${encodeURIComponent(focus.waybill_id)}`}
-                aria-label={`下钻 ${hub.name} 的高风险运单 ${focus.waybill_id}`}
-              >
-                {marker}
-              </a>
+              </g>
             );
           })}
         </g>
@@ -137,6 +145,202 @@ export function NetworkMap({ hubs, routes, anomalies }: NetworkMapProps) {
       </div>
     </div>
   );
+}
+
+function FacilityDetailMap({
+  hub,
+  hubs,
+}: {
+  hub: HubOverview;
+  hubs: readonly HubOverview[];
+}) {
+  const detail = buildFallbackFacilityDetail(hub, hubs);
+  return (
+    <div className={styles.networkMapFrame} data-fallback-mode="facility">
+      <svg
+        className={styles.networkMap}
+        viewBox="0 0 1000 560"
+        role="img"
+        aria-labelledby="facility-map-title facility-map-description"
+        preserveAspectRatio="xMidYMid meet"
+      >
+        <title id="facility-map-title">{hub.name}园区详情</title>
+        <desc id="facility-map-description">
+          展示该园区的仓库、月台、货位、场内道路和告警塔。
+        </desc>
+        <rect width="1000" height="560" className={styles.mapCanvas} />
+        <rect
+          x="84"
+          y="68"
+          width="832"
+          height="424"
+          className={styles.facilityCampus}
+        />
+        <rect
+          x="720"
+          y="100"
+          width="118"
+          height="360"
+          className={styles.facilityRoad}
+        />
+        {Array.from({ length: 6 }, (_, index) => (
+          <rect
+            key={`road-${index}`}
+            x="774"
+            y={126 + index * 54}
+            width="10"
+            height="28"
+            className={styles.facilityRoadMark}
+          />
+        ))}
+        <rect
+          x="250"
+          y="155"
+          width={detail.warehouseWidth}
+          height="152"
+          className={styles.facilityWarehouse}
+        />
+        {detail.warehouseCount > 1 && (
+          <rect
+            x="250"
+            y="322"
+            width={detail.warehouseWidth * 0.72}
+            height="80"
+            className={styles.facilityWarehouseSecondary}
+          />
+        )}
+        <rect
+          x="218"
+          y="294"
+          width={detail.warehouseWidth + 64}
+          height="78"
+          className={styles.facilityApron}
+        />
+        {Array.from({ length: detail.dockBays }, (_, index) => {
+          const x = distributedPosition(
+            258,
+            242 + detail.warehouseWidth,
+            index,
+            detail.dockBays,
+          );
+          return (
+            <g key={`dock-${index}`}>
+              <rect
+                x={x}
+                y="282"
+                width="20"
+                height="24"
+                className={styles.facilityDock}
+              />
+              <line
+                x1={x + 10}
+                y1="316"
+                x2={x + 10}
+                y2="360"
+                className={styles.facilityBayLine}
+              />
+            </g>
+          );
+        })}
+        {Array.from({ length: detail.storageSlots }, (_, index) => {
+          const column = index % 4;
+          const row = Math.floor(index / 4);
+          const x = 112 + column * 30;
+          const y = 126 + row * 42;
+          return (
+            <g key={`slot-${index}`}>
+              <rect
+                x={x}
+                y={y}
+                width="22"
+                height="30"
+                className={styles.facilitySlot}
+              />
+              {index < detail.occupiedSlots && (
+                <rect
+                  x={x + 3}
+                  y={y + 4}
+                  width="16"
+                  height="22"
+                  className={styles.facilityCargo}
+                />
+              )}
+            </g>
+          );
+        })}
+        <rect
+          x="852"
+          y={360 - detail.towerHeight}
+          width="12"
+          height={detail.towerHeight}
+          className={styles.facilityTower}
+        />
+        <circle
+          cx="858"
+          cy={348 - detail.towerHeight}
+          r="16"
+          className={
+            hub.anomalies > 0
+              ? styles.facilityAlarm
+              : styles.facilityNormal
+          }
+        />
+      </svg>
+      <div className={styles.mapLegend} aria-hidden="true">
+        <span><i className={styles.sceneWarehouseKey} />仓库</span>
+        <span><i className={styles.sceneDockKey} />月台</span>
+        <span><i className={styles.sceneCargoKey} />货位</span>
+        <span><i className={styles.sceneRiskKey} />告警塔</span>
+      </div>
+    </div>
+  );
+}
+
+function buildFallbackFacilityDetail(
+  hub: HubOverview,
+  hubs: readonly HubOverview[],
+) {
+  const capacities = hubs
+    .map((item) => item.daily_capacity)
+    .sort((left, right) => left - right);
+  const rank = capacities.findIndex(
+    (capacity) => capacity >= hub.daily_capacity,
+  );
+  const quartile = Math.min(
+    3,
+    Math.floor((Math.max(rank, 0) * 4) / Math.max(capacities.length, 1)),
+  );
+  const maxInFlight = Math.max(...hubs.map((item) => item.in_flight), 1);
+  const dockBays = 4 + quartile * 2;
+  const storageSlots = 6 + quartile * 2;
+  const occupiedSlots =
+    hub.in_flight === 0
+      ? 0
+      : Math.max(
+          1,
+          Math.ceil((hub.in_flight / maxInFlight) * storageSlots),
+        );
+
+  return {
+    dockBays,
+    storageSlots,
+    occupiedSlots,
+    towerHeight: 58 + Math.min(hub.anomalies, 8) * 8,
+    warehouseCount: 1 + Math.floor(quartile / 2),
+    warehouseWidth: 280 + quartile * 42,
+  };
+}
+
+function distributedPosition(
+  start: number,
+  end: number,
+  index: number,
+  count: number,
+): number {
+  if (count <= 1) {
+    return (start + end) / 2;
+  }
+  return start + ((end - start) * index) / (count - 1);
 }
 
 function project(hub: HubOverview): { x: number; y: number } {

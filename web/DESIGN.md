@@ -69,6 +69,9 @@ border, instanced facility parts, merged route geometry, and instanced moving sh
 markers. Four facility archetypes reuse warehouse, dock, yard, tower, and signal parts.
 Daily capacity selects the archetype and footprint, in-flight volume fills cargo bays,
 anomalies raise a red signal mast, and the primary route sets the facility orientation.
+Selecting a hub replaces the nationwide layers with one enlarged facility inspection view.
+That view adds a perimeter, internal road, loading apron, dock bays, storage slots, occupied
+cargo positions, and an anomaly tower derived from the selected hub's operating data.
 Do not use a dark skybox, bloom, glass panels, map tiles, or decorative gradients.
 
 ## 6. Depth and elevation
@@ -99,6 +102,8 @@ surfaces use dividers without decorative shadows. The approval card uses
 At 1000 px the CEO map and risk queue become one column. At 720 px its KPI band becomes two
 columns. At 960 px the waybill workspace becomes one column and keeps route evidence before
 the approval panel.
+The facility inspection view keeps the selected campus centered and places its detail summary
+above the bottom legend so neither layer obscures the model.
 At 640 px the workbench header wraps, route metadata becomes a two-column grid, and playback
 controls keep 40 px hit areas. Both pages must remain usable at 375 px and 320 px without
 horizontal scrolling.
