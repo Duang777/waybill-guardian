@@ -65,7 +65,10 @@ runs. Selection persists across views and the summary always reports both visibl
 counts.
 
 The 3D field uses an orthographic isometric camera, an abstract grid instead of a geographic
-border, instanced hub columns, merged route geometry, and instanced moving shipment markers.
+border, instanced facility parts, merged route geometry, and instanced moving shipment
+markers. Four facility archetypes reuse warehouse, dock, yard, tower, and signal parts.
+Daily capacity selects the archetype and footprint, in-flight volume fills cargo bays,
+anomalies raise a red signal mast, and the primary route sets the facility orientation.
 Do not use a dark skybox, bloom, glass panels, map tiles, or decorative gradients.
 
 ## 6. Depth and elevation

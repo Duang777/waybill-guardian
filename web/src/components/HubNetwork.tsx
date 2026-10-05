@@ -106,6 +106,10 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
       data-scene-hubs={sceneStats?.hubs ?? ""}
       data-scene-routes={sceneStats?.routes ?? ""}
       data-scene-markers={sceneStats?.markers ?? ""}
+      data-scene-facility-parts={sceneStats?.facilityParts ?? ""}
+      data-scene-archetypes={
+        sceneStats === null ? "" : JSON.stringify(sceneStats.archetypes)
+      }
     >
       {useFallback ? (
         <NetworkMap hubs={hubs} routes={routes} anomalies={anomalies} />
@@ -192,7 +196,10 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
           <dl>
             <div><dt>在途</dt><dd>{selectedHub.in_flight}</dd></div>
             <div><dt>异常</dt><dd>{selectedHub.anomalies}</dd></div>
-            <div><dt>处置中</dt><dd>{selectedHub.handling}</dd></div>
+            <div>
+              <dt>日容量</dt>
+              <dd>{selectedHub.daily_capacity.toLocaleString("zh-CN")}</dd>
+            </div>
           </dl>
           {selectedAnomaly !== undefined && (
             <a

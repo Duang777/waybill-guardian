@@ -1,6 +1,7 @@
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import {
   BufferGeometry,
+  Color,
   Float32BufferAttribute,
   InstancedMesh,
   MathUtils,
@@ -43,13 +44,48 @@ export type SceneStats = {
   hubs: number;
   routes: number;
   markers: number;
+  facilityParts: number;
+  archetypes: Record<HubArchetype, number>;
 };
+
+export type HubArchetype =
+  | "local-depot"
+  | "regional-cross-dock"
+  | "gateway-campus"
+  | "yard-terminal";
 
 type SceneHub = {
   hub: HubOverview;
   position: Vector3;
-  height: number;
+  archetype: HubArchetype;
+  scale: number;
+  activity: number;
+  cargoSlots: number;
+  signalHeight: number;
+  rotationY: number;
   priority: boolean;
+};
+
+type HubPartKind = "pad" | "structure" | "roof" | "cargo" | "signal";
+
+type HubPartTemplate = {
+  kind: Exclude<HubPartKind, "cargo" | "signal">;
+  offset: readonly [number, number, number];
+  size: readonly [number, number, number];
+};
+
+type HubPart = {
+  kind: HubPartKind;
+  offset: readonly [number, number, number];
+  size: readonly [number, number, number];
+  sceneHub: SceneHub;
+  color: string;
+};
+
+type CapacityBreaks = {
+  lower: number;
+  middle: number;
+  upper: number;
 };
 
 type SceneRoute = {
@@ -77,6 +113,182 @@ const maxFlowMarkersPerRoute = 4;
 const transform = new Object3D();
 const markerTransform = new Matrix4();
 const markerPoint = new Vector3();
+const facilityTransform = new Object3D();
+const facilityPartTransform = new Object3D();
+const facilityPartMatrix = new Matrix4();
+const facilityPartColor = new Color();
+
+const hubArchetypes = [
+  "local-depot",
+  "regional-cross-dock",
+  "gateway-campus",
+  "yard-terminal",
+] satisfies readonly HubArchetype[];
+
+const structureColors = {
+  "local-depot": "#427b75",
+  "regional-cross-dock": "#376f69",
+  "gateway-campus": "#2d655f",
+  "yard-terminal": "#245852",
+} satisfies Record<HubArchetype, string>;
+
+const facilityTemplates = {
+  "local-depot": [
+    { kind: "pad", offset: [0, -0.16, 0], size: [0.34, 0.04, 0.28] },
+    {
+      kind: "structure",
+      offset: [-0.035, -0.06, -0.025],
+      size: [0.2, 0.16, 0.12],
+    },
+    {
+      kind: "roof",
+      offset: [-0.035, 0.032, -0.025],
+      size: [0.22, 0.024, 0.14],
+    },
+    {
+      kind: "structure",
+      offset: [-0.035, -0.105, 0.07],
+      size: [0.16, 0.05, 0.04],
+    },
+  ],
+  "regional-cross-dock": [
+    { kind: "pad", offset: [0, -0.16, 0], size: [0.42, 0.04, 0.34] },
+    {
+      kind: "structure",
+      offset: [-0.045, -0.052, -0.075],
+      size: [0.29, 0.176, 0.1],
+    },
+    {
+      kind: "roof",
+      offset: [-0.045, 0.049, -0.075],
+      size: [0.31, 0.026, 0.12],
+    },
+    {
+      kind: "structure",
+      offset: [0.055, -0.075, 0.085],
+      size: [0.18, 0.13, 0.09],
+    },
+    {
+      kind: "roof",
+      offset: [0.055, 0.003, 0.085],
+      size: [0.2, 0.024, 0.11],
+    },
+    {
+      kind: "structure",
+      offset: [-0.045, -0.108, 0.005],
+      size: [0.24, 0.044, 0.038],
+    },
+  ],
+  "gateway-campus": [
+    { kind: "pad", offset: [0, -0.16, 0], size: [0.48, 0.04, 0.38] },
+    {
+      kind: "structure",
+      offset: [-0.06, -0.045, -0.095],
+      size: [0.26, 0.19, 0.09],
+    },
+    {
+      kind: "roof",
+      offset: [-0.06, 0.064, -0.095],
+      size: [0.28, 0.028, 0.11],
+    },
+    {
+      kind: "structure",
+      offset: [-0.06, -0.055, 0.095],
+      size: [0.26, 0.17, 0.09],
+    },
+    {
+      kind: "roof",
+      offset: [-0.06, 0.044, 0.095],
+      size: [0.28, 0.028, 0.11],
+    },
+    {
+      kind: "structure",
+      offset: [0.155, 0.03, -0.01],
+      size: [0.065, 0.34, 0.065],
+    },
+    {
+      kind: "roof",
+      offset: [0.155, 0.212, -0.01],
+      size: [0.085, 0.024, 0.085],
+    },
+    {
+      kind: "roof",
+      offset: [0.105, -0.102, 0.13],
+      size: [0.13, 0.05, 0.05],
+    },
+  ],
+  "yard-terminal": [
+    { kind: "pad", offset: [0, -0.16, 0], size: [0.52, 0.04, 0.42] },
+    {
+      kind: "structure",
+      offset: [-0.085, -0.048, -0.1],
+      size: [0.29, 0.184, 0.12],
+    },
+    {
+      kind: "roof",
+      offset: [-0.085, 0.057, -0.1],
+      size: [0.31, 0.026, 0.14],
+    },
+    {
+      kind: "structure",
+      offset: [0.105, -0.072, 0.015],
+      size: [0.16, 0.136, 0.09],
+    },
+    {
+      kind: "roof",
+      offset: [0.105, 0.009, 0.015],
+      size: [0.18, 0.026, 0.11],
+    },
+    {
+      kind: "structure",
+      offset: [0.175, 0.02, -0.13],
+      size: [0.065, 0.32, 0.065],
+    },
+    {
+      kind: "roof",
+      offset: [0.175, 0.192, -0.13],
+      size: [0.085, 0.024, 0.085],
+    },
+    {
+      kind: "structure",
+      offset: [-0.075, -0.108, 0.005],
+      size: [0.22, 0.044, 0.04],
+    },
+  ],
+} satisfies Record<HubArchetype, readonly HubPartTemplate[]>;
+
+const cargoPositions = {
+  "local-depot": [
+    [0.105, 0.015],
+    [0.105, 0.075],
+    [0.045, 0.115],
+  ],
+  "regional-cross-dock": [
+    [-0.12, 0.115],
+    [-0.025, 0.115],
+    [0.07, 0.135],
+  ],
+  "gateway-campus": [
+    [0.05, -0.095],
+    [0.05, 0],
+    [0.05, 0.095],
+  ],
+  "yard-terminal": [
+    [-0.085, 0.12],
+    [0.015, 0.12],
+    [0.115, 0.13],
+  ],
+} satisfies Record<
+  HubArchetype,
+  readonly (readonly [number, number])[]
+>;
+
+const signalPositions = {
+  "local-depot": [-0.135, -0.105],
+  "regional-cross-dock": [-0.175, -0.135],
+  "gateway-campus": [-0.205, -0.155],
+  "yard-terminal": [-0.225, -0.175],
+} satisfies Record<HubArchetype, readonly [number, number]>;
 
 export default function HubNetworkScene({
   hubs,
@@ -105,6 +317,8 @@ export default function HubNetworkScene({
       hubs: model.hubs.length,
       routes: model.routes.length,
       markers: model.markers.length,
+      facilityParts: model.facilityParts.length,
+      archetypes: countArchetypes(model.hubs),
     });
   }, [model, onStats]);
 
@@ -131,8 +345,8 @@ export default function HubNetworkScene({
 
       <StrategyTable />
       <RouteLines routes={model.routes} />
-      <HubColumns
-        hubs={model.hubs}
+      <HubFacilities
+        parts={model.facilityParts}
         selectedHubID={selectedHubID}
         onSelectHub={onSelectHub}
       />
@@ -174,49 +388,73 @@ function StrategyTable() {
   );
 }
 
-function HubColumns({
-  hubs,
+function HubFacilities({
+  parts,
   selectedHubID,
   onSelectHub,
 }: {
-  hubs: readonly SceneHub[];
+  parts: readonly HubPart[];
   selectedHubID: string | null;
   onSelectHub: (hubID: string) => void;
 }) {
-  const normalHubs = hubs.filter((item) => !item.priority);
-  const riskHubs = hubs.filter((item) => item.priority);
+  const pads = parts.filter((part) => part.kind === "pad");
+  const structures = parts.filter((part) => part.kind === "structure");
+  const roofs = parts.filter((part) => part.kind === "roof");
+  const cargo = parts.filter((part) => part.kind === "cargo");
+  const signals = parts.filter((part) => part.kind === "signal");
 
   return (
     <group>
-      <HubInstances
-        hubs={normalHubs}
+      <FacilityPartInstances
+        parts={pads}
         selectedHubID={selectedHubID}
-        color="#285f5b"
-        emphasis={false}
+        roughness={0.94}
+        interactive
         onSelectHub={onSelectHub}
       />
-      <HubInstances
-        hubs={riskHubs}
+      <FacilityPartInstances
+        parts={structures}
         selectedHubID={selectedHubID}
-        color="#df3f30"
-        emphasis
+        roughness={0.72}
+        interactive={false}
+        onSelectHub={onSelectHub}
+      />
+      <FacilityPartInstances
+        parts={roofs}
+        selectedHubID={selectedHubID}
+        roughness={0.88}
+        interactive={false}
+        onSelectHub={onSelectHub}
+      />
+      <FacilityPartInstances
+        parts={cargo}
+        selectedHubID={selectedHubID}
+        roughness={0.8}
+        interactive={false}
+        onSelectHub={onSelectHub}
+      />
+      <FacilityPartInstances
+        parts={signals}
+        selectedHubID={selectedHubID}
+        roughness={0.62}
+        interactive={false}
         onSelectHub={onSelectHub}
       />
     </group>
   );
 }
 
-function HubInstances({
-  hubs,
+function FacilityPartInstances({
+  parts,
   selectedHubID,
-  color,
-  emphasis,
+  roughness,
+  interactive,
   onSelectHub,
 }: {
-  hubs: readonly SceneHub[];
+  parts: readonly HubPart[];
   selectedHubID: string | null;
-  color: string;
-  emphasis: boolean;
+  roughness: number;
+  interactive: boolean;
   onSelectHub: (hubID: string) => void;
 }) {
   const mesh = useRef<InstancedMesh>(null);
@@ -226,23 +464,22 @@ function HubInstances({
     if (mesh.current === null) {
       return;
     }
-    hubs.forEach((item, index) => {
-      transform.position.set(
-        item.position.x,
-        item.height / 2 - 0.18,
-        item.position.z,
+    parts.forEach((part, index) => {
+      mesh.current?.setMatrixAt(
+        index,
+        composeFacilityPartMatrix(
+          part,
+          part.sceneHub.hub.hub_id === selectedHubID,
+        ),
       );
-      transform.rotation.set(0, 0, 0);
-      transform.scale.set(
-        item.hub.hub_id === selectedHubID ? 1.45 : 1,
-        1,
-        item.hub.hub_id === selectedHubID ? 1.45 : 1,
-      );
-      transform.updateMatrix();
-      mesh.current?.setMatrixAt(index, transform.matrix);
+      facilityPartColor.set(part.color);
+      mesh.current?.setColorAt(index, facilityPartColor);
     });
     mesh.current.instanceMatrix.needsUpdate = true;
-  }, [hubs, selectedHubID]);
+    if (mesh.current.instanceColor !== null) {
+      mesh.current.instanceColor.needsUpdate = true;
+    }
+  }, [parts, selectedHubID]);
 
   const setCursor = useCallback(
     (cursor: "default" | "pointer") => {
@@ -255,36 +492,60 @@ function HubInstances({
     (event: ThreeEvent<PointerEvent>) => {
       event.stopPropagation();
       if (event.instanceId !== undefined) {
-        const item = hubs[event.instanceId];
-        if (item !== undefined) {
-          onSelectHub(item.hub.hub_id);
+        const part = parts[event.instanceId];
+        if (part !== undefined) {
+          onSelectHub(part.sceneHub.hub.hub_id);
         }
       }
     },
-    [hubs, onSelectHub],
+    [onSelectHub, parts],
   );
 
   return (
     <instancedMesh
       ref={mesh}
-      args={[undefined, undefined, hubs.length]}
+      args={[undefined, undefined, parts.length]}
       frustumCulled={false}
-      onClick={select}
-      onPointerOver={(event) => {
-        event.stopPropagation();
-        setCursor("pointer");
-      }}
-      onPointerOut={() => setCursor("default")}
+      raycast={interactive ? undefined : () => undefined}
+      onClick={interactive ? select : undefined}
+      onPointerOver={
+        interactive
+          ? (event) => {
+              event.stopPropagation();
+              setCursor("pointer");
+            }
+          : undefined
+      }
+      onPointerOut={interactive ? () => setCursor("default") : undefined}
     >
-      <cylinderGeometry
-        args={emphasis ? [0.07, 0.14, 1, 6] : [0.045, 0.08, 1, 8]}
-      />
+      <boxGeometry args={[1, 1, 1]} />
       <meshStandardMaterial
-        color={color}
-        roughness={0.68}
+        color="#ffffff"
+        roughness={roughness}
         metalness={0.02}
       />
     </instancedMesh>
+  );
+}
+
+function composeFacilityPartMatrix(
+  part: HubPart,
+  selected: boolean,
+): Matrix4 {
+  facilityTransform.position.copy(part.sceneHub.position);
+  facilityTransform.rotation.set(0, part.sceneHub.rotationY, 0);
+  const selectedScale = selected ? 1.38 : 1;
+  facilityTransform.scale.setScalar(part.sceneHub.scale * selectedScale);
+  facilityTransform.updateMatrix();
+
+  facilityPartTransform.position.set(...part.offset);
+  facilityPartTransform.rotation.set(0, 0, 0);
+  facilityPartTransform.scale.set(...part.size);
+  facilityPartTransform.updateMatrix();
+
+  return facilityPartMatrix.multiplyMatrices(
+    facilityTransform.matrix,
+    facilityPartTransform.matrix,
   );
 }
 
@@ -478,7 +739,9 @@ function RiskRings({
           : 0.88 + ((Math.sin(time * 2.4 + index * 0.62) + 1) / 2) * 0.5;
         transform.position.set(hub.position.x, -0.11, hub.position.z);
         transform.rotation.set(Math.PI / 2, 0, 0);
-        transform.scale.setScalar(pulse);
+        transform.scale.setScalar(
+          pulse * hub.scale * (0.82 + hub.signalHeight),
+        );
         transform.updateMatrix();
         mesh.current?.setMatrixAt(index, transform.matrix);
       });
@@ -514,16 +777,16 @@ function RiskRings({
 function SelectionBeacon({ hub }: { hub: SceneHub }) {
   return (
     <group position={[hub.position.x, 0, hub.position.z]}>
-      <mesh position={[0, -0.08, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[0.32, 0.39, 32]} />
+      <mesh position={[0, -0.105, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.34, 0.4, 32]} />
         <meshBasicMaterial color="#171a1a" transparent opacity={0.9} />
       </mesh>
-      <mesh position={[0, 1.55, 0]}>
-        <octahedronGeometry args={[0.16, 0]} />
+      <mesh position={[0, 0.92, 0]}>
+        <octahedronGeometry args={[0.12, 0]} />
         <meshStandardMaterial color="#171a1a" roughness={0.5} />
       </mesh>
-      <mesh position={[0, 0.78, 0]}>
-        <cylinderGeometry args={[0.012, 0.012, 1.35, 5]} />
+      <mesh position={[0, 0.42, 0]}>
+        <cylinderGeometry args={[0.01, 0.01, 0.88, 5]} />
         <meshBasicMaterial color="#171a1a" transparent opacity={0.46} />
       </mesh>
     </group>
@@ -556,7 +819,7 @@ function CameraRig({
     [focus, selectedHub],
   );
   const baseZoom = Math.min(size.width / 23, size.height / 14);
-  const desiredZoom = baseZoom * (selectedHub === undefined ? 1 : 1.48);
+  const desiredZoom = baseZoom * (selectedHub === undefined ? 1 : 2.1);
 
   useEffect(() => {
     if (!(camera instanceof OrthographicCamera)) {
@@ -652,13 +915,36 @@ export function buildSceneModel(
   anomalies: readonly AnomalyOverview[],
 ) {
   const maxInFlight = Math.max(...hubs.map((hub) => hub.in_flight), 1);
+  const maxAnomalies = Math.max(...hubs.map((hub) => hub.anomalies), 1);
+  const capacities = hubs.map((hub) => hub.daily_capacity);
+  const minimumCapacity =
+    capacities.length === 0 ? 0 : Math.min(...capacities);
+  const maximumCapacity =
+    capacities.length === 0 ? 1 : Math.max(...capacities);
+  const capacitySpan = Math.max(maximumCapacity - minimumCapacity, 1);
+  const capacityBreaks = buildCapacityBreaks(hubs);
+  const positions = new Map(
+    hubs.map((hub) => [hub.hub_id, projectHub(hub)]),
+  );
+  const rotations = buildHubRotations(hubs, routes, positions);
   const sceneHubs = hubs.map((hub) => {
     const priority = hub.anomalies >= 2;
-    const load = hub.in_flight / maxInFlight;
+    const activity = hub.in_flight / maxInFlight;
+    const capacityLoad =
+      (hub.daily_capacity - minimumCapacity) / capacitySpan;
     return {
       hub,
-      position: projectHub(hub),
-      height: priority ? 0.34 + load * 1.08 : 0.09 + load * 0.3,
+      position: positions.get(hub.hub_id) ?? projectHub(hub),
+      archetype: classifyHub(hub.daily_capacity, capacityBreaks),
+      scale: 0.82 + capacityLoad * 0.28,
+      activity,
+      cargoSlots:
+        hub.in_flight === 0 ? 0 : Math.max(1, Math.ceil(activity * 3)),
+      signalHeight:
+        hub.anomalies === 0
+          ? 0
+          : 0.14 + (hub.anomalies / maxAnomalies) * 0.22,
+      rotationY: rotations.get(hub.hub_id) ?? 0,
       priority,
     };
   });
@@ -716,6 +1002,7 @@ export function buildSceneModel(
   return {
     hubs: sceneHubs,
     hubsByID,
+    facilityParts: sceneHubs.flatMap(createFacilityParts),
     routes: sceneRoutes,
     markers,
     riskHubs: sceneHubs
@@ -723,6 +1010,183 @@ export function buildSceneModel(
       .sort((left, right) => right.hub.anomalies - left.hub.anomalies)
       .slice(0, 12),
   };
+}
+
+function buildCapacityBreaks(
+  hubs: readonly HubOverview[],
+): CapacityBreaks {
+  const capacities = hubs
+    .map((hub) => hub.daily_capacity)
+    .sort((left, right) => left - right);
+  return {
+    lower: quantile(capacities, 0.25),
+    middle: quantile(capacities, 0.5),
+    upper: quantile(capacities, 0.75),
+  };
+}
+
+function quantile(values: readonly number[], fraction: number): number {
+  const index = Math.max(0, Math.ceil(values.length * fraction) - 1);
+  return values[index] ?? 0;
+}
+
+function classifyHub(
+  dailyCapacity: number,
+  breaks: CapacityBreaks,
+): HubArchetype {
+  if (dailyCapacity <= breaks.lower) {
+    return "local-depot";
+  }
+  if (dailyCapacity <= breaks.middle) {
+    return "regional-cross-dock";
+  }
+  if (dailyCapacity <= breaks.upper) {
+    return "gateway-campus";
+  }
+  return "yard-terminal";
+}
+
+function createFacilityParts(sceneHub: SceneHub): HubPart[] {
+  const fixedParts = facilityTemplates[sceneHub.archetype].map((template) => ({
+    ...template,
+    sceneHub,
+    color: facilityPartColorFor(template.kind, sceneHub.archetype),
+  }));
+  const cargoParts = cargoPositions[sceneHub.archetype]
+    .slice(0, sceneHub.cargoSlots)
+    .map(([x, z]) => ({
+      kind: "cargo",
+      offset: [x, -0.105, z],
+      size: [0.055, 0.05, 0.035],
+      sceneHub,
+      color: sceneHub.activity > 0.66 ? "#c58d2d" : "#b79a55",
+    }) satisfies HubPart);
+  const signalPosition = signalPositions[sceneHub.archetype];
+  const signalParts: HubPart[] =
+    sceneHub.signalHeight === 0
+      ? []
+      : [
+          {
+            kind: "signal",
+            offset: [
+              signalPosition[0],
+              -0.135 + sceneHub.signalHeight / 2,
+              signalPosition[1],
+            ],
+            size: [0.026, sceneHub.signalHeight, 0.026],
+            sceneHub,
+            color: "#df3f30",
+          },
+        ];
+
+  return [...fixedParts, ...cargoParts, ...signalParts];
+}
+
+function facilityPartColorFor(
+  kind: HubPartTemplate["kind"],
+  archetype: HubArchetype,
+): string {
+  switch (kind) {
+    case "pad":
+      return "#d9dfdc";
+    case "structure":
+      return structureColors[archetype];
+    case "roof":
+      return "#eef1ee";
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
+}
+
+function countArchetypes(
+  hubs: readonly SceneHub[],
+): Record<HubArchetype, number> {
+  const counts: Record<HubArchetype, number> = {
+    "local-depot": 0,
+    "regional-cross-dock": 0,
+    "gateway-campus": 0,
+    "yard-terminal": 0,
+  };
+  for (const hub of hubs) {
+    counts[hub.archetype] += 1;
+  }
+  return counts;
+}
+
+function buildHubRotations(
+  hubs: readonly HubOverview[],
+  routes: readonly RouteOverview[],
+  positions: ReadonlyMap<string, Vector3>,
+): ReadonlyMap<string, number> {
+  const primaryRoutes = new Map<
+    string,
+    { route: RouteOverview; targetHubID: string }
+  >();
+  for (const route of routes) {
+    keepPrimaryRoute(primaryRoutes, route.origin_hub_id, {
+      route,
+      targetHubID: route.destination_hub_id,
+    });
+    keepPrimaryRoute(primaryRoutes, route.destination_hub_id, {
+      route,
+      targetHubID: route.origin_hub_id,
+    });
+  }
+
+  return new Map(
+    hubs.map((hub) => {
+      const origin = positions.get(hub.hub_id);
+      const connection = primaryRoutes.get(hub.hub_id);
+      const target =
+        connection === undefined
+          ? undefined
+          : positions.get(connection.targetHubID);
+      if (origin === undefined || target === undefined) {
+        return [hub.hub_id, fallbackHubRotation(hub)];
+      }
+      const direction = target.clone().sub(origin);
+      return [hub.hub_id, Math.atan2(-direction.z, direction.x)];
+    }),
+  );
+}
+
+function keepPrimaryRoute(
+  primaryRoutes: Map<
+    string,
+    { route: RouteOverview; targetHubID: string }
+  >,
+  hubID: string,
+  candidate: { route: RouteOverview; targetHubID: string },
+) {
+  const current = primaryRoutes.get(hubID);
+  if (
+    current === undefined ||
+    routePrecedes(candidate.route, current.route)
+  ) {
+    primaryRoutes.set(hubID, candidate);
+  }
+}
+
+function routePrecedes(
+  candidate: RouteOverview,
+  current: RouteOverview,
+): boolean {
+  if (candidate.waybills !== current.waybills) {
+    return candidate.waybills > current.waybills;
+  }
+  if (candidate.anomalies !== current.anomalies) {
+    return candidate.anomalies > current.anomalies;
+  }
+  if (candidate.distance_km !== current.distance_km) {
+    return candidate.distance_km > current.distance_km;
+  }
+  return candidate.route_id.localeCompare(current.route_id) < 0;
+}
+
+function fallbackHubRotation(hub: HubOverview): number {
+  return MathUtils.degToRad(((hub.longitude + hub.latitude) % 90) - 45);
 }
 
 function createRouteGeometry(routes: readonly SceneRoute[]): BufferGeometry {

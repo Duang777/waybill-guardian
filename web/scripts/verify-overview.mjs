@@ -133,6 +133,12 @@ try {
     routes: Number(await networkMap.getAttribute("data-scene-routes")),
     markers: Number(await networkMap.getAttribute("data-scene-markers")),
   };
+  const facilityParts = Number(
+    await networkMap.getAttribute("data-scene-facility-parts"),
+  );
+  const archetypeCounts = JSON.parse(
+    (await networkMap.getAttribute("data-scene-archetypes")) ?? "{}",
+  );
   const expectedSceneCounts = {
     hubs: overviewBody.hubs.length,
     routes: overviewBody.routes.length,
@@ -144,6 +150,19 @@ try {
   assert(
     JSON.stringify(sceneCounts) === JSON.stringify(expectedSceneCounts),
     `3D scene counts ${JSON.stringify(sceneCounts)}, want ${JSON.stringify(expectedSceneCounts)}`,
+  );
+  assert(
+    Number.isFinite(facilityParts) && facilityParts > sceneCounts.hubs * 4,
+    `3D scene rendered only ${facilityParts} facility parts for ${sceneCounts.hubs} hubs`,
+  );
+  assert(
+    Object.keys(archetypeCounts).length === 4 &&
+      Object.values(archetypeCounts).every((count) => Number(count) > 0) &&
+      Object.values(archetypeCounts).reduce(
+        (total, count) => total + Number(count),
+        0,
+      ) === sceneCounts.hubs,
+    `3D facility archetypes are incomplete: ${JSON.stringify(archetypeCounts)}`,
   );
   const firstHub = overviewBody.hubs[0];
   const hubPicker = page.getByLabel("选择公路港", { exact: true });
@@ -408,6 +427,8 @@ try {
         hubs: sceneCounts.hubs,
         routes: sceneCounts.routes,
         markers: sceneCounts.markers,
+        facility_parts: facilityParts,
+        facility_archetypes: archetypeCounts,
         renderer: "webgl",
         draw_calls: drawCalls,
         sampled_canvas_colors: pixelProbe.colors,
