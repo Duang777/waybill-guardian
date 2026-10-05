@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/hastekit/agent-sdk-go/pkg/gateway/llm"
 	"github.com/hastekit/agent-sdk-go/pkg/gateway/llm/responses"
 	"github.com/hastekit/agent-sdk-go/pkg/utils"
 )
@@ -174,6 +176,15 @@ func (g *modelBriefGenerator) Generate(
 				ctx.Err(),
 			)
 		}
+		if attempt == maxBriefAttempts || !briefRetryable(err) {
+			break
+		}
+		if waitErr := waitForBriefRetry(ctx, err, timeout); waitErr != nil {
+			return GeneratedBrief{}, newBriefError(
+				briefContextFailure(waitErr),
+				waitErr,
+			)
+		}
 	}
 	if err != nil {
 		return GeneratedBrief{}, newBriefError(
@@ -189,6 +200,43 @@ func (g *modelBriefGenerator) Generate(
 		return GeneratedBrief{}, err
 	}
 	return parseGeneratedBrief(text)
+}
+
+func briefRetryable(err error) bool {
+	apiErr, ok := llm.AsAPIError(err)
+	if !ok {
+		return true
+	}
+	return apiErr.StatusCode == http.StatusRequestTimeout ||
+		apiErr.StatusCode == http.StatusConflict ||
+		apiErr.StatusCode == http.StatusTooEarly ||
+		apiErr.StatusCode == http.StatusTooManyRequests ||
+		apiErr.StatusCode == http.StatusInternalServerError ||
+		apiErr.StatusCode == http.StatusBadGateway ||
+		apiErr.StatusCode == http.StatusServiceUnavailable ||
+		apiErr.StatusCode == http.StatusGatewayTimeout
+}
+
+func waitForBriefRetry(
+	ctx context.Context,
+	err error,
+	maxWait time.Duration,
+) error {
+	apiErr, ok := llm.AsAPIError(err)
+	if !ok || apiErr.RetryAfter <= 0 {
+		return nil
+	}
+	if apiErr.RetryAfter > maxWait {
+		return context.DeadlineExceeded
+	}
+	timer := time.NewTimer(apiErr.RetryAfter)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func newBriefError(reason BriefFailureReason, err error) error {

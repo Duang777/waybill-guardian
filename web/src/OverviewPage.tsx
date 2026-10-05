@@ -564,7 +564,32 @@ function briefSourceLabel(brief: Overview["brief"]): string {
   if (brief.mode === "model_read_only") {
     return `模型生成 · ${brief.source}`;
   }
-  return "规则模板";
+  const fallback = briefFallbackLabel(brief.fallback_reason);
+  return fallback === null ? "规则模板" : `规则模板 · ${fallback}`;
+}
+
+function briefFallbackLabel(
+  reason: Extract<
+    Overview["brief"],
+    { mode: "deterministic_read_only" }
+  >["fallback_reason"],
+): string | null {
+  switch (reason) {
+    case undefined:
+      return null;
+    case "timeout":
+      return "模型超时";
+    case "provider_error":
+      return "模型不可用";
+    case "schema":
+      return "格式无效";
+    case "evidence":
+      return "证据无效";
+    default: {
+      const exhaustive: never = reason;
+      return exhaustive;
+    }
+  }
 }
 
 function briefFallbackDetail(brief: Overview["brief"]): string {

@@ -227,6 +227,7 @@ try {
     path: join(artifactDir, "overview-desktop.png"),
   });
 
+  await verifyBriefProvenance(browser, webURL);
   await verifyReducedMotion(browser, webURL);
   await verifyWebGLContextLoss(browser, webURL);
   await verifyWebGLFallback(webURL);
@@ -436,6 +437,58 @@ async function hasHorizontalOverflow(page) {
   return page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   );
+}
+
+async function verifyBriefProvenance(browser, webURL) {
+  const cases = [
+    {
+      name: "model",
+      brief: {
+        mode: "model_read_only",
+        source: "doubao-pro-32k-long-model-name",
+      },
+      label: "模型生成 · doubao-pro-32k-long-model-name",
+    },
+    {
+      name: "fallback",
+      brief: {
+        mode: "deterministic_read_only",
+        source: "rules",
+        fallback_reason: "timeout",
+      },
+      label: "规则模板 · 模型超时",
+    },
+    {
+      name: "model-rules",
+      brief: {
+        mode: "model_read_only",
+        source: "rules",
+      },
+      label: "模型生成 · rules",
+    },
+  ];
+  for (const testCase of cases) {
+    const page = await browser.newPage({ viewport: { width: 320, height: 812 } });
+    try {
+      await page.route("**/api/overview", async (route) => {
+        const response = await route.fetch();
+        const body = await response.json();
+        body.brief = {
+          ...body.brief,
+          ...testCase.brief,
+        };
+        await route.fulfill({ response, json: body });
+      });
+      await page.goto(webURL, { waitUntil: "networkidle" });
+      await page.getByText(testCase.label, { exact: true }).waitFor();
+      assert(
+        !(await hasHorizontalOverflow(page)),
+        `320px ${testCase.name} provenance overflowed horizontally`,
+      );
+    } finally {
+      await page.close();
+    }
+  }
 }
 
 async function probeCanvasPixels(canvas) {

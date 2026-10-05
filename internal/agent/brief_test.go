@@ -3,11 +3,13 @@ package agent
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hastekit/agent-sdk-go/pkg/agents"
+	"github.com/hastekit/agent-sdk-go/pkg/gateway/llm"
 	"github.com/hastekit/agent-sdk-go/pkg/gateway/llm/responses"
 )
 
@@ -117,6 +119,98 @@ func TestModelBriefGeneratorRetriesProviderErrorsWithFreshAttemptDeadlines(t *te
 	for index := 1; index < len(model.deadlines); index++ {
 		if !model.deadlines[index].After(model.deadlines[index-1]) {
 			t.Fatalf("attempt deadlines did not reset: %v", model.deadlines)
+		}
+	}
+}
+
+func TestModelBriefGeneratorObeysProviderRetryAfter(t *testing.T) {
+	const retryAfter = 30 * time.Millisecond
+	model := &briefModelStub{
+		errors: []error{&llm.APIError{
+			StatusCode: http.StatusTooManyRequests,
+			Message:    "slow down",
+			RetryAfter: retryAfter,
+		}},
+		responses: []*responses.Response{agents.ModelCallText(validBriefJSON())},
+	}
+	generator := newModelBriefGenerator(model, time.Second)
+	startedAt := time.Now()
+
+	if _, err := generator.Generate(t.Context(), sampleBriefInput()); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(startedAt); elapsed < retryAfter {
+		t.Fatalf("retry started after %s, want at least %s", elapsed, retryAfter)
+	}
+	if model.calls != 2 {
+		t.Fatalf("model calls = %d, want 2", model.calls)
+	}
+}
+
+func TestModelBriefGeneratorRejectsRetryAfterBeyondAttemptBudget(t *testing.T) {
+	model := &briefModelStub{
+		errors: []error{&llm.APIError{
+			StatusCode: http.StatusTooManyRequests,
+			Message:    "slow down",
+			RetryAfter: time.Hour,
+		}},
+	}
+	generator := newModelBriefGenerator(model, 20*time.Millisecond)
+	startedAt := time.Now()
+
+	_, err := generator.Generate(t.Context(), sampleBriefInput())
+	if got := BriefFailureOf(err); got != BriefFailureTimeout {
+		t.Fatalf("failure reason = %q, want %q", got, BriefFailureTimeout)
+	}
+	if elapsed := time.Since(startedAt); elapsed >= 100*time.Millisecond {
+		t.Fatalf("oversized Retry-After blocked for %s", elapsed)
+	}
+	if model.calls != 1 {
+		t.Fatalf("model calls = %d, want 1", model.calls)
+	}
+}
+
+func TestModelBriefGeneratorDoesNotRetryPermanentProviderError(t *testing.T) {
+	model := &briefModelStub{
+		errors: []error{&llm.APIError{
+			StatusCode: http.StatusUnauthorized,
+			Message:    "invalid token",
+		}},
+	}
+	generator := newModelBriefGenerator(model, time.Second)
+
+	if _, err := generator.Generate(t.Context(), sampleBriefInput()); err == nil {
+		t.Fatal("Generate accepted a permanent provider error")
+	}
+	if model.calls != 1 {
+		t.Fatalf("model calls = %d, want 1", model.calls)
+	}
+}
+
+func TestBriefRetryableMatchesProviderStatusPolicy(t *testing.T) {
+	for _, status := range []int{
+		http.StatusRequestTimeout,
+		http.StatusConflict,
+		http.StatusTooEarly,
+		http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout,
+	} {
+		if !briefRetryable(&llm.APIError{StatusCode: status}) {
+			t.Errorf("status %d should be retryable", status)
+		}
+	}
+	for _, status := range []int{
+		http.StatusBadRequest,
+		http.StatusUnauthorized,
+		http.StatusForbidden,
+		http.StatusNotFound,
+		http.StatusNotImplemented,
+	} {
+		if briefRetryable(&llm.APIError{StatusCode: status}) {
+			t.Errorf("status %d should not be retryable", status)
 		}
 	}
 }
