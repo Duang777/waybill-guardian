@@ -84,9 +84,20 @@ type AnomalyDistributionItem struct {
 	Count int    `json:"count"`
 }
 
+type BriefFallbackReason string
+
+const (
+	BriefFallbackTimeout  BriefFallbackReason = "timeout"
+	BriefFallbackProvider BriefFallbackReason = "provider_error"
+	BriefFallbackSchema   BriefFallbackReason = "schema"
+	BriefFallbackEvidence BriefFallbackReason = "evidence"
+)
+
 type ExecutiveBrief struct {
-	Mode  string               `json:"mode"`
-	Items []ExecutiveBriefItem `json:"items"`
+	Mode           string               `json:"mode"`
+	Source         string               `json:"source"`
+	FallbackReason BriefFallbackReason  `json:"fallback_reason,omitempty"`
+	Items          []ExecutiveBriefItem `json:"items"`
 }
 
 type ExecutiveBriefItem struct {
@@ -287,16 +298,7 @@ func (s *Service) Overview(
 		}
 		return result.AnomalyDistribution[i].Count > result.AnomalyDistribution[j].Count
 	})
-	result.Brief = buildExecutiveBrief(result)
-	if s.briefGenerator != nil {
-		input := briefInputForOverview(result)
-		generated, generateErr := s.briefGenerator.Generate(ctx, input)
-		if generateErr == nil {
-			if brief, materializeErr := materializeGeneratedBrief(input, generated); materializeErr == nil {
-				result.Brief = brief
-			}
-		}
-	}
+	result.Brief = s.resolveExecutiveBrief(ctx, waybillIDs, result)
 	return result, nil
 }
 
@@ -339,6 +341,7 @@ func (s *Service) KPIs(
 	closed := 0
 	impactPopulation := make([]platform.WaybillSummary, 0)
 	latest := latestRunMap(runs, allowed)
+	executedRuns := humanApprovedExecutionRuns(events)
 	for _, item := range catalog {
 		if item.LastRecordedAt.Before(windowStart) || item.LastRecordedAt.After(asOf) {
 			continue
@@ -348,10 +351,15 @@ func (s *Service) KPIs(
 			continue
 		}
 		anomalies++
-		impactPopulation = append(impactPopulation, item)
-		status := latest[item.WaybillID].Status
+		run := latest[item.WaybillID]
+		status := run.Status
 		if status == domain.RunCompleted || status == domain.RunRejected {
 			closed++
+		}
+		if status == domain.RunCompleted {
+			if _, executed := executedRuns[run.RunID]; executed {
+				impactPopulation = append(impactPopulation, item)
+			}
 		}
 	}
 
@@ -444,26 +452,60 @@ func (s *Service) KPIs(
 	return report, nil
 }
 
+func humanApprovedExecutionRuns(events []audit.Event) map[domain.RunID]struct{} {
+	confirmed := make(map[domain.RunID]map[domain.ApprovalID]struct{})
+	result := make(map[domain.RunID]struct{})
+	for _, event := range events {
+		switch {
+		case event.Type == audit.EventApprovalDecided && event.Actor == audit.ActorHuman:
+			var payload struct {
+				ApprovalID domain.ApprovalID `json:"approval_id"`
+				Status     approval.Status   `json:"status"`
+			}
+			if json.Unmarshal(event.Payload, &payload) != nil ||
+				payload.ApprovalID == "" ||
+				payload.Status != approval.StatusConfirmed {
+				continue
+			}
+			if confirmed[event.RunID] == nil {
+				confirmed[event.RunID] = make(map[domain.ApprovalID]struct{})
+			}
+			confirmed[event.RunID][payload.ApprovalID] = struct{}{}
+		case event.Type == audit.EventApprovalExecuted && event.Actor == audit.ActorSystem:
+			var payload struct {
+				ApprovalID domain.ApprovalID `json:"approval_id"`
+			}
+			if json.Unmarshal(event.Payload, &payload) != nil {
+				continue
+			}
+			if _, ok := confirmed[event.RunID][payload.ApprovalID]; ok {
+				result[event.RunID] = struct{}{}
+			}
+		}
+	}
+	return result
+}
+
 func simulationImpactMetrics(
 	items []platform.WaybillSummary,
 ) (KPIMetric, KPIMetric) {
 	const (
-		timeFormula = "sum(不处置预测 ETA - 处置后 ETA)"
-		costFormula = "sum(避免违约金 - 改派差价 - 处置成本)"
+		timeFormula = "已审批执行运单的仿真估算：sum(不处置预测 ETA - 处置后 ETA)"
+		costFormula = "已审批执行运单的仿真估算：sum(避免违约金 - 改派差价 - 处置成本)"
 	)
 	for _, item := range items {
 		if item.Impact == nil {
 			reason := "窗口内至少一张异常运单缺少完整仿真影响数据"
 			return unavailableMetric(
 					"time_recovered_hours",
-					"时效挽回",
+					"已实现时效挽回",
 					"小时",
 					timeFormula,
 					reason,
 				),
 				unavailableMetric(
 					"cost_impact_cny",
-					"成本影响",
+					"已实现成本影响",
 					"元",
 					costFormula,
 					reason,
@@ -485,14 +527,14 @@ func simulationImpactMetrics(
 		Float64()
 	return availableMetric(
 			"time_recovered_hours",
-			"时效挽回",
+			"已实现时效挽回",
 			recoveredHours,
 			"小时",
 			timeFormula,
 		),
 		availableMetric(
 			"cost_impact_cny",
-			"成本影响",
+			"已实现成本影响",
 			costCNY,
 			"元",
 			costFormula,

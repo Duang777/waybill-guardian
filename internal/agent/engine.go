@@ -38,6 +38,7 @@ const (
 	APIStyleChatCompletions = "chat_completions"
 
 	DefaultLLMRequestTimeout  = 45 * time.Second
+	DefaultBriefTimeout       = 8 * time.Second
 	DefaultLLMMaxOutputTokens = 4096
 	MaxLLMMaxOutputTokens     = 32768
 	maxAgentLoops             = 20
@@ -53,6 +54,7 @@ type ModelConfig struct {
 	APIKey          string
 	Model           string
 	RequestTimeout  time.Duration
+	BriefTimeout    time.Duration
 	MaxOutputTokens int
 }
 

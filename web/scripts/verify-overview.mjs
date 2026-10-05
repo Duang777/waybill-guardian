@@ -98,6 +98,7 @@ try {
     (await page.locator('section[aria-label="24 小时经营指标"] article').count()) === 4,
     "overview did not render four primary KPIs",
   );
+  await page.getByText("规则模板", { exact: true }).waitFor();
   const networkMap = page.locator('[data-network-renderer="webgl"]');
   await networkMap.locator("canvas").waitFor();
   await page.waitForFunction(

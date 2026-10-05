@@ -152,9 +152,15 @@ try {
   await selector.selectOption("YD2026101042");
   await page.getByText("宁波 → 西安", { exact: true }).waitFor();
   await page.getByText("工业传感器", { exact: true }).waitFor();
-  await page.getByText("襄阳服务区停留 4.5 小时", { exact: true }).waitFor();
-  await page.getByText("宁波", { exact: true }).last().waitFor();
-  await page.getByText("西安", { exact: true }).last().waitFor();
+  const routeEvidence = page.getByRole("region", { name: "运输轨迹证据" });
+  await routeEvidence.getByText("襄阳服务区", { exact: true }).waitFor();
+  await routeEvidence.getByText("停留 4.5 小时", { exact: true }).waitFor();
+  await routeEvidence
+    .getByRole("button", { name: "查看宁波转运中心轨迹点", exact: true })
+    .waitFor();
+  await routeEvidence
+    .getByRole("button", { name: "查看西安分拨中心轨迹点", exact: true })
+    .waitFor();
 
   let snapshotFailures = 0;
   const failFirstSnapshot = async (route) => {
