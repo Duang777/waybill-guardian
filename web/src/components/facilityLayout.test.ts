@@ -3,6 +3,7 @@ import type { HubOverview, RouteOverview } from "../api";
 import {
   buildFacilityLayouts,
   sampleFacilityRoute,
+  type FacilityRoutePoint,
 } from "./facilityLayout";
 
 function hub({
@@ -66,6 +67,16 @@ const routes = [
   route("CROSS", 700),
   route("SPLIT", 800),
 ] satisfies readonly RouteOverview[];
+
+function physicalSegmentKey(
+  from: FacilityRoutePoint,
+  to: FacilityRoutePoint,
+): string {
+  const endpoints = [from, to]
+    .map(([x, z]) => `${x.toFixed(6)},${z.toFixed(6)}`)
+    .sort();
+  return endpoints.join("|");
+}
 
 describe("buildFacilityLayouts", () => {
   it("builds all five topologies from operating signals", () => {
@@ -138,6 +149,39 @@ describe("buildFacilityLayouts", () => {
       expect(layout.vehicles.length).toBeGreaterThan(0);
       expect(layout.vehicles.length).toBeLessThanOrEqual(6);
     }
+  });
+
+  it("renders each shared physical road segment exactly once", () => {
+    const layouts = buildFacilityLayouts(hubs, routes);
+
+    for (const layout of layouts.values()) {
+      const keys = layout.transportSegments.map((segment) =>
+        physicalSegmentKey(segment.from, segment.to),
+      );
+      expect(new Set(keys).size).toBe(keys.length);
+    }
+
+    const splitLayout = layouts.get("SPLIT");
+    const inbound = splitLayout?.transportRoutes[0];
+    const transfer = splitLayout?.transportRoutes[1];
+    expect(inbound).toBeDefined();
+    expect(transfer).toBeDefined();
+    if (
+      splitLayout === undefined ||
+      inbound === undefined ||
+      transfer === undefined
+    ) {
+      return;
+    }
+    const sharedKey = physicalSegmentKey(
+      inbound.points[inbound.points.length - 2] ?? inbound.points[0],
+      inbound.points[inbound.points.length - 1] ?? inbound.points[0],
+    );
+    const sharedSegment = splitLayout.transportSegments.find(
+      (segment) =>
+        physicalSegmentKey(segment.from, segment.to) === sharedKey,
+    );
+    expect(sharedSegment?.status).toBe("risk");
   });
 
   it("derives vehicle states and route risk from operating data", () => {

@@ -196,6 +196,7 @@ function FacilityDetailMap({
       data-fallback-layout={layout.kind}
       data-fallback-signature={layout.signature}
       data-fallback-routes={layout.transportRoutes.length}
+      data-fallback-segments={layout.transportSegments.length}
       data-fallback-vehicles={layout.vehicles.length}
     >
       <svg
@@ -234,16 +235,20 @@ function FacilityDetailMap({
           );
         })}
         <g className={styles.facilityTransportLayer}>
-          {layout.transportRoutes.map((route) => (
-            <polyline
-              key={route.kind}
-              points={route.points
-                .map(([x, z]) =>
-                  `${centerX + x * scale},${centerY + z * scale}`,
-                )
-                .join(" ")}
+          {layout.transportSegments.map((segment) => (
+            <line
+              key={[
+                segment.from[0],
+                segment.from[1],
+                segment.to[0],
+                segment.to[1],
+              ].join(":")}
+              x1={centerX + segment.from[0] * scale}
+              y1={centerY + segment.from[1] * scale}
+              x2={centerX + segment.to[0] * scale}
+              y2={centerY + segment.to[1] * scale}
               className={
-                route.status === "risk"
+                segment.status === "risk"
                   ? styles.facilityRouteRisk
                   : styles.facilityRouteActive
               }
