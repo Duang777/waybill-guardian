@@ -461,13 +461,137 @@
   stroke-width: 2;
 }
 
-.hubLayer a {
+.hubLayer [role="button"] {
   cursor: pointer;
 }
 
-.hubLayer a:focus-visible circle:first-child {
+.hubLayer [role="button"]:focus-visible {
+  outline: none;
+}
+
+.hubLayer [role="button"]:focus-visible circle:first-child {
   stroke: oklch(0.25 0.03 255);
   stroke-width: 4;
+}
+
+.facilityCampus {
+  fill: oklch(0.9 0.012 165);
+  stroke: oklch(0.47 0.035 183);
+  stroke-width: 3;
+}
+
+.facilityPerimeter {
+  fill: oklch(0.47 0.035 183);
+}
+
+.facilityRoad {
+  fill: oklch(0.64 0.016 183);
+}
+
+.facilityRoadMark {
+  fill: oklch(0.96 0.008 95);
+}
+
+.facilityWarehouse {
+  fill: oklch(0.5 0.075 183);
+  stroke: oklch(0.3 0.04 183);
+  stroke-width: 3;
+}
+
+.facilityRoof {
+  fill: oklch(0.9 0.025 183);
+  stroke: oklch(0.42 0.055 183);
+  stroke-width: 3;
+}
+
+.facilityApron {
+  fill: oklch(0.76 0.016 183);
+}
+
+.facilityDock {
+  fill: oklch(0.3 0.035 183);
+}
+
+.facilitySlot {
+  fill: oklch(0.78 0.02 183);
+  stroke: oklch(0.56 0.04 183);
+  stroke-width: 2;
+}
+
+.facilityCargo {
+  fill: oklch(0.67 0.11 80);
+}
+
+.facilityTower {
+  fill: oklch(0.34 0.035 183);
+}
+
+.facilityGatehouse {
+  fill: oklch(0.53 0.07 183);
+  stroke: oklch(0.3 0.04 183);
+  stroke-width: 2;
+}
+
+.facilityAlarm {
+  fill: var(--signal);
+  stroke: oklch(0.98 0.01 95);
+  stroke-width: 5;
+}
+
+.facilityNormal {
+  fill: var(--network);
+  stroke: oklch(0.98 0.01 95);
+  stroke-width: 5;
+}
+
+.facilityTransportLayer {
+  pointer-events: none;
+}
+
+.facilityRouteActive,
+.facilityRouteRisk {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.facilityRouteActive {
+  stroke: oklch(0.49 0.12 183);
+  stroke-width: 5;
+}
+
+.facilityRouteRisk {
+  stroke: var(--signal);
+  stroke-width: 7;
+}
+
+.facilityVehicle rect {
+  vector-effect: non-scaling-stroke;
+}
+
+.facilityVehicleMoving {
+  fill: oklch(0.31 0.035 183);
+  stroke: oklch(0.2 0.025 183);
+  stroke-width: 1.5;
+}
+
+.facilityVehicleLoading {
+  fill: oklch(0.67 0.11 80);
+  stroke: oklch(0.39 0.07 80);
+  stroke-width: 1.5;
+}
+
+.facilityVehicleAlert {
+  fill: var(--signal);
+  stroke: oklch(0.38 0.14 29);
+  stroke-width: 1.5;
+}
+
+.facilityVehicleCab {
+  fill: oklch(0.94 0.01 180);
+  stroke: oklch(0.34 0.035 183);
+  stroke-width: 1;
 }
 
 .mapLegend {
@@ -641,6 +765,13 @@
   font-size: 10px;
 }
 
+.sceneLegendFacility {
+  top: 66px;
+  bottom: auto;
+  max-width: 296px;
+  justify-content: flex-end;
+}
+
 .sceneLegend span {
   display: inline-flex;
   align-items: center;
@@ -649,7 +780,12 @@
 
 .sceneHubKey,
 .sceneFlowKey,
-.sceneRiskKey {
+.sceneRiskKey,
+.sceneLocalRouteKey,
+.sceneVehicleKey,
+.sceneWarehouseKey,
+.sceneDockKey,
+.sceneCargoKey {
   display: block;
   width: 7px;
   height: 7px;
@@ -671,6 +807,38 @@
   background: var(--signal);
 }
 
+.sceneLocalRouteKey {
+  width: 14px;
+  height: 3px;
+  border-radius: 0;
+  background: oklch(0.49 0.12 183);
+}
+
+.sceneVehicleKey {
+  width: 10px;
+  height: 6px;
+  border-radius: 1px;
+  background: oklch(0.31 0.035 183);
+  box-shadow: inset -3px 0 0 oklch(0.94 0.01 180);
+}
+
+.sceneWarehouseKey {
+  border-radius: 1px;
+  background: oklch(0.5 0.075 183);
+}
+
+.sceneDockKey {
+  width: 11px;
+  height: 3px;
+  border-radius: 0;
+  background: oklch(0.34 0.035 183);
+}
+
+.sceneCargoKey {
+  border-radius: 1px;
+  background: oklch(0.67 0.11 80);
+}
+
 .sceneSelection {
   bottom: 14px;
   left: 16px;
@@ -683,6 +851,12 @@
   color: var(--ink);
   background: oklch(0.995 0.002 95 / 0.97);
   pointer-events: auto;
+}
+
+.sceneSelectionFacility {
+  top: 66px;
+  bottom: auto;
+  width: min(224px, calc(100% - 32px));
 }
 
 .sceneSelection::before {
@@ -734,6 +908,23 @@
   margin: 0;
   font-family: "SFMono-Regular", "JetBrains Mono", monospace;
   font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.sceneFacilityMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 2px 0 0;
+  color: oklch(0.43 0.02 255);
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sceneFacilityMetaFlow {
+  color: oklch(0.38 0.08 183);
   font-weight: 700;
 }
 
@@ -1479,12 +1670,16 @@
 
   .sceneSelection {
     right: 8px;
-    bottom: 48px;
+    bottom: 8px;
     left: 8px;
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 3px 10px;
+    gap: 4px 10px;
     width: auto;
-    padding: 9px 10px 8px 20px;
+    padding: 8px 10px 7px 20px;
+  }
+
+  .sceneSelectionFacility {
+    top: auto;
   }
 
   .sceneSelection::before {
@@ -1492,28 +1687,39 @@
     left: 9px;
   }
 
-  .sceneSelection > span,
+  .sceneSelection > span {
+    display: none;
+  }
+
   .sceneSelection > strong {
     grid-column: 1;
+    align-self: center;
   }
 
   .sceneSelection dl {
+    display: none;
+  }
+
+  .sceneFacilityMeta {
     grid-column: 1 / -1;
-    margin-top: 1px;
+    gap: 3px 8px;
+    margin-top: 0;
+  }
+
+  .sceneFacilityMetaPrimary,
+  .sceneFacilityMetaResources {
+    display: none;
   }
 
   .sceneSelection a {
-    grid-row: 1 / span 2;
+    grid-row: 1;
     grid-column: 2;
-    min-height: 32px;
+    min-height: 40px;
     align-self: center;
   }
 
   .sceneLegend {
-    right: 8px;
-    bottom: 8px;
-    left: 8px;
-    justify-content: center;
+    display: none;
   }
 
   .sceneRegions {

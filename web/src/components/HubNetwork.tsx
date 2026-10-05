@@ -1,4 +1,4 @@
-import { Crosshair, RotateCcw } from "lucide-react";
+import { ArrowLeft, Crosshair, RotateCcw } from "lucide-react";
 import {
   Component,
   lazy,
@@ -101,14 +101,47 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
       role="region"
       aria-label={`全国公路港网络，${hubs.length} 个港口，${routes.length} 条线路`}
       data-network-renderer={useFallback ? "svg" : "webgl"}
+      data-scene-mode={
+        useFallback
+          ? selectedHub === undefined
+            ? "network"
+            : "facility"
+          : sceneStats?.mode ?? "loading"
+      }
       data-scene-ready={sceneReady ? "true" : "false"}
       data-draw-calls={drawCalls ?? ""}
       data-scene-hubs={sceneStats?.hubs ?? ""}
       data-scene-routes={sceneStats?.routes ?? ""}
       data-scene-markers={sceneStats?.markers ?? ""}
+      data-scene-facility-parts={sceneStats?.facilityParts ?? ""}
+      data-scene-detail-parts={sceneStats?.detailParts ?? ""}
+      data-scene-dock-bays={sceneStats?.dockBays ?? ""}
+      data-scene-storage-slots={sceneStats?.storageSlots ?? ""}
+      data-scene-occupied-slots={sceneStats?.occupiedSlots ?? ""}
+      data-scene-warehouse-count={sceneStats?.warehouseCount ?? ""}
+      data-scene-transport-routes={sceneStats?.transportRoutes ?? ""}
+      data-scene-vehicles={sceneStats?.vehicles ?? ""}
+      data-scene-moving-vehicles={sceneStats?.movingVehicles ?? ""}
+      data-scene-loading-vehicles={sceneStats?.loadingVehicles ?? ""}
+      data-scene-alert-vehicles={sceneStats?.alertVehicles ?? ""}
+      data-scene-layout={sceneStats?.layoutKind ?? ""}
+      data-scene-layout-label={sceneStats?.layoutLabel ?? ""}
+      data-scene-layout-signature={sceneStats?.layoutSignature ?? ""}
+      data-scene-selected-hub={selectedHubID ?? ""}
+      data-scene-archetypes={
+        sceneStats === null ? "" : JSON.stringify(sceneStats.archetypes)
+      }
     >
       {useFallback ? (
-        <NetworkMap hubs={hubs} routes={routes} anomalies={anomalies} />
+        <NetworkMap
+          hubs={hubs}
+          routes={routes}
+          anomalies={anomalies}
+          selectedHubID={selectedHubID}
+          reducedMotion={reducedMotion}
+          paused={!pageVisible}
+          onSelectHub={setSelectedHubID}
+        />
       ) : (
         <SceneFailureBoundary onFailure={useSceneFallback}>
           <Suspense fallback={<SceneLoading />}>
@@ -133,20 +166,46 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
       {!useFallback && (
         <>
           <div className={styles.sceneIdentity}>
-            <span>WG / LIVE NETWORK</span>
-            <strong>{hubs.length} HUBS</strong>
+            <span>
+              {selectedHub === undefined
+                ? "WG / LIVE NETWORK"
+                : "WG / FACILITY VIEW"}
+            </span>
+            <strong>
+              {selectedHub === undefined ? `${hubs.length} HUBS` : "园区详情"}
+            </strong>
           </div>
-          <div className={styles.sceneRegions} aria-hidden="true">
-            <span>西北</span>
-            <span>华中</span>
-            <span>东部沿海</span>
-            <span>西南</span>
-            <span>华南</span>
-          </div>
-          <div className={styles.sceneLegend} aria-hidden="true">
-            <span><i className={styles.sceneHubKey} />公路港</span>
-            <span><i className={styles.sceneFlowKey} />运输流</span>
-            <span><i className={styles.sceneRiskKey} />风险</span>
+          {selectedHub === undefined && (
+            <div className={styles.sceneRegions} aria-hidden="true">
+              <span>西北</span>
+              <span>华中</span>
+              <span>东部沿海</span>
+              <span>西南</span>
+              <span>华南</span>
+            </div>
+          )}
+          <div
+            className={`${styles.sceneLegend} ${
+              selectedHub === undefined ? "" : styles.sceneLegendFacility
+            }`}
+            aria-hidden="true"
+          >
+            {selectedHub === undefined ? (
+              <>
+                <span><i className={styles.sceneHubKey} />公路港</span>
+                <span><i className={styles.sceneFlowKey} />运输流</span>
+                <span><i className={styles.sceneRiskKey} />风险</span>
+              </>
+            ) : (
+              <>
+                <span><i className={styles.sceneLocalRouteKey} />场内链路</span>
+                <span><i className={styles.sceneVehicleKey} />作业车辆</span>
+                <span><i className={styles.sceneWarehouseKey} />仓库</span>
+                <span><i className={styles.sceneDockKey} />月台</span>
+                <span><i className={styles.sceneCargoKey} />货位</span>
+                <span><i className={styles.sceneRiskKey} />告警塔</span>
+              </>
+            )}
           </div>
         </>
       )}
@@ -159,7 +218,9 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
             setSelectedHubID(event.target.value || null);
           }}
         >
-          <option value="">选择港口</option>
+          <option value="">
+            {selectedHub === undefined ? "选择港口" : "返回全国港网"}
+          </option>
           {hubs.map((hub) => (
             <option key={hub.hub_id} value={hub.hub_id}>
               {hub.name}
@@ -179,21 +240,61 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
           type="button"
           onClick={resetView}
           disabled={selectedHubID === null}
-          aria-label="复位网络视角"
-          title="复位视角"
+          aria-label={
+            selectedHubID === null ? "复位网络视角" : "返回全国视角"
+          }
+          title={selectedHubID === null ? "复位视角" : "返回全国视角"}
         >
-          <RotateCcw aria-hidden="true" size={17} />
+          {selectedHubID === null ? (
+            <RotateCcw aria-hidden="true" size={17} />
+          ) : (
+            <ArrowLeft aria-hidden="true" size={17} />
+          )}
         </button>
       </div>
       {selectedHub !== undefined && (
-        <div className={styles.sceneSelection} role="status">
+        <div
+          className={`${styles.sceneSelection} ${
+            sceneStats?.mode === "facility"
+              ? styles.sceneSelectionFacility
+              : ""
+          }`}
+          role="status"
+        >
           <span>{selectedHub.province} / {selectedHub.city}</span>
           <strong>{selectedHub.name}</strong>
           <dl>
             <div><dt>在途</dt><dd>{selectedHub.in_flight}</dd></div>
             <div><dt>异常</dt><dd>{selectedHub.anomalies}</dd></div>
-            <div><dt>处置中</dt><dd>{selectedHub.handling}</dd></div>
+            <div>
+              <dt>日容量</dt>
+              <dd>{selectedHub.daily_capacity.toLocaleString("zh-CN")}</dd>
+            </div>
           </dl>
+          {sceneStats?.mode === "facility" && (
+            <p className={styles.sceneFacilityMeta}>
+              <span className={styles.sceneFacilityMetaPrimary}>
+                {sceneStats.layoutLabel} · {sceneStats.warehouseCount} 仓
+              </span>
+              <span className={styles.sceneFacilityMetaResources}>
+                月台 {sceneStats.dockBays} · 货位{" "}
+                {sceneStats.occupiedSlots}/{sceneStats.storageSlots}
+              </span>
+              <span className={styles.sceneFacilityMetaFlow}>
+                链路 {sceneStats.transportRoutes} · 车辆 {sceneStats.vehicles}
+                {sceneStats.loadingVehicles > 0
+                  ? ` · 装卸 ${sceneStats.loadingVehicles}`
+                  : ""}
+              </span>
+              <span className={styles.sceneFacilityMetaAlert}>
+                {sceneStats.alertVehicles > 0
+                  ? `异常车 ${sceneStats.alertVehicles}`
+                  : selectedHub.anomalies > 0
+                    ? `告警 ${selectedHub.anomalies}`
+                    : "告警正常"}
+              </span>
+            </p>
+          )}
           {selectedAnomaly !== undefined && (
             <a
               href={`/waybills/${encodeURIComponent(selectedAnomaly.waybill_id)}`}

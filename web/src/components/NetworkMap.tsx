@@ -1,15 +1,27 @@
-import type { CSSProperties } from "react";
+import { useMemo, type CSSProperties } from "react";
 import type {
   AnomalyOverview,
   HubOverview,
   RouteOverview,
 } from "../api";
 import styles from "../overview.module.css";
+import {
+  buildFacilityLayouts,
+  sampleFacilityRoute,
+  type FacilityElementKind,
+  type FacilityLayout,
+  type FacilityTransportRoute,
+  type FacilityVehicleState,
+} from "./facilityLayout";
 
 type NetworkMapProps = {
   hubs: readonly HubOverview[];
   routes: readonly RouteOverview[];
   anomalies: readonly AnomalyOverview[];
+  selectedHubID: string | null;
+  reducedMotion: boolean;
+  paused: boolean;
+  onSelectHub: (hubID: string) => void;
 };
 
 const bounds = {
@@ -19,14 +31,38 @@ const bounds = {
   maxLatitude: 54,
 };
 
-export function NetworkMap({ hubs, routes, anomalies }: NetworkMapProps) {
+export function NetworkMap({
+  hubs,
+  routes,
+  anomalies,
+  selectedHubID,
+  reducedMotion,
+  paused,
+  onSelectHub,
+}: NetworkMapProps) {
   const hubByID = new Map(hubs.map((hub) => [hub.hub_id, hub]));
-  const anomalyByWaybill = new Map(
-    anomalies.map((item) => [item.waybill_id, item]),
+  const facilityLayouts = useMemo(
+    () => buildFacilityLayouts(hubs, routes),
+    [hubs, routes],
   );
+  const selectedHub =
+    selectedHubID === null ? undefined : hubByID.get(selectedHubID);
+  const selectedLayout =
+    selectedHubID === null ? undefined : facilityLayouts.get(selectedHubID);
+
+  if (selectedHub !== undefined && selectedLayout !== undefined) {
+    return (
+      <FacilityDetailMap
+        hub={selectedHub}
+        layout={selectedLayout}
+        reducedMotion={reducedMotion}
+        paused={paused}
+      />
+    );
+  }
 
   return (
-    <div className={styles.networkMapFrame}>
+    <div className={styles.networkMapFrame} data-fallback-mode="network">
       <svg
         className={styles.networkMap}
         viewBox="0 0 1000 560"
@@ -36,7 +72,8 @@ export function NetworkMap({ hubs, routes, anomalies }: NetworkMapProps) {
       >
         <title id="network-map-title">全国公路港异常网络</title>
         <desc id="network-map-description">
-          展示公路港节点、运输线路与异常热度，橙红色线路代表异常集中。
+          展示公路港节点、运输线路与 {anomalies.length} 个异常，
+          橙红色线路代表异常集中。
         </desc>
         <defs>
           <pattern
@@ -88,12 +125,20 @@ export function NetworkMap({ hubs, routes, anomalies }: NetworkMapProps) {
         <g className={styles.hubLayer}>
           {hubs.map((hub) => {
             const point = project(hub);
-            const focus =
-              hub.focus_waybill_id === undefined
-                ? undefined
-                : anomalyByWaybill.get(hub.focus_waybill_id);
-            const marker = (
-              <>
+            return (
+              <g
+                key={hub.hub_id}
+                role="button"
+                tabIndex={0}
+                aria-label={`查看 ${hub.name} 园区`}
+                onClick={() => onSelectHub(hub.hub_id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelectHub(hub.hub_id);
+                  }
+                }}
+              >
                 <circle
                   cx={point.x}
                   cy={point.y}
@@ -113,19 +158,7 @@ export function NetworkMap({ hubs, routes, anomalies }: NetworkMapProps) {
                 <title>
                   {hub.name} · {hub.waybills} 单 · {hub.anomalies} 单异常
                 </title>
-              </>
-            );
-            if (focus === undefined) {
-              return <g key={hub.hub_id}>{marker}</g>;
-            }
-            return (
-              <a
-                key={hub.hub_id}
-                href={`/waybills/${encodeURIComponent(focus.waybill_id)}`}
-                aria-label={`下钻 ${hub.name} 的高风险运单 ${focus.waybill_id}`}
-              >
-                {marker}
-              </a>
+              </g>
             );
           })}
         </g>
@@ -137,6 +170,220 @@ export function NetworkMap({ hubs, routes, anomalies }: NetworkMapProps) {
       </div>
     </div>
   );
+}
+
+function FacilityDetailMap({
+  hub,
+  layout,
+  reducedMotion,
+  paused,
+}: {
+  hub: HubOverview;
+  layout: FacilityLayout;
+  reducedMotion: boolean;
+  paused: boolean;
+}) {
+  const scale = Math.min(
+    650 / layout.campusWidth,
+    380 / layout.campusDepth,
+  );
+  const centerX = 570;
+  const centerY = 280;
+  return (
+    <div
+      className={styles.networkMapFrame}
+      data-fallback-mode="facility"
+      data-fallback-layout={layout.kind}
+      data-fallback-signature={layout.signature}
+      data-fallback-routes={layout.transportRoutes.length}
+      data-fallback-vehicles={layout.vehicles.length}
+    >
+      <svg
+        className={styles.networkMap}
+        viewBox="0 0 1000 560"
+        role="img"
+        aria-labelledby="facility-map-title facility-map-description"
+        preserveAspectRatio="xMidYMid meet"
+      >
+        <title id="facility-map-title">{hub.name}园区详情</title>
+        <desc id="facility-map-description">
+          {layout.label}，展示该园区的场内运输链、作业车辆、仓库、月台、
+          货位和告警塔。
+        </desc>
+        <rect width="1000" height="560" className={styles.mapCanvas} />
+        {layout.elements.map((element, index) => {
+          const elementCenterX = centerX + element.x * scale;
+          const elementCenterY = centerY + element.z * scale;
+          const width = Math.max(element.width * scale, 2);
+          const height = Math.max(element.depth * scale, 2);
+          return (
+          <rect
+              key={`${element.kind}-${index}`}
+              x={elementCenterX - width / 2}
+              y={elementCenterY - height / 2}
+              width={width}
+              height={height}
+              rx={element.kind === "beacon" ? width / 2 : 0}
+              className={fallbackElementClass(element.kind, hub)}
+              transform={
+                element.rotationY === 0
+                  ? undefined
+                  : `rotate(${element.rotationY * (180 / Math.PI)} ${elementCenterX} ${elementCenterY})`
+              }
+          />
+          );
+        })}
+        <g className={styles.facilityTransportLayer}>
+          {layout.transportRoutes.map((route) => (
+            <polyline
+              key={route.kind}
+              points={route.points
+                .map(([x, z]) =>
+                  `${centerX + x * scale},${centerY + z * scale}`,
+                )
+                .join(" ")}
+              className={
+                route.status === "risk"
+                  ? styles.facilityRouteRisk
+                  : styles.facilityRouteActive
+              }
+            />
+          ))}
+          {layout.vehicles.map((vehicle) => {
+            const route = layout.transportRoutes.find(
+              (item) => item.kind === vehicle.routeKind,
+            );
+            if (route === undefined) {
+              return null;
+            }
+            const duration = Math.max(6, 1 / Math.max(vehicle.speed, 0.01));
+            const sample = sampleFacilityRoute(route, vehicle.phase);
+            const transform =
+              `translate(${centerX + sample.x * scale} ${
+                centerY + sample.z * scale
+              }) rotate(${90 - sample.rotationY * (180 / Math.PI)})`;
+            return (
+              <g
+                key={vehicle.id}
+                className={styles.facilityVehicle}
+                transform={
+                  reducedMotion || paused || vehicle.speed === 0
+                    ? transform
+                    : undefined
+                }
+                data-vehicle-state={vehicle.state}
+              >
+                {!reducedMotion && !paused && vehicle.speed > 0 && (
+                  <animateMotion
+                    path={facilityRoutePath(route, centerX, centerY, scale)}
+                    begin={`-${vehicle.phase * duration}s`}
+                    dur={`${duration}s`}
+                    repeatCount="indefinite"
+                    rotate="auto"
+                  />
+                )}
+                <rect
+                  x="-11"
+                  y="-6"
+                  width="22"
+                  height="12"
+                  rx="2"
+                  className={fallbackVehicleClass(vehicle.state)}
+                />
+                <rect
+                  x="3"
+                  y="-5"
+                  width="7"
+                  height="10"
+                  rx="1"
+                  className={styles.facilityVehicleCab}
+                />
+              </g>
+            );
+          })}
+        </g>
+      </svg>
+      <div className={styles.mapLegend} aria-hidden="true">
+        <span><i className={styles.sceneLocalRouteKey} />场内链路</span>
+        <span><i className={styles.sceneVehicleKey} />作业车辆</span>
+        <span><i className={styles.sceneWarehouseKey} />仓库</span>
+        <span><i className={styles.sceneDockKey} />月台</span>
+        <span><i className={styles.sceneCargoKey} />货位</span>
+        <span><i className={styles.sceneRiskKey} />告警塔</span>
+      </div>
+    </div>
+  );
+}
+
+function facilityRoutePath(
+  route: FacilityTransportRoute,
+  centerX: number,
+  centerY: number,
+  scale: number,
+): string {
+  return route.points
+    .map(
+      ([x, z], index) =>
+        `${index === 0 ? "M" : "L"} ${centerX + x * scale} ${
+          centerY + z * scale
+        }`,
+    )
+    .join(" ");
+}
+
+function fallbackVehicleClass(state: FacilityVehicleState): string {
+  switch (state) {
+    case "moving":
+      return styles.facilityVehicleMoving;
+    case "loading":
+      return styles.facilityVehicleLoading;
+    case "alert":
+      return styles.facilityVehicleAlert;
+    default: {
+      const exhaustive: never = state;
+      return exhaustive;
+    }
+  }
+}
+
+function fallbackElementClass(
+  kind: FacilityElementKind,
+  hub: HubOverview,
+): string {
+  switch (kind) {
+    case "ground":
+      return styles.facilityCampus;
+    case "perimeter":
+      return styles.facilityPerimeter;
+    case "road":
+      return styles.facilityRoad;
+    case "apron":
+      return styles.facilityApron;
+    case "warehouse":
+      return styles.facilityWarehouse;
+    case "roof":
+      return styles.facilityRoof;
+    case "dock":
+      return styles.facilityDock;
+    case "slot":
+      return styles.facilitySlot;
+    case "cargo":
+      return styles.facilityCargo;
+    case "marking":
+      return styles.facilityRoadMark;
+    case "gatehouse":
+      return styles.facilityGatehouse;
+    case "tower":
+      return styles.facilityTower;
+    case "beacon":
+      return hub.anomalies > 0
+        ? styles.facilityAlarm
+        : styles.facilityNormal;
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
 }
 
 function project(hub: HubOverview): { x: number; y: number } {

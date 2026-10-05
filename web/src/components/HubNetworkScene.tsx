@@ -1,6 +1,7 @@
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import {
   BufferGeometry,
+  Color,
   Float32BufferAttribute,
   InstancedMesh,
   MathUtils,
@@ -23,6 +24,18 @@ import type {
   RouteOverview,
   WaybillID,
 } from "../api";
+import {
+  buildFacilityLayouts,
+  sampleFacilityRoute,
+  type FacilityElementKind,
+  type FacilityLayout,
+  type FacilityLayoutKind,
+  type FacilityRoutePoint,
+  type FacilityTransportRoute,
+  type FacilityTransportRouteStatus,
+  type FacilityVehicle,
+  type FacilityVehicleState,
+} from "./facilityLayout";
 
 type HubNetworkSceneProps = {
   hubs: readonly HubOverview[];
@@ -40,16 +53,67 @@ type HubNetworkSceneProps = {
 };
 
 export type SceneStats = {
+  mode: SceneMode;
   hubs: number;
   routes: number;
   markers: number;
+  facilityParts: number;
+  detailParts: number;
+  dockBays: number;
+  storageSlots: number;
+  occupiedSlots: number;
+  warehouseCount: number;
+  transportRoutes: number;
+  vehicles: number;
+  movingVehicles: number;
+  loadingVehicles: number;
+  alertVehicles: number;
+  layoutKind: FacilityLayoutKind | null;
+  layoutLabel: string;
+  layoutSignature: string;
+  archetypes: Record<HubArchetype, number>;
 };
+
+export type SceneMode = "network" | "facility";
+
+export type HubArchetype =
+  | "local-depot"
+  | "regional-cross-dock"
+  | "gateway-campus"
+  | "yard-terminal";
 
 type SceneHub = {
   hub: HubOverview;
   position: Vector3;
-  height: number;
+  archetype: HubArchetype;
+  scale: number;
+  activity: number;
+  cargoSlots: number;
+  signalHeight: number;
+  rotationY: number;
   priority: boolean;
+};
+
+type HubPartKind = "pad" | "structure" | "roof" | "cargo" | "signal";
+
+type HubPartTemplate = {
+  kind: Exclude<HubPartKind, "cargo" | "signal">;
+  offset: readonly [number, number, number];
+  size: readonly [number, number, number];
+};
+
+type HubPart = {
+  kind: HubPartKind;
+  offset: readonly [number, number, number];
+  size: readonly [number, number, number];
+  sceneHub: SceneHub;
+  color: string;
+};
+
+type CapacityBreaks = {
+  lower: number;
+  middle: number;
+  upper: number;
 };
 
 type SceneRoute = {
@@ -64,6 +128,40 @@ type FlowMarker = {
   speed: number;
 };
 
+type SceneModel = {
+  hubs: readonly SceneHub[];
+  hubsByID: ReadonlyMap<string, SceneHub>;
+  facilityParts: readonly HubPart[];
+  routes: readonly SceneRoute[];
+  markers: readonly FlowMarker[];
+  riskHubs: readonly SceneHub[];
+  facilityLayouts: ReadonlyMap<string, FacilityLayout>;
+};
+
+type NetworkSceneView = {
+  mode: "network";
+  selectedHub: undefined;
+  detail: undefined;
+  hubs: readonly SceneHub[];
+  facilityParts: readonly HubPart[];
+  routes: readonly SceneRoute[];
+  markers: readonly FlowMarker[];
+  riskHubs: readonly SceneHub[];
+};
+
+type FacilitySceneView = {
+  mode: "facility";
+  selectedHub: SceneHub;
+  detail: FacilityLayout;
+  hubs: readonly [SceneHub];
+  facilityParts: readonly [];
+  routes: readonly [];
+  markers: readonly [];
+  riskHubs: readonly [];
+};
+
+type SceneView = NetworkSceneView | FacilitySceneView;
+
 const coordinateBounds = {
   minLongitude: 73,
   maxLongitude: 135,
@@ -77,6 +175,188 @@ const maxFlowMarkersPerRoute = 4;
 const transform = new Object3D();
 const markerTransform = new Matrix4();
 const markerPoint = new Vector3();
+const facilityTransform = new Object3D();
+const facilityPartTransform = new Object3D();
+const facilityPartMatrix = new Matrix4();
+const facilityPartColor = new Color();
+const detailPartTransform = new Object3D();
+const detailFacilityScale = 3.2;
+const detailRouteTransform = new Object3D();
+const detailVehicleRootTransform = new Object3D();
+const detailVehiclePartTransform = new Object3D();
+const detailVehiclePartMatrix = new Matrix4();
+
+const hubArchetypes = [
+  "local-depot",
+  "regional-cross-dock",
+  "gateway-campus",
+  "yard-terminal",
+] satisfies readonly HubArchetype[];
+
+const structureColors = {
+  "local-depot": "#427b75",
+  "regional-cross-dock": "#376f69",
+  "gateway-campus": "#2d655f",
+  "yard-terminal": "#245852",
+} satisfies Record<HubArchetype, string>;
+
+const facilityTemplates = {
+  "local-depot": [
+    { kind: "pad", offset: [0, -0.16, 0], size: [0.34, 0.04, 0.28] },
+    {
+      kind: "structure",
+      offset: [-0.035, -0.06, -0.025],
+      size: [0.2, 0.16, 0.12],
+    },
+    {
+      kind: "roof",
+      offset: [-0.035, 0.032, -0.025],
+      size: [0.22, 0.024, 0.14],
+    },
+    {
+      kind: "structure",
+      offset: [-0.035, -0.105, 0.07],
+      size: [0.16, 0.05, 0.04],
+    },
+  ],
+  "regional-cross-dock": [
+    { kind: "pad", offset: [0, -0.16, 0], size: [0.42, 0.04, 0.34] },
+    {
+      kind: "structure",
+      offset: [-0.045, -0.052, -0.075],
+      size: [0.29, 0.176, 0.1],
+    },
+    {
+      kind: "roof",
+      offset: [-0.045, 0.049, -0.075],
+      size: [0.31, 0.026, 0.12],
+    },
+    {
+      kind: "structure",
+      offset: [0.055, -0.075, 0.085],
+      size: [0.18, 0.13, 0.09],
+    },
+    {
+      kind: "roof",
+      offset: [0.055, 0.003, 0.085],
+      size: [0.2, 0.024, 0.11],
+    },
+    {
+      kind: "structure",
+      offset: [-0.045, -0.108, 0.005],
+      size: [0.24, 0.044, 0.038],
+    },
+  ],
+  "gateway-campus": [
+    { kind: "pad", offset: [0, -0.16, 0], size: [0.48, 0.04, 0.38] },
+    {
+      kind: "structure",
+      offset: [-0.06, -0.045, -0.095],
+      size: [0.26, 0.19, 0.09],
+    },
+    {
+      kind: "roof",
+      offset: [-0.06, 0.064, -0.095],
+      size: [0.28, 0.028, 0.11],
+    },
+    {
+      kind: "structure",
+      offset: [-0.06, -0.055, 0.095],
+      size: [0.26, 0.17, 0.09],
+    },
+    {
+      kind: "roof",
+      offset: [-0.06, 0.044, 0.095],
+      size: [0.28, 0.028, 0.11],
+    },
+    {
+      kind: "structure",
+      offset: [0.155, 0.03, -0.01],
+      size: [0.065, 0.34, 0.065],
+    },
+    {
+      kind: "roof",
+      offset: [0.155, 0.212, -0.01],
+      size: [0.085, 0.024, 0.085],
+    },
+    {
+      kind: "roof",
+      offset: [0.105, -0.102, 0.13],
+      size: [0.13, 0.05, 0.05],
+    },
+  ],
+  "yard-terminal": [
+    { kind: "pad", offset: [0, -0.16, 0], size: [0.52, 0.04, 0.42] },
+    {
+      kind: "structure",
+      offset: [-0.085, -0.048, -0.1],
+      size: [0.29, 0.184, 0.12],
+    },
+    {
+      kind: "roof",
+      offset: [-0.085, 0.057, -0.1],
+      size: [0.31, 0.026, 0.14],
+    },
+    {
+      kind: "structure",
+      offset: [0.105, -0.072, 0.015],
+      size: [0.16, 0.136, 0.09],
+    },
+    {
+      kind: "roof",
+      offset: [0.105, 0.009, 0.015],
+      size: [0.18, 0.026, 0.11],
+    },
+    {
+      kind: "structure",
+      offset: [0.175, 0.02, -0.13],
+      size: [0.065, 0.32, 0.065],
+    },
+    {
+      kind: "roof",
+      offset: [0.175, 0.192, -0.13],
+      size: [0.085, 0.024, 0.085],
+    },
+    {
+      kind: "structure",
+      offset: [-0.075, -0.108, 0.005],
+      size: [0.22, 0.044, 0.04],
+    },
+  ],
+} satisfies Record<HubArchetype, readonly HubPartTemplate[]>;
+
+const cargoPositions = {
+  "local-depot": [
+    [0.105, 0.015],
+    [0.105, 0.075],
+    [0.045, 0.115],
+  ],
+  "regional-cross-dock": [
+    [-0.12, 0.115],
+    [-0.025, 0.115],
+    [0.07, 0.135],
+  ],
+  "gateway-campus": [
+    [0.05, -0.095],
+    [0.05, 0],
+    [0.05, 0.095],
+  ],
+  "yard-terminal": [
+    [-0.085, 0.12],
+    [0.015, 0.12],
+    [0.115, 0.13],
+  ],
+} satisfies Record<
+  HubArchetype,
+  readonly (readonly [number, number])[]
+>;
+
+const signalPositions = {
+  "local-depot": [-0.135, -0.105],
+  "regional-cross-dock": [-0.175, -0.135],
+  "gateway-campus": [-0.205, -0.155],
+  "yard-terminal": [-0.225, -0.175],
+} satisfies Record<HubArchetype, readonly [number, number]>;
 
 export default function HubNetworkScene({
   hubs,
@@ -96,17 +376,40 @@ export default function HubNetworkScene({
     () => buildSceneModel(hubs, routes, anomalies),
     [anomalies, hubs, routes],
   );
-  const selectedHub = selectedHubID === null
-    ? undefined
-    : model.hubsByID.get(selectedHubID);
+  const view = useMemo(
+    () => buildSceneView(model, selectedHubID),
+    [model, selectedHubID],
+  );
 
   useEffect(() => {
     onStats({
-      hubs: model.hubs.length,
-      routes: model.routes.length,
-      markers: model.markers.length,
+      mode: view.mode,
+      hubs: view.hubs.length,
+      routes: view.routes.length,
+      markers: view.markers.length,
+      facilityParts: view.facilityParts.length,
+      detailParts: view.detail?.elements.length ?? 0,
+      dockBays: view.detail?.dockBays ?? 0,
+      storageSlots: view.detail?.storageSlots ?? 0,
+      occupiedSlots: view.detail?.occupiedSlots ?? 0,
+      warehouseCount: view.detail?.warehouseCount ?? 0,
+      transportRoutes: view.detail?.transportRoutes.length ?? 0,
+      vehicles: view.detail?.vehicles.length ?? 0,
+      movingVehicles:
+        view.detail?.vehicles.filter((vehicle) => vehicle.state === "moving")
+          .length ?? 0,
+      loadingVehicles:
+        view.detail?.vehicles.filter((vehicle) => vehicle.state === "loading")
+          .length ?? 0,
+      alertVehicles:
+        view.detail?.vehicles.filter((vehicle) => vehicle.state === "alert")
+          .length ?? 0,
+      layoutKind: view.detail?.kind ?? null,
+      layoutLabel: view.detail?.label ?? "",
+      layoutSignature: view.detail?.signature ?? "",
+      archetypes: countArchetypes(view.hubs),
     });
-  }, [model, onStats]);
+  }, [onStats, view]);
 
   return (
     <Canvas
@@ -129,31 +432,46 @@ export default function HubNetworkScene({
       <directionalLight position={[8, 14, 10]} intensity={2.1} />
       <WebGLContextObserver onFailure={onFailure} />
 
-      <StrategyTable />
-      <RouteLines routes={model.routes} />
-      <HubColumns
-        hubs={model.hubs}
-        selectedHubID={selectedHubID}
-        onSelectHub={onSelectHub}
-      />
-      <FlowMarkers
-        markers={model.markers}
-        reducedMotion={reducedMotion}
-        paused={paused}
-        onSelectWaybill={onSelectWaybill}
-      />
-      <RiskRings
-        hubs={model.riskHubs}
-        reducedMotion={reducedMotion}
-        paused={paused}
-      />
-      {selectedHub !== undefined && <SelectionBeacon hub={selectedHub} />}
+      {view.mode === "network" ? (
+        <>
+          <StrategyTable />
+          <RouteLines routes={view.routes} />
+          <HubFacilities
+            parts={view.facilityParts}
+            scaleMultiplier={1}
+            interactive
+            onSelectHub={onSelectHub}
+          />
+          <FlowMarkers
+            markers={view.markers}
+            reducedMotion={reducedMotion}
+            paused={paused}
+            onSelectWaybill={onSelectWaybill}
+          />
+          <RiskRings
+            hubs={view.riskHubs}
+            reducedMotion={reducedMotion}
+            paused={paused}
+          />
+        </>
+      ) : (
+        <FacilityDetailGround
+          hub={view.selectedHub}
+          detail={view.detail}
+          reducedMotion={reducedMotion}
+          paused={paused}
+        />
+      )}
       <CameraRig
-        selectedHub={selectedHub}
+        selectedHub={view.selectedHub}
         reducedMotion={reducedMotion}
         paused={paused}
       />
-      <SceneReporter onReady={onReady} onDrawCalls={onDrawCalls} />
+      <SceneReporter
+        reportKey={selectedHubID ?? "network"}
+        onReady={onReady}
+        onDrawCalls={onDrawCalls}
+      />
     </Canvas>
   );
 }
@@ -174,49 +492,77 @@ function StrategyTable() {
   );
 }
 
-function HubColumns({
-  hubs,
-  selectedHubID,
+function HubFacilities({
+  parts,
+  scaleMultiplier,
+  interactive,
   onSelectHub,
 }: {
-  hubs: readonly SceneHub[];
-  selectedHubID: string | null;
+  parts: readonly HubPart[];
+  scaleMultiplier: number;
+  interactive: boolean;
   onSelectHub: (hubID: string) => void;
 }) {
-  const normalHubs = hubs.filter((item) => !item.priority);
-  const riskHubs = hubs.filter((item) => item.priority);
+  const pads = parts.filter((part) => part.kind === "pad");
+  const structures = parts.filter((part) => part.kind === "structure");
+  const roofs = parts.filter((part) => part.kind === "roof");
+  const cargo = parts.filter((part) => part.kind === "cargo");
+  const signals = parts.filter((part) => part.kind === "signal");
 
   return (
     <group>
-      <HubInstances
-        hubs={normalHubs}
-        selectedHubID={selectedHubID}
-        color="#285f5b"
-        emphasis={false}
+      <FacilityPartInstances
+        parts={pads}
+        scaleMultiplier={scaleMultiplier}
+        roughness={0.94}
+        interactive={interactive}
         onSelectHub={onSelectHub}
       />
-      <HubInstances
-        hubs={riskHubs}
-        selectedHubID={selectedHubID}
-        color="#df3f30"
-        emphasis
+      <FacilityPartInstances
+        parts={structures}
+        scaleMultiplier={scaleMultiplier}
+        roughness={0.72}
+        interactive={interactive}
         onSelectHub={onSelectHub}
       />
+      <FacilityPartInstances
+        parts={roofs}
+        scaleMultiplier={scaleMultiplier}
+        roughness={0.88}
+        interactive={interactive}
+        onSelectHub={onSelectHub}
+      />
+      <FacilityPartInstances
+        parts={cargo}
+        scaleMultiplier={scaleMultiplier}
+        roughness={0.8}
+        interactive={interactive}
+        onSelectHub={onSelectHub}
+      />
+      {signals.length > 0 && (
+        <FacilityPartInstances
+          parts={signals}
+          scaleMultiplier={scaleMultiplier}
+          roughness={0.62}
+          interactive={interactive}
+          onSelectHub={onSelectHub}
+        />
+      )}
     </group>
   );
 }
 
-function HubInstances({
-  hubs,
-  selectedHubID,
-  color,
-  emphasis,
+function FacilityPartInstances({
+  parts,
+  scaleMultiplier,
+  roughness,
+  interactive,
   onSelectHub,
 }: {
-  hubs: readonly SceneHub[];
-  selectedHubID: string | null;
-  color: string;
-  emphasis: boolean;
+  parts: readonly HubPart[];
+  scaleMultiplier: number;
+  roughness: number;
+  interactive: boolean;
   onSelectHub: (hubID: string) => void;
 }) {
   const mesh = useRef<InstancedMesh>(null);
@@ -226,23 +572,19 @@ function HubInstances({
     if (mesh.current === null) {
       return;
     }
-    hubs.forEach((item, index) => {
-      transform.position.set(
-        item.position.x,
-        item.height / 2 - 0.18,
-        item.position.z,
+    parts.forEach((part, index) => {
+      mesh.current?.setMatrixAt(
+        index,
+        composeFacilityPartMatrix(part, scaleMultiplier),
       );
-      transform.rotation.set(0, 0, 0);
-      transform.scale.set(
-        item.hub.hub_id === selectedHubID ? 1.45 : 1,
-        1,
-        item.hub.hub_id === selectedHubID ? 1.45 : 1,
-      );
-      transform.updateMatrix();
-      mesh.current?.setMatrixAt(index, transform.matrix);
+      facilityPartColor.set(part.color);
+      mesh.current?.setColorAt(index, facilityPartColor);
     });
     mesh.current.instanceMatrix.needsUpdate = true;
-  }, [hubs, selectedHubID]);
+    if (mesh.current.instanceColor !== null) {
+      mesh.current.instanceColor.needsUpdate = true;
+    }
+  }, [parts, scaleMultiplier]);
 
   const setCursor = useCallback(
     (cursor: "default" | "pointer") => {
@@ -255,37 +597,465 @@ function HubInstances({
     (event: ThreeEvent<PointerEvent>) => {
       event.stopPropagation();
       if (event.instanceId !== undefined) {
-        const item = hubs[event.instanceId];
-        if (item !== undefined) {
-          onSelectHub(item.hub.hub_id);
+        const part = parts[event.instanceId];
+        if (part !== undefined) {
+          setCursor("default");
+          onSelectHub(part.sceneHub.hub.hub_id);
         }
       }
     },
-    [hubs, onSelectHub],
+    [onSelectHub, parts, setCursor],
   );
 
   return (
     <instancedMesh
       ref={mesh}
-      args={[undefined, undefined, hubs.length]}
+      args={[undefined, undefined, parts.length]}
       frustumCulled={false}
-      onClick={select}
-      onPointerOver={(event) => {
-        event.stopPropagation();
-        setCursor("pointer");
-      }}
-      onPointerOut={() => setCursor("default")}
+      raycast={interactive ? undefined : () => undefined}
+      onClick={interactive ? select : undefined}
+      onPointerOver={
+        interactive
+          ? (event) => {
+              event.stopPropagation();
+              setCursor("pointer");
+            }
+          : undefined
+      }
+      onPointerOut={interactive ? () => setCursor("default") : undefined}
     >
-      <cylinderGeometry
-        args={emphasis ? [0.07, 0.14, 1, 6] : [0.045, 0.08, 1, 8]}
-      />
+      <boxGeometry args={[1, 1, 1]} />
       <meshStandardMaterial
-        color={color}
-        roughness={0.68}
+        color="#ffffff"
+        roughness={roughness}
         metalness={0.02}
       />
     </instancedMesh>
   );
+}
+
+function composeFacilityPartMatrix(
+  part: HubPart,
+  scaleMultiplier: number,
+): Matrix4 {
+  facilityTransform.position.copy(part.sceneHub.position);
+  facilityTransform.rotation.set(0, part.sceneHub.rotationY, 0);
+  facilityTransform.scale.setScalar(part.sceneHub.scale * scaleMultiplier);
+  facilityTransform.updateMatrix();
+
+  facilityPartTransform.position.set(...part.offset);
+  facilityPartTransform.rotation.set(0, 0, 0);
+  facilityPartTransform.scale.set(...part.size);
+  facilityPartTransform.updateMatrix();
+
+  return facilityPartMatrix.multiplyMatrices(
+    facilityTransform.matrix,
+    facilityPartTransform.matrix,
+  );
+}
+
+function FacilityDetailGround({
+  hub,
+  detail,
+  reducedMotion,
+  paused,
+}: {
+  hub: SceneHub;
+  detail: FacilityLayout;
+  reducedMotion: boolean;
+  paused: boolean;
+}) {
+  const mesh = useRef<InstancedMesh>(null);
+
+  useLayoutEffect(() => {
+    if (mesh.current === null) {
+      return;
+    }
+    detail.elements.forEach((element, index) => {
+      detailPartTransform.position.set(
+        element.x,
+        element.centerY,
+        element.z,
+      );
+      detailPartTransform.rotation.set(0, element.rotationY, 0);
+      detailPartTransform.scale.set(
+        element.width,
+        element.height,
+        element.depth,
+      );
+      detailPartTransform.updateMatrix();
+      mesh.current?.setMatrixAt(index, detailPartTransform.matrix);
+      facilityPartColor.set(detailElementColor(element.kind, hub));
+      mesh.current?.setColorAt(index, facilityPartColor);
+    });
+    mesh.current.instanceMatrix.needsUpdate = true;
+    if (mesh.current.instanceColor !== null) {
+      mesh.current.instanceColor.needsUpdate = true;
+    }
+  }, [detail.elements, hub]);
+
+  return (
+    <group
+      position={[hub.position.x, 0, hub.position.z]}
+      rotation={[0, hub.rotationY, 0]}
+      scale={hub.scale * detailFacilityScale}
+    >
+      <instancedMesh
+        ref={mesh}
+        args={[undefined, undefined, detail.elements.length]}
+        frustumCulled={false}
+        raycast={() => undefined}
+      >
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial
+          color="#ffffff"
+          roughness={0.9}
+          metalness={0.01}
+        />
+      </instancedMesh>
+      <FacilityTransportRoutes routes={detail.transportRoutes} />
+      <FacilityVehicleInstances
+        routes={detail.transportRoutes}
+        vehicles={detail.vehicles}
+        reducedMotion={reducedMotion}
+        paused={paused}
+      />
+    </group>
+  );
+}
+
+type FacilityRouteSegment = {
+  status: FacilityTransportRouteStatus;
+  from: FacilityRoutePoint;
+  to: FacilityRoutePoint;
+};
+
+function FacilityTransportRoutes({
+  routes,
+}: {
+  routes: readonly FacilityTransportRoute[];
+}) {
+  const segments = useMemo(
+    () =>
+      routes.flatMap((route) =>
+        route.points.slice(1).flatMap((point, index) => {
+          const previous = route.points[index];
+          return previous === undefined
+            ? []
+            : [{
+                status: route.status,
+                from: previous,
+                to: point,
+              }];
+        }),
+      ),
+    [routes],
+  );
+  const activeSegments = segments.filter(
+    (segment) => segment.status === "active",
+  );
+  const riskSegments = segments.filter(
+    (segment) => segment.status === "risk",
+  );
+
+  return (
+    <group>
+      <FacilityRouteSegmentInstances
+        segments={activeSegments}
+        color="#0b746d"
+        width={0.024}
+      />
+      <FacilityRouteSegmentInstances
+        segments={riskSegments}
+        color="#df3f30"
+        width={0.032}
+      />
+    </group>
+  );
+}
+
+function FacilityRouteSegmentInstances({
+  segments,
+  color,
+  width,
+}: {
+  segments: readonly FacilityRouteSegment[];
+  color: string;
+  width: number;
+}) {
+  const mesh = useRef<InstancedMesh>(null);
+
+  useLayoutEffect(() => {
+    if (mesh.current === null) {
+      return;
+    }
+    segments.forEach((segment, index) => {
+      const deltaX = segment.to[0] - segment.from[0];
+      const deltaZ = segment.to[1] - segment.from[1];
+      const length = Math.hypot(deltaX, deltaZ);
+      detailRouteTransform.position.set(
+        (segment.from[0] + segment.to[0]) / 2,
+        -0.143,
+        (segment.from[1] + segment.to[1]) / 2,
+      );
+      detailRouteTransform.rotation.set(
+        0,
+        Math.atan2(deltaX, deltaZ),
+        0,
+      );
+      detailRouteTransform.scale.set(width, 0.012, length);
+      detailRouteTransform.updateMatrix();
+      mesh.current?.setMatrixAt(index, detailRouteTransform.matrix);
+    });
+    mesh.current.instanceMatrix.needsUpdate = true;
+  }, [segments, width]);
+
+  if (segments.length === 0) {
+    return null;
+  }
+
+  return (
+    <instancedMesh
+      ref={mesh}
+      args={[undefined, undefined, segments.length]}
+      frustumCulled={false}
+      raycast={() => undefined}
+    >
+      <boxGeometry args={[1, 1, 1]} />
+      <meshBasicMaterial color={color} toneMapped={false} />
+    </instancedMesh>
+  );
+}
+
+function FacilityVehicleInstances({
+  routes,
+  vehicles,
+  reducedMotion,
+  paused,
+}: {
+  routes: readonly FacilityTransportRoute[];
+  vehicles: readonly FacilityVehicle[];
+  reducedMotion: boolean;
+  paused: boolean;
+}) {
+  const bodyMesh = useRef<InstancedMesh>(null);
+  const cabinMesh = useRef<InstancedMesh>(null);
+  const chassisMesh = useRef<InstancedMesh>(null);
+  const elapsed = useRef(0);
+  const { gl } = useThree();
+  const routeByKind = useMemo(
+    () => new Map(routes.map((route) => [route.kind, route])),
+    [routes],
+  );
+
+  const updateVehicles = useCallback(
+    (time: number) => {
+      const body = bodyMesh.current;
+      const cabin = cabinMesh.current;
+      const chassis = chassisMesh.current;
+      if (
+        body === null ||
+        cabin === null ||
+        chassis === null
+      ) {
+        return;
+      }
+      let firstPosition = "";
+      vehicles.forEach((vehicle, index) => {
+        const route = routeByKind.get(vehicle.routeKind);
+        if (route === undefined) {
+          return;
+        }
+        const progress = vehicle.phase + time * vehicle.speed;
+        const sample = sampleFacilityRoute(route, progress);
+        if (index === 0) {
+          firstPosition =
+            `${sample.x.toFixed(4)},${sample.z.toFixed(4)}`;
+        }
+        detailVehicleRootTransform.position.set(
+          sample.x,
+          -0.105,
+          sample.z,
+        );
+        detailVehicleRootTransform.rotation.set(
+          0,
+          sample.rotationY,
+          0,
+        );
+        detailVehicleRootTransform.scale.set(1, 1, 1);
+        detailVehicleRootTransform.updateMatrix();
+
+        setVehiclePartMatrix(body, index, {
+          x: 0,
+          y: 0,
+          z: 0,
+          width: 0.058,
+          height: 0.055,
+          depth: 0.13,
+        });
+        setVehiclePartMatrix(cabin, index, {
+          x: 0,
+          y: 0.008,
+          z: 0.042,
+          width: 0.054,
+          height: 0.067,
+          depth: 0.046,
+        });
+        setVehiclePartMatrix(chassis, index, {
+          x: 0,
+          y: -0.032,
+          z: -0.004,
+          width: 0.068,
+          height: 0.018,
+          depth: 0.14,
+        });
+      });
+      body.instanceMatrix.needsUpdate = true;
+      cabin.instanceMatrix.needsUpdate = true;
+      chassis.instanceMatrix.needsUpdate = true;
+      if (import.meta.env.DEV) {
+        gl.domElement.dataset.facilityVehiclePosition = firstPosition;
+      }
+    },
+    [gl, routeByKind, vehicles],
+  );
+
+  useLayoutEffect(() => {
+    elapsed.current = 0;
+    const body = bodyMesh.current;
+    vehicles.forEach((vehicle, index) => {
+      facilityPartColor.set(vehicleColor(vehicle.state));
+      body?.setColorAt(index, facilityPartColor);
+    });
+    if (body?.instanceColor !== null && body?.instanceColor !== undefined) {
+      body.instanceColor.needsUpdate = true;
+    }
+    updateVehicles(0);
+  }, [updateVehicles, vehicles]);
+
+  useFrame((_, delta) => {
+    if (reducedMotion || paused) {
+      return;
+    }
+    elapsed.current += Math.min(delta, 0.05);
+    updateVehicles(elapsed.current);
+  });
+
+  return (
+    <group>
+      <instancedMesh
+        ref={chassisMesh}
+        args={[undefined, undefined, vehicles.length]}
+        frustumCulled={false}
+        raycast={() => undefined}
+      >
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial color="#253431" roughness={0.82} />
+      </instancedMesh>
+      <instancedMesh
+        ref={bodyMesh}
+        args={[undefined, undefined, vehicles.length]}
+        frustumCulled={false}
+        raycast={() => undefined}
+      >
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial
+          color="#ffffff"
+          roughness={0.68}
+          metalness={0.02}
+        />
+      </instancedMesh>
+      <instancedMesh
+        ref={cabinMesh}
+        args={[undefined, undefined, vehicles.length]}
+        frustumCulled={false}
+        raycast={() => undefined}
+      >
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial color="#edf1ee" roughness={0.76} />
+      </instancedMesh>
+    </group>
+  );
+}
+
+function setVehiclePartMatrix(
+  mesh: InstancedMesh,
+  index: number,
+  part: {
+    x: number;
+    y: number;
+    z: number;
+    width: number;
+    height: number;
+    depth: number;
+  },
+) {
+  detailVehiclePartTransform.position.set(part.x, part.y, part.z);
+  detailVehiclePartTransform.rotation.set(0, 0, 0);
+  detailVehiclePartTransform.scale.set(
+    part.width,
+    part.height,
+    part.depth,
+  );
+  detailVehiclePartTransform.updateMatrix();
+  detailVehiclePartMatrix.multiplyMatrices(
+    detailVehicleRootTransform.matrix,
+    detailVehiclePartTransform.matrix,
+  );
+  mesh.setMatrixAt(index, detailVehiclePartMatrix);
+}
+
+function vehicleColor(state: FacilityVehicleState): string {
+  switch (state) {
+    case "moving":
+      return "#243b38";
+    case "loading":
+      return "#c58d2d";
+    case "alert":
+      return "#df3f30";
+    default: {
+      const exhaustive: never = state;
+      return exhaustive;
+    }
+  }
+}
+
+function detailElementColor(
+  kind: FacilityElementKind,
+  hub: SceneHub,
+): string {
+  switch (kind) {
+    case "ground":
+      return "#d9dfdc";
+    case "perimeter":
+      return "#64736f";
+    case "road":
+      return "#8f9b97";
+    case "apron":
+      return "#b7c0bc";
+    case "warehouse":
+      return structureColors[hub.archetype];
+    case "roof":
+      return "#eef1ee";
+    case "dock":
+      return "#263f3c";
+    case "slot":
+      return "#b8c2be";
+    case "cargo":
+      return hub.activity > 0.66 ? "#c58d2d" : "#4e7772";
+    case "marking":
+      return "#f4f3e8";
+    case "gatehouse":
+      return "#376f69";
+    case "tower":
+      return "#314c49";
+    case "beacon":
+      return hub.hub.anomalies > 0 ? "#df3f30" : "#427b75";
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
 }
 
 function RouteLines({ routes }: { routes: readonly SceneRoute[] }) {
@@ -478,7 +1248,9 @@ function RiskRings({
           : 0.88 + ((Math.sin(time * 2.4 + index * 0.62) + 1) / 2) * 0.5;
         transform.position.set(hub.position.x, -0.11, hub.position.z);
         transform.rotation.set(Math.PI / 2, 0, 0);
-        transform.scale.setScalar(pulse);
+        transform.scale.setScalar(
+          pulse * hub.scale * (0.82 + hub.signalHeight),
+        );
         transform.updateMatrix();
         mesh.current?.setMatrixAt(index, transform.matrix);
       });
@@ -511,25 +1283,6 @@ function RiskRings({
   );
 }
 
-function SelectionBeacon({ hub }: { hub: SceneHub }) {
-  return (
-    <group position={[hub.position.x, 0, hub.position.z]}>
-      <mesh position={[0, -0.08, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[0.32, 0.39, 32]} />
-        <meshBasicMaterial color="#171a1a" transparent opacity={0.9} />
-      </mesh>
-      <mesh position={[0, 1.55, 0]}>
-        <octahedronGeometry args={[0.16, 0]} />
-        <meshStandardMaterial color="#171a1a" roughness={0.5} />
-      </mesh>
-      <mesh position={[0, 0.78, 0]}>
-        <cylinderGeometry args={[0.012, 0.012, 1.35, 5]} />
-        <meshBasicMaterial color="#171a1a" transparent opacity={0.46} />
-      </mesh>
-    </group>
-  );
-}
-
 function CameraRig({
   selectedHub,
   reducedMotion,
@@ -545,18 +1298,22 @@ function CameraRig({
     () =>
       selectedHub === undefined
         ? new Vector3(0, 0, 0)
-        : new Vector3(selectedHub.position.x, 0.4, selectedHub.position.z),
+        : new Vector3(
+            selectedHub.position.x - 0.42,
+            -0.08,
+            selectedHub.position.z + 0.08,
+          ),
     [selectedHub],
   );
   const desiredPosition = useMemo(
     () =>
       selectedHub === undefined
         ? new Vector3(11, 18, 15)
-        : focus.clone().add(new Vector3(6.8, 10.5, 8.4)),
+        : focus.clone().add(new Vector3(5.2, 7.8, 6.3)),
     [focus, selectedHub],
   );
   const baseZoom = Math.min(size.width / 23, size.height / 14);
-  const desiredZoom = baseZoom * (selectedHub === undefined ? 1 : 1.48);
+  const desiredZoom = baseZoom * (selectedHub === undefined ? 1 : 3.05);
 
   useEffect(() => {
     if (!(camera instanceof OrthographicCamera)) {
@@ -600,14 +1357,21 @@ function CameraRig({
 }
 
 function SceneReporter({
+  reportKey,
   onReady,
   onDrawCalls,
 }: {
+  reportKey: string;
   onReady: () => void;
   onDrawCalls: (drawCalls: number) => void;
 }) {
   const { gl, invalidate } = useThree();
   const frame = useRef(0);
+
+  useEffect(() => {
+    frame.current = 0;
+    invalidate();
+  }, [invalidate, reportKey]);
 
   useFrame(() => {
     frame.current += 1;
@@ -650,15 +1414,38 @@ export function buildSceneModel(
   hubs: readonly HubOverview[],
   routes: readonly RouteOverview[],
   anomalies: readonly AnomalyOverview[],
-) {
+): SceneModel {
   const maxInFlight = Math.max(...hubs.map((hub) => hub.in_flight), 1);
+  const maxAnomalies = Math.max(...hubs.map((hub) => hub.anomalies), 1);
+  const capacities = hubs.map((hub) => hub.daily_capacity);
+  const minimumCapacity =
+    capacities.length === 0 ? 0 : Math.min(...capacities);
+  const maximumCapacity =
+    capacities.length === 0 ? 1 : Math.max(...capacities);
+  const capacitySpan = Math.max(maximumCapacity - minimumCapacity, 1);
+  const capacityBreaks = buildCapacityBreaks(hubs);
+  const positions = new Map(
+    hubs.map((hub) => [hub.hub_id, projectHub(hub)]),
+  );
+  const rotations = buildHubRotations(hubs, routes, positions);
   const sceneHubs = hubs.map((hub) => {
     const priority = hub.anomalies >= 2;
-    const load = hub.in_flight / maxInFlight;
+    const activity = hub.in_flight / maxInFlight;
+    const capacityLoad =
+      (hub.daily_capacity - minimumCapacity) / capacitySpan;
     return {
       hub,
-      position: projectHub(hub),
-      height: priority ? 0.34 + load * 1.08 : 0.09 + load * 0.3,
+      position: positions.get(hub.hub_id) ?? projectHub(hub),
+      archetype: classifyHub(hub.daily_capacity, capacityBreaks),
+      scale: 0.82 + capacityLoad * 0.28,
+      activity,
+      cargoSlots:
+        hub.in_flight === 0 ? 0 : Math.max(1, Math.ceil(activity * 3)),
+      signalHeight:
+        hub.anomalies === 0
+          ? 0
+          : 0.14 + (hub.anomalies / maxAnomalies) * 0.22,
+      rotationY: rotations.get(hub.hub_id) ?? 0,
       priority,
     };
   });
@@ -716,6 +1503,8 @@ export function buildSceneModel(
   return {
     hubs: sceneHubs,
     hubsByID,
+    facilityParts: sceneHubs.flatMap(createFacilityParts),
+    facilityLayouts: buildFacilityLayouts(hubs, routes),
     routes: sceneRoutes,
     markers,
     riskHubs: sceneHubs
@@ -723,6 +1512,218 @@ export function buildSceneModel(
       .sort((left, right) => right.hub.anomalies - left.hub.anomalies)
       .slice(0, 12),
   };
+}
+
+export function buildSceneView(
+  model: SceneModel,
+  selectedHubID: string | null,
+): SceneView {
+  const selectedHub =
+    selectedHubID === null ? undefined : model.hubsByID.get(selectedHubID);
+  const detail =
+    selectedHubID === null
+      ? undefined
+      : model.facilityLayouts.get(selectedHubID);
+  if (selectedHub === undefined || detail === undefined) {
+    return {
+      mode: "network",
+      selectedHub: undefined,
+      detail: undefined,
+      hubs: model.hubs,
+      facilityParts: model.facilityParts,
+      routes: model.routes,
+      markers: model.markers,
+      riskHubs: model.riskHubs,
+    };
+  }
+
+  return {
+    mode: "facility",
+    selectedHub,
+    detail,
+    hubs: [selectedHub],
+    facilityParts: [],
+    routes: [],
+    markers: [],
+    riskHubs: [],
+  };
+}
+
+function buildCapacityBreaks(
+  hubs: readonly HubOverview[],
+): CapacityBreaks {
+  const capacities = hubs
+    .map((hub) => hub.daily_capacity)
+    .sort((left, right) => left - right);
+  return {
+    lower: quantile(capacities, 0.25),
+    middle: quantile(capacities, 0.5),
+    upper: quantile(capacities, 0.75),
+  };
+}
+
+function quantile(values: readonly number[], fraction: number): number {
+  const index = Math.max(0, Math.ceil(values.length * fraction) - 1);
+  return values[index] ?? 0;
+}
+
+function classifyHub(
+  dailyCapacity: number,
+  breaks: CapacityBreaks,
+): HubArchetype {
+  if (dailyCapacity <= breaks.lower) {
+    return "local-depot";
+  }
+  if (dailyCapacity <= breaks.middle) {
+    return "regional-cross-dock";
+  }
+  if (dailyCapacity <= breaks.upper) {
+    return "gateway-campus";
+  }
+  return "yard-terminal";
+}
+
+function createFacilityParts(sceneHub: SceneHub): HubPart[] {
+  const fixedParts = facilityTemplates[sceneHub.archetype].map((template) => ({
+    ...template,
+    sceneHub,
+    color: facilityPartColorFor(template.kind, sceneHub.archetype),
+  }));
+  const cargoParts = cargoPositions[sceneHub.archetype]
+    .slice(0, sceneHub.cargoSlots)
+    .map(([x, z]) => ({
+      kind: "cargo",
+      offset: [x, -0.105, z],
+      size: [0.055, 0.05, 0.035],
+      sceneHub,
+      color: sceneHub.activity > 0.66 ? "#c58d2d" : "#b79a55",
+    }) satisfies HubPart);
+  const signalPosition = signalPositions[sceneHub.archetype];
+  const signalParts: HubPart[] =
+    sceneHub.signalHeight === 0
+      ? []
+      : [
+          {
+            kind: "signal",
+            offset: [
+              signalPosition[0],
+              -0.135 + sceneHub.signalHeight / 2,
+              signalPosition[1],
+            ],
+            size: [0.026, sceneHub.signalHeight, 0.026],
+            sceneHub,
+            color: "#df3f30",
+          },
+        ];
+
+  return [...fixedParts, ...cargoParts, ...signalParts];
+}
+
+function facilityPartColorFor(
+  kind: HubPartTemplate["kind"],
+  archetype: HubArchetype,
+): string {
+  switch (kind) {
+    case "pad":
+      return "#d9dfdc";
+    case "structure":
+      return structureColors[archetype];
+    case "roof":
+      return "#eef1ee";
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
+}
+
+function countArchetypes(
+  hubs: readonly SceneHub[],
+): Record<HubArchetype, number> {
+  const counts: Record<HubArchetype, number> = {
+    "local-depot": 0,
+    "regional-cross-dock": 0,
+    "gateway-campus": 0,
+    "yard-terminal": 0,
+  };
+  for (const hub of hubs) {
+    counts[hub.archetype] += 1;
+  }
+  return counts;
+}
+
+function buildHubRotations(
+  hubs: readonly HubOverview[],
+  routes: readonly RouteOverview[],
+  positions: ReadonlyMap<string, Vector3>,
+): ReadonlyMap<string, number> {
+  const primaryRoutes = new Map<
+    string,
+    { route: RouteOverview; targetHubID: string }
+  >();
+  for (const route of routes) {
+    keepPrimaryRoute(primaryRoutes, route.origin_hub_id, {
+      route,
+      targetHubID: route.destination_hub_id,
+    });
+    keepPrimaryRoute(primaryRoutes, route.destination_hub_id, {
+      route,
+      targetHubID: route.origin_hub_id,
+    });
+  }
+
+  return new Map(
+    hubs.map((hub) => {
+      const origin = positions.get(hub.hub_id);
+      const connection = primaryRoutes.get(hub.hub_id);
+      const target =
+        connection === undefined
+          ? undefined
+          : positions.get(connection.targetHubID);
+      if (origin === undefined || target === undefined) {
+        return [hub.hub_id, fallbackHubRotation(hub)];
+      }
+      const direction = target.clone().sub(origin);
+      return [hub.hub_id, Math.atan2(-direction.z, direction.x)];
+    }),
+  );
+}
+
+function keepPrimaryRoute(
+  primaryRoutes: Map<
+    string,
+    { route: RouteOverview; targetHubID: string }
+  >,
+  hubID: string,
+  candidate: { route: RouteOverview; targetHubID: string },
+) {
+  const current = primaryRoutes.get(hubID);
+  if (
+    current === undefined ||
+    routePrecedes(candidate.route, current.route)
+  ) {
+    primaryRoutes.set(hubID, candidate);
+  }
+}
+
+function routePrecedes(
+  candidate: RouteOverview,
+  current: RouteOverview,
+): boolean {
+  if (candidate.waybills !== current.waybills) {
+    return candidate.waybills > current.waybills;
+  }
+  if (candidate.anomalies !== current.anomalies) {
+    return candidate.anomalies > current.anomalies;
+  }
+  if (candidate.distance_km !== current.distance_km) {
+    return candidate.distance_km > current.distance_km;
+  }
+  return candidate.route_id.localeCompare(current.route_id) < 0;
+}
+
+function fallbackHubRotation(hub: HubOverview): number {
+  return MathUtils.degToRad(((hub.longitude + hub.latitude) % 90) - 45);
 }
 
 function createRouteGeometry(routes: readonly SceneRoute[]): BufferGeometry {

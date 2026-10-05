@@ -133,6 +133,12 @@ try {
     routes: Number(await networkMap.getAttribute("data-scene-routes")),
     markers: Number(await networkMap.getAttribute("data-scene-markers")),
   };
+  const facilityParts = Number(
+    await networkMap.getAttribute("data-scene-facility-parts"),
+  );
+  const archetypeCounts = JSON.parse(
+    (await networkMap.getAttribute("data-scene-archetypes")) ?? "{}",
+  );
   const expectedSceneCounts = {
     hubs: overviewBody.hubs.length,
     routes: overviewBody.routes.length,
@@ -145,14 +151,206 @@ try {
     JSON.stringify(sceneCounts) === JSON.stringify(expectedSceneCounts),
     `3D scene counts ${JSON.stringify(sceneCounts)}, want ${JSON.stringify(expectedSceneCounts)}`,
   );
+  assert(
+    Number.isFinite(facilityParts) && facilityParts > sceneCounts.hubs * 4,
+    `3D scene rendered only ${facilityParts} facility parts for ${sceneCounts.hubs} hubs`,
+  );
+  assert(
+    Object.keys(archetypeCounts).length === 4 &&
+      Object.values(archetypeCounts).every((count) => Number(count) > 0) &&
+      Object.values(archetypeCounts).reduce(
+        (total, count) => total + Number(count),
+        0,
+      ) === sceneCounts.hubs,
+    `3D facility archetypes are incomplete: ${JSON.stringify(archetypeCounts)}`,
+  );
   const firstHub = overviewBody.hubs[0];
   const hubPicker = page.getByLabel("选择公路港", { exact: true });
   await hubPicker.selectOption(firstHub.hub_id);
+  await page.waitForFunction(
+    () => {
+      const stage = document.querySelector('[data-network-renderer="webgl"]');
+      return (
+        stage?.getAttribute("data-scene-mode") === "facility" &&
+        stage.getAttribute("data-scene-hubs") === "1" &&
+        stage.getAttribute("data-scene-routes") === "0" &&
+        stage.getAttribute("data-scene-markers") === "0"
+      );
+    },
+  );
   await page
     .locator('[role="status"]')
     .getByText(firstHub.name, { exact: true })
     .waitFor();
-  await hubPicker.selectOption("");
+  const detailStats = {
+    hubs: Number(await networkMap.getAttribute("data-scene-hubs")),
+    routes: Number(await networkMap.getAttribute("data-scene-routes")),
+    markers: Number(await networkMap.getAttribute("data-scene-markers")),
+    facilityParts: Number(
+      await networkMap.getAttribute("data-scene-facility-parts"),
+    ),
+    detailParts: Number(
+      await networkMap.getAttribute("data-scene-detail-parts"),
+    ),
+    dockBays: Number(await networkMap.getAttribute("data-scene-dock-bays")),
+    storageSlots: Number(
+      await networkMap.getAttribute("data-scene-storage-slots"),
+    ),
+    warehouseCount: Number(
+      await networkMap.getAttribute("data-scene-warehouse-count"),
+    ),
+    transportRoutes: Number(
+      await networkMap.getAttribute("data-scene-transport-routes"),
+    ),
+    vehicles: Number(
+      await networkMap.getAttribute("data-scene-vehicles"),
+    ),
+    movingVehicles: Number(
+      await networkMap.getAttribute("data-scene-moving-vehicles"),
+    ),
+    layout: await networkMap.getAttribute("data-scene-layout"),
+    layoutSignature: await networkMap.getAttribute(
+      "data-scene-layout-signature",
+    ),
+  };
+  assert(
+    detailStats.hubs === 1 &&
+      detailStats.routes === 0 &&
+      detailStats.markers === 0 &&
+      detailStats.facilityParts === 0 &&
+      detailStats.detailParts > 20 &&
+      detailStats.dockBays >= 4 &&
+      detailStats.storageSlots >= 6 &&
+      detailStats.warehouseCount >= 2 &&
+      detailStats.transportRoutes === 3 &&
+      detailStats.vehicles > 0 &&
+      detailStats.movingVehicles > 0 &&
+      detailStats.layout !== "" &&
+      detailStats.layoutSignature !== "",
+    `facility detail layers are incomplete: ${JSON.stringify(detailStats)}`,
+  );
+  const firstVehiclePosition = await networkCanvas.getAttribute(
+    "data-facility-vehicle-position",
+  );
+  await page.waitForTimeout(1_400);
+  const movedVehiclePosition = await networkCanvas.getAttribute(
+    "data-facility-vehicle-position",
+  );
+  assert(
+    typeof firstVehiclePosition === "string" &&
+      firstVehiclePosition !== "" &&
+      typeof movedVehiclePosition === "string" &&
+      movedVehiclePosition !== "" &&
+      movedVehiclePosition !== firstVehiclePosition,
+    `facility vehicles did not move: ${firstVehiclePosition} -> ${movedVehiclePosition}`,
+  );
+  const detailPixelProbe = await probeCanvasPixels(networkCanvas);
+  assert(
+    detailPixelProbe !== null && detailPixelProbe.colors >= 3,
+    `facility detail canvas is blank: ${JSON.stringify(detailPixelProbe)}`,
+  );
+  await page.screenshot({
+    path: join(artifactDir, "overview-facility-detail.png"),
+  });
+  const facilitySignatures = [detailStats.layoutSignature];
+  const facilityLayouts = new Map([[detailStats.layout, firstHub]]);
+  let previousSignature = detailStats.layoutSignature;
+  for (const hub of overviewBody.hubs.slice(1)) {
+    await hubPicker.selectOption(hub.hub_id);
+    await page.waitForFunction(
+      ({ hubID, previous }) => {
+        const stage = document.querySelector(
+          '[data-network-renderer="webgl"]',
+        );
+        const signature = stage?.getAttribute(
+          "data-scene-layout-signature",
+        );
+        return (
+          stage?.getAttribute("data-scene-selected-hub") === hubID &&
+          typeof signature === "string" &&
+          signature !== "" &&
+          signature !== previous
+        );
+      },
+      { hubID: hub.hub_id, previous: previousSignature },
+    );
+    const signature = await networkMap.getAttribute(
+      "data-scene-layout-signature",
+    );
+    const layout = await networkMap.getAttribute("data-scene-layout");
+    assert(
+      typeof signature === "string" && signature !== "",
+      `${hub.hub_id} has no facility signature`,
+    );
+    assert(
+      typeof layout === "string" && layout !== "",
+      `${hub.hub_id} has no facility layout`,
+    );
+    facilitySignatures.push(signature);
+    previousSignature = signature;
+    if (!facilityLayouts.has(layout)) {
+      facilityLayouts.set(layout, hub);
+    }
+  }
+  assertUnique(facilitySignatures, "facility layout signatures");
+  assert(
+    facilityLayouts.size >= 4,
+    `facility layouts only used ${[...facilityLayouts.keys()].join(", ")}`,
+  );
+  for (const [layout, hub] of facilityLayouts) {
+    await hubPicker.selectOption(hub.hub_id);
+    await page.waitForFunction(
+      ({ hubID, expectedLayout }) => {
+        const stage = document.querySelector(
+          '[data-network-renderer="webgl"]',
+        );
+        return (
+          stage?.getAttribute("data-scene-selected-hub") === hubID &&
+          stage.getAttribute("data-scene-layout") === expectedLayout
+        );
+      },
+      { hubID: hub.hub_id, expectedLayout: layout },
+    );
+    await page.waitForTimeout(900);
+    await networkCanvas.screenshot({
+      path: join(artifactDir, `facility-layout-${layout}.png`),
+    });
+  }
+  const alertHub = overviewBody.hubs.find((hub) => hub.anomalies > 0);
+  assert(alertHub !== undefined, "overview fixture has no alert facility");
+  await hubPicker.selectOption(alertHub.hub_id);
+  await page.waitForFunction(
+    (hubID) => {
+      const stage = document.querySelector(
+        '[data-network-renderer="webgl"]',
+      );
+      return (
+        stage?.getAttribute("data-scene-selected-hub") === hubID &&
+        Number(stage.getAttribute("data-scene-alert-vehicles")) > 0
+      );
+    },
+    alertHub.hub_id,
+  );
+  const alertVehicleCount = Number(
+    await networkMap.getAttribute("data-scene-alert-vehicles"),
+  );
+  await page.waitForTimeout(500);
+  await networkCanvas.screenshot({
+    path: join(artifactDir, "facility-transport-alert.png"),
+  });
+  await page
+    .getByRole("button", { name: "返回全国视角", exact: true })
+    .click();
+  await page.waitForFunction(
+    (expectedHubs) => {
+      const stage = document.querySelector('[data-network-renderer="webgl"]');
+      return (
+        stage?.getAttribute("data-scene-mode") === "network" &&
+        Number(stage.getAttribute("data-scene-hubs")) === expectedHubs
+      );
+    },
+    expectedSceneCounts.hubs,
+  );
   const mapBounds = await networkMap.boundingBox();
   assert(
     mapBounds !== null && mapBounds.width > 600 && mapBounds.height > 400,
@@ -209,11 +407,13 @@ try {
     fullPage: true,
   });
   await page.setViewportSize({ width: 1600, height: 900 });
+  await page.waitForTimeout(800);
   assert(!(await hasHorizontalOverflow(page)), "1600px overview overflowed horizontally");
   await page.screenshot({
     path: join(artifactDir, "overview-desktop-1600.png"),
   });
   await page.setViewportSize({ width: 1280, height: 900 });
+  await page.waitForTimeout(800);
   assert(!(await hasHorizontalOverflow(page)), "1280px overview overflowed horizontally");
   const clippedKPIText = await clippedText(
     page,
@@ -359,12 +559,14 @@ try {
   assert(anomalyPoint !== undefined, "map drilldown waybill has no anomaly point");
 
   await page.setViewportSize({ width: 375, height: 812 });
+  await page.waitForTimeout(1_000);
   assert(!(await hasHorizontalOverflow(page)), "375px overview overflowed horizontally");
   await page.screenshot({
     path: join(artifactDir, "overview-mobile-375.png"),
     fullPage: true,
   });
   await page.setViewportSize({ width: 320, height: 812 });
+  await page.waitForTimeout(1_000);
   assert(!(await hasHorizontalOverflow(page)), "320px overview overflowed horizontally");
   const undersized = await undersizedControls(page);
   assert(
@@ -409,6 +611,25 @@ try {
         hubs: sceneCounts.hubs,
         routes: sceneCounts.routes,
         markers: sceneCounts.markers,
+        facility_parts: facilityParts,
+        facility_archetypes: archetypeCounts,
+        facility_detail: {
+          hubs: detailStats.hubs,
+          routes: detailStats.routes,
+          markers: detailStats.markers,
+          facilityParts: detailStats.facilityParts,
+          detailParts: detailStats.detailParts,
+          dockBays: detailStats.dockBays,
+          storageSlots: detailStats.storageSlots,
+          warehouseCount: detailStats.warehouseCount,
+          transportRoutes: detailStats.transportRoutes,
+          vehicles: detailStats.vehicles,
+          movingVehicles: detailStats.movingVehicles,
+          alertVehicles: alertVehicleCount,
+          layout: detailStats.layout,
+        },
+        facility_layouts: [...facilityLayouts.keys()],
+        unique_facility_signatures: facilitySignatures.length,
         renderer: "webgl",
         draw_calls: drawCalls,
         sampled_canvas_colors: pixelProbe.colors,
@@ -565,12 +786,33 @@ async function verifyReducedMotion(browser, webURL) {
           ?.getAttribute("data-scene-ready") === "true",
     );
     const canvas = stage.locator("canvas");
+    await page
+      .getByLabel("选择公路港", { exact: true })
+      .selectOption({ index: 1 });
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[data-network-renderer="webgl"]')
+          ?.getAttribute("data-scene-mode") === "facility",
+    );
+    const firstPosition = await canvas.getAttribute(
+      "data-facility-vehicle-position",
+    );
     const firstFrame = await canvas.screenshot();
     await page.waitForTimeout(700);
+    const secondPosition = await canvas.getAttribute(
+      "data-facility-vehicle-position",
+    );
     const secondFrame = await canvas.screenshot();
     assert(
       firstFrame.equals(secondFrame),
-      "reduced-motion network continued animating",
+      "reduced-motion facility continued animating",
+    );
+    assert(
+      typeof firstPosition === "string" &&
+        firstPosition !== "" &&
+        secondPosition === firstPosition,
+      `reduced-motion vehicle moved: ${firstPosition} -> ${secondPosition}`,
     );
   } finally {
     await page.close();
@@ -641,6 +883,51 @@ async function verifyWebGLFallback(webURL) {
       (await networkMap.locator("line").count()) === 72,
       "SVG fallback did not render all routes",
     );
+    await page
+      .getByLabel("选择公路港", { exact: true })
+      .selectOption({ index: 1 });
+    await page.locator('[data-fallback-mode="facility"]').waitFor();
+    const facilityMap = fallback.getByRole("img", {
+      name: /园区详情/,
+    });
+    await facilityMap.waitFor();
+    assert(
+      (await facilityMap.locator("rect").count()) >= 20,
+      "SVG fallback did not render facility structures",
+    );
+    assert(
+      (await facilityMap.locator("polyline").count()) === 3,
+      "SVG fallback did not render all local transport routes",
+    );
+    assert(
+      (await facilityMap.locator("[data-vehicle-state]").count()) > 0,
+      "SVG fallback did not render facility vehicles",
+    );
+    const firstSignature = await page
+      .locator('[data-fallback-mode="facility"]')
+      .getAttribute("data-fallback-signature");
+    await page
+      .getByLabel("选择公路港", { exact: true })
+      .selectOption({ index: 2 });
+    await page.waitForFunction(
+      (previousSignature) => {
+        const nextSignature = document
+          .querySelector('[data-fallback-mode="facility"]')
+          ?.getAttribute("data-fallback-signature");
+        return (
+          typeof nextSignature === "string" &&
+          nextSignature !== "" &&
+          nextSignature !== previousSignature
+        );
+      },
+      firstSignature,
+    );
+    await page
+      .getByRole("button", { name: "返回全国视角", exact: true })
+      .click();
+    await fallback.getByRole("img", {
+      name: /全国公路港异常网络/,
+    }).waitFor();
     assert(
       (await fallback.locator("canvas").count()) === 0,
       "WebGL-disabled page still rendered a canvas",
