@@ -421,7 +421,9 @@ func TestOnlineEngineAppliesConfiguredRequestBudget(t *testing.T) {
 			return
 		}
 		requestLimit <- body.MaxOutputTokens
-		<-r.Context().Done()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w,
+			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"output\":[],\"usage\":{}}}\n\n")
 	}))
 	defer server.Close()
 
@@ -450,7 +452,7 @@ func TestOnlineEngineAppliesConfiguredRequestBudget(t *testing.T) {
 		BaseURL:         server.URL,
 		APIKey:          "secret",
 		Model:           "model-1",
-		RequestTimeout:  500 * time.Millisecond,
+		RequestTimeout:  5 * time.Second,
 		MaxOutputTokens: 777,
 	})
 	if err != nil {
@@ -458,18 +460,17 @@ func TestOnlineEngineAppliesConfiguredRequestBudget(t *testing.T) {
 	}
 	defer engine.Close()
 
-	started := time.Now()
-	_, err = engine.Start(context.Background(), domain.RunContext{
+	outcome, err := engine.Start(context.Background(), domain.RunContext{
 		RunID:       "run-request-budget",
 		IncidentID:  "incident-request-budget",
 		WaybillID:   "YD2026101001",
 		PlanVersion: 1,
 	})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Start error = %v, want deadline exceeded", err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("request deadline took %s", elapsed)
+	if outcome.Status != agentstate.RunStatusCompleted {
+		t.Fatalf("status = %q, want completed", outcome.Status)
 	}
 	select {
 	case got := <-requestLimit:
@@ -478,6 +479,84 @@ func TestOnlineEngineAppliesConfiguredRequestBudget(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("provider did not receive a request")
+	}
+}
+
+func TestOnlineEngineEnforcesConfiguredRequestTimeout(t *testing.T) {
+	requestReceived := make(chan struct{}, 1)
+	releaseRequest := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case requestReceived <- struct{}{}:
+		default:
+		}
+		select {
+		case <-r.Context().Done():
+		case <-releaseRequest:
+		}
+	}))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	journal, err := audit.Open(dataDir+"/audit", time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clients, _, err := guardtools.NewDemoRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlers, err := guardtools.NewHandlers(clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := guardtools.NewRegistry(handlers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const requestTimeout = 500 * time.Millisecond
+	engine, err := NewEngine(dataDir+"/history", registry, []agents.Middleware{
+		NewAuditMiddleware(journal),
+	}, 0, ModelConfig{
+		Mode:            ModeOnline,
+		APIStyle:        APIStyleResponses,
+		BaseURL:         server.URL,
+		APIKey:          "secret",
+		Model:           "model-1",
+		RequestTimeout:  requestTimeout,
+		MaxOutputTokens: 777,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	defer close(releaseRequest)
+
+	startResult := make(chan error, 1)
+	go func() {
+		_, startErr := engine.Start(context.Background(), domain.RunContext{
+			RunID:       "run-request-timeout",
+			IncidentID:  "incident-request-timeout",
+			WaybillID:   "YD2026101001",
+			PlanVersion: 1,
+		})
+		startResult <- startErr
+	}()
+
+	select {
+	case <-requestReceived:
+	case startErr := <-startResult:
+		t.Fatalf("Start returned before provider received a request: %v", startErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("provider did not receive a request")
+	}
+	select {
+	case startErr := <-startResult:
+		if !errors.Is(startErr, context.DeadlineExceeded) {
+			t.Fatalf("Start error = %v, want deadline exceeded", startErr)
+		}
+	case <-time.After(requestTimeout + 2*time.Second):
+		t.Fatal("Start did not honor the configured request timeout")
 	}
 }
 
