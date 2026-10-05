@@ -120,6 +120,7 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
       data-scene-occupied-slots={sceneStats?.occupiedSlots ?? ""}
       data-scene-warehouse-count={sceneStats?.warehouseCount ?? ""}
       data-scene-transport-routes={sceneStats?.transportRoutes ?? ""}
+      data-scene-transport-segments={sceneStats?.transportSegments ?? ""}
       data-scene-vehicles={sceneStats?.vehicles ?? ""}
       data-scene-moving-vehicles={sceneStats?.movingVehicles ?? ""}
       data-scene-loading-vehicles={sceneStats?.loadingVehicles ?? ""}

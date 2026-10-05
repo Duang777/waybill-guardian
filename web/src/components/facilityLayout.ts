@@ -52,6 +52,12 @@ export type FacilityTransportRoute = {
   ];
 };
 
+export type FacilityTransportSegment = {
+  status: FacilityTransportRouteStatus;
+  from: FacilityRoutePoint;
+  to: FacilityRoutePoint;
+};
+
 export type FacilityVehicleState = "moving" | "loading" | "alert";
 
 export type FacilityVehicle = {
@@ -80,6 +86,7 @@ export type FacilityLayout = {
   occupiedSlots: number;
   elements: readonly FacilityElement[];
   transportRoutes: readonly FacilityTransportRoute[];
+  transportSegments: readonly FacilityTransportSegment[];
   vehicles: readonly FacilityVehicle[];
 };
 
@@ -229,6 +236,7 @@ function buildFacilityLayout(
     hubRisk: hub.anomalies > 0,
     routeRisk: (primaryRoute?.route.anomalies ?? 0) > 0,
   });
+  const transportSegments = buildFacilityTransportSegments(transportRoutes);
   const vehicles = buildFacilityVehicles({
     hub,
     primaryRoute,
@@ -283,6 +291,7 @@ function buildFacilityLayout(
     occupiedSlots,
     elements,
     transportRoutes,
+    transportSegments,
     vehicles,
   };
 }
@@ -997,6 +1006,43 @@ function buildTransportRoutes({
       points: connectViaSpine(yard, entrance, offsetSpine(topology.spine)),
     },
   ];
+}
+
+export function buildFacilityTransportSegments(
+  routes: readonly FacilityTransportRoute[],
+): readonly FacilityTransportSegment[] {
+  const segments = new Map<string, FacilityTransportSegment>();
+  for (const route of routes) {
+    route.points.slice(1).forEach((point, index) => {
+      const previous = route.points[index];
+      if (previous === undefined) {
+        return;
+      }
+      const key = physicalSegmentKey(previous, point);
+      const current = segments.get(key);
+      if (
+        current === undefined ||
+        (current.status === "active" && route.status === "risk")
+      ) {
+        segments.set(key, {
+          status: route.status,
+          from: previous,
+          to: point,
+        });
+      }
+    });
+  }
+  return [...segments.values()];
+}
+
+function physicalSegmentKey(
+  from: FacilityRoutePoint,
+  to: FacilityRoutePoint,
+): string {
+  return [from, to]
+    .map(([x, z]) => `${x.toFixed(9)},${z.toFixed(9)}`)
+    .sort()
+    .join("|");
 }
 
 function dockRoutePoint(dockLine: DockLine): FacilityRoutePoint {

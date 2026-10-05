@@ -30,9 +30,8 @@ import {
   type FacilityElementKind,
   type FacilityLayout,
   type FacilityLayoutKind,
-  type FacilityRoutePoint,
+  type FacilityTransportSegment,
   type FacilityTransportRoute,
-  type FacilityTransportRouteStatus,
   type FacilityVehicle,
   type FacilityVehicleState,
 } from "./facilityLayout";
@@ -64,6 +63,7 @@ export type SceneStats = {
   occupiedSlots: number;
   warehouseCount: number;
   transportRoutes: number;
+  transportSegments: number;
   vehicles: number;
   movingVehicles: number;
   loadingVehicles: number;
@@ -394,6 +394,7 @@ export default function HubNetworkScene({
       occupiedSlots: view.detail?.occupiedSlots ?? 0,
       warehouseCount: view.detail?.warehouseCount ?? 0,
       transportRoutes: view.detail?.transportRoutes.length ?? 0,
+      transportSegments: view.detail?.transportSegments.length ?? 0,
       vehicles: view.detail?.vehicles.length ?? 0,
       movingVehicles:
         view.detail?.vehicles.filter((vehicle) => vehicle.state === "moving")
@@ -713,7 +714,7 @@ function FacilityDetailGround({
           metalness={0.01}
         />
       </instancedMesh>
-      <FacilityTransportRoutes routes={detail.transportRoutes} />
+      <FacilityTransportRoutes segments={detail.transportSegments} />
       <FacilityVehicleInstances
         routes={detail.transportRoutes}
         vehicles={detail.vehicles}
@@ -724,33 +725,11 @@ function FacilityDetailGround({
   );
 }
 
-type FacilityRouteSegment = {
-  status: FacilityTransportRouteStatus;
-  from: FacilityRoutePoint;
-  to: FacilityRoutePoint;
-};
-
 function FacilityTransportRoutes({
-  routes,
+  segments,
 }: {
-  routes: readonly FacilityTransportRoute[];
+  segments: readonly FacilityTransportSegment[];
 }) {
-  const segments = useMemo(
-    () =>
-      routes.flatMap((route) =>
-        route.points.slice(1).flatMap((point, index) => {
-          const previous = route.points[index];
-          return previous === undefined
-            ? []
-            : [{
-                status: route.status,
-                from: previous,
-                to: point,
-              }];
-        }),
-      ),
-    [routes],
-  );
   const activeSegments = segments.filter(
     (segment) => segment.status === "active",
   );
@@ -779,7 +758,7 @@ function FacilityRouteSegmentInstances({
   color,
   width,
 }: {
-  segments: readonly FacilityRouteSegment[];
+  segments: readonly FacilityTransportSegment[];
   color: string;
   width: number;
 }) {

@@ -202,6 +202,9 @@ try {
     transportRoutes: Number(
       await networkMap.getAttribute("data-scene-transport-routes"),
     ),
+    transportSegments: Number(
+      await networkMap.getAttribute("data-scene-transport-segments"),
+    ),
     vehicles: Number(
       await networkMap.getAttribute("data-scene-vehicles"),
     ),
@@ -223,6 +226,8 @@ try {
       detailStats.storageSlots >= 6 &&
       detailStats.warehouseCount >= 2 &&
       detailStats.transportRoutes === 3 &&
+      detailStats.transportSegments > 0 &&
+      detailStats.transportSegments < detailStats.transportRoutes * 3 &&
       detailStats.vehicles > 0 &&
       detailStats.movingVehicles > 0 &&
       detailStats.layout !== "" &&
@@ -623,6 +628,7 @@ try {
           storageSlots: detailStats.storageSlots,
           warehouseCount: detailStats.warehouseCount,
           transportRoutes: detailStats.transportRoutes,
+          transportSegments: detailStats.transportSegments,
           vehicles: detailStats.vehicles,
           movingVehicles: detailStats.movingVehicles,
           alertVehicles: alertVehicleCount,
@@ -896,8 +902,13 @@ async function verifyWebGLFallback(webURL) {
       "SVG fallback did not render facility structures",
     );
     assert(
-      (await facilityMap.locator("polyline").count()) === 3,
-      "SVG fallback did not render all local transport routes",
+      (await facilityMap.locator("line").count()) ===
+        Number(
+          await page
+            .locator('[data-fallback-mode="facility"]')
+            .getAttribute("data-fallback-segments"),
+        ),
+      "SVG fallback did not render the deduplicated transport segments",
     );
     assert(
       (await facilityMap.locator("[data-vehicle-state]").count()) > 0,
