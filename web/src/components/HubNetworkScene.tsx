@@ -26,13 +26,13 @@ import type {
 } from "../api";
 import {
   buildFacilityLayouts,
-  sampleFacilityRoute,
+  sampleFacilityVehiclePath,
   type FacilityElementKind,
   type FacilityLayout,
   type FacilityLayoutKind,
   type FacilityTransportSegment,
-  type FacilityTransportRoute,
   type FacilityVehicle,
+  type FacilityVehiclePath,
   type FacilityVehicleState,
 } from "./facilityLayout";
 
@@ -716,7 +716,7 @@ function FacilityDetailGround({
       </instancedMesh>
       <FacilityTransportRoutes segments={detail.transportSegments} />
       <FacilityVehicleInstances
-        routes={detail.transportRoutes}
+        path={detail.vehiclePath}
         vehicles={detail.vehicles}
         reducedMotion={reducedMotion}
         paused={paused}
@@ -807,12 +807,12 @@ function FacilityRouteSegmentInstances({
 }
 
 function FacilityVehicleInstances({
-  routes,
+  path,
   vehicles,
   reducedMotion,
   paused,
 }: {
-  routes: readonly FacilityTransportRoute[];
+  path: FacilityVehiclePath;
   vehicles: readonly FacilityVehicle[];
   reducedMotion: boolean;
   paused: boolean;
@@ -822,10 +822,6 @@ function FacilityVehicleInstances({
   const chassisMesh = useRef<InstancedMesh>(null);
   const elapsed = useRef(0);
   const { gl } = useThree();
-  const routeByKind = useMemo(
-    () => new Map(routes.map((route) => [route.kind, route])),
-    [routes],
-  );
 
   const updateVehicles = useCallback(
     (time: number) => {
@@ -841,12 +837,8 @@ function FacilityVehicleInstances({
       }
       let firstPosition = "";
       vehicles.forEach((vehicle, index) => {
-        const route = routeByKind.get(vehicle.routeKind);
-        if (route === undefined) {
-          return;
-        }
         const progress = vehicle.phase + time * vehicle.speed;
-        const sample = sampleFacilityRoute(route, progress);
+        const sample = sampleFacilityVehiclePath(path, progress);
         if (index === 0) {
           firstPosition =
             `${sample.x.toFixed(4)},${sample.z.toFixed(4)}`;
@@ -896,7 +888,7 @@ function FacilityVehicleInstances({
         gl.domElement.dataset.facilityVehiclePosition = firstPosition;
       }
     },
-    [gl, routeByKind, vehicles],
+    [gl, path, vehicles],
   );
 
   useLayoutEffect(() => {

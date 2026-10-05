@@ -60,9 +60,17 @@ export type FacilityTransportSegment = {
 
 export type FacilityVehicleState = "moving" | "loading" | "alert";
 
+export type FacilityVehiclePath = {
+  points: readonly [
+    FacilityRoutePoint,
+    FacilityRoutePoint,
+    ...FacilityRoutePoint[],
+  ];
+  dockPhase: number;
+};
+
 export type FacilityVehicle = {
   id: string;
-  routeKind: FacilityTransportRouteKind;
   state: FacilityVehicleState;
   phase: number;
   speed: number;
@@ -87,6 +95,7 @@ export type FacilityLayout = {
   elements: readonly FacilityElement[];
   transportRoutes: readonly FacilityTransportRoute[];
   transportSegments: readonly FacilityTransportSegment[];
+  vehiclePath: FacilityVehiclePath;
   vehicles: readonly FacilityVehicle[];
 };
 
@@ -237,11 +246,12 @@ function buildFacilityLayout(
     routeRisk: (primaryRoute?.route.anomalies ?? 0) > 0,
   });
   const transportSegments = buildFacilityTransportSegments(transportRoutes);
+  const vehiclePath = buildFacilityVehiclePath(transportRoutes);
   const vehicles = buildFacilityVehicles({
     hub,
     primaryRoute,
     signals,
-    transportRoutes,
+    vehiclePath,
   });
 
   const warehouseCount = elements.filter(
@@ -270,7 +280,6 @@ function buildFacilityLayout(
   const vehicleSignature = vehicles
     .map((vehicle) => [
       vehicle.id,
-      vehicle.routeKind,
       vehicle.state,
       roundSignature(vehicle.phase),
       roundSignature(vehicle.speed),
@@ -292,6 +301,7 @@ function buildFacilityLayout(
     elements,
     transportRoutes,
     transportSegments,
+    vehiclePath,
     vehicles,
   };
 }
@@ -1035,6 +1045,35 @@ export function buildFacilityTransportSegments(
   return [...segments.values()];
 }
 
+function buildFacilityVehiclePath(
+  routes: readonly FacilityTransportRoute[],
+): FacilityVehiclePath {
+  const [inbound, transfer, outbound] = routes;
+  if (
+    inbound === undefined ||
+    transfer === undefined ||
+    outbound === undefined
+  ) {
+    throw new Error("facility transport chain requires three routes");
+  }
+  const joined = [
+    ...inbound.points,
+    ...transfer.points.slice(1),
+    ...outbound.points.slice(1),
+  ];
+  const [first, second, ...rest] = joined;
+  if (first === undefined || second === undefined) {
+    throw new Error("facility vehicle path requires at least two points");
+  }
+  const points = [first, second, ...rest] satisfies FacilityVehiclePath["points"];
+  const totalLength = facilityPathLength(points);
+  return {
+    points,
+    dockPhase:
+      totalLength === 0 ? 0 : facilityPathLength(inbound.points) / totalLength,
+  };
+}
+
 function physicalSegmentKey(
   from: FacilityRoutePoint,
   to: FacilityRoutePoint,
@@ -1104,12 +1143,12 @@ function buildFacilityVehicles({
   hub,
   primaryRoute,
   signals,
-  transportRoutes,
+  vehiclePath,
 }: {
   hub: HubOverview;
   primaryRoute: PrimaryRoute | undefined;
   signals: LayoutSignals;
-  transportRoutes: readonly FacilityTransportRoute[];
+  vehiclePath: FacilityVehiclePath;
 }): readonly FacilityVehicle[] {
   const vehicleCount = Math.min(
     6,
@@ -1127,10 +1166,11 @@ function buildFacilityVehicles({
     vehicleCount - alertCount,
     2,
   );
-  const routeKinds = transportRoutes.map((route) => route.kind);
   const seed = stableSeed(
     `${hub.hub_id}:${primaryRoute?.route.route_id ?? "local"}`,
   );
+  const movingSpeed =
+    0.04 + signals.throughput * 0.025 + (seed % 5) * 0.002;
 
   return Array.from({ length: vehicleCount }, (_, index) => {
     const state =
@@ -1139,26 +1179,17 @@ function buildFacilityVehicles({
         : index < alertCount + loadingCount
           ? "loading"
           : "moving";
-    const routeKind =
-      state === "alert"
-        ? "dock-to-yard"
-        : state === "loading"
-          ? "gate-to-dock"
-          : routeKinds[(seed + index) % routeKinds.length] ?? "gate-to-dock";
     return {
       id: `${hub.hub_id}-VEH-${String(index + 1).padStart(2, "0")}`,
-      routeKind,
       state,
       phase:
         state === "loading"
-          ? 0.94
+          ? normalizeProgress(
+              vehiclePath.dockPhase +
+                (index - alertCount - (loadingCount - 1) / 2) * 0.018,
+            )
           : ((seed % 997) / 997 + index / vehicleCount) % 1,
-      speed:
-        state === "loading"
-          ? 0
-          : 0.035 +
-            signals.throughput * 0.025 +
-            ((seed + index * 7) % 5) * 0.004,
+      speed: state === "loading" ? 0 : movingSpeed,
     };
   });
 }
@@ -1176,8 +1207,23 @@ export function sampleFacilityRoute(
   route: FacilityTransportRoute,
   progress: number,
 ): FacilityRouteSample {
-  const segmentLengths = route.points.slice(1).map((point, index) => {
-    const previous = route.points[index];
+  return sampleFacilityPathPoints(route.points, progress, false);
+}
+
+export function sampleFacilityVehiclePath(
+  path: FacilityVehiclePath,
+  progress: number,
+): FacilityRouteSample {
+  return sampleFacilityPathPoints(path.points, progress, true);
+}
+
+function sampleFacilityPathPoints(
+  points: FacilityVehiclePath["points"],
+  progress: number,
+  closed: boolean,
+): FacilityRouteSample {
+  const segmentLengths = points.slice(1).map((point, index) => {
+    const previous = points[index];
     if (previous === undefined) {
       return 0;
     }
@@ -1188,14 +1234,52 @@ export function sampleFacilityRoute(
     0,
   );
   if (totalLength === 0) {
-    const [x, z] = route.points[0];
+    const [x, z] = points[0];
     return { x, z, rotationY: 0 };
   }
-  let distance = (((progress % 1) + 1) % 1) * totalLength;
+  const normalizedProgress = normalizeProgress(progress);
+  const position = sampleFacilityPathPosition(
+    points,
+    segmentLengths,
+    totalLength,
+    normalizedProgress,
+  );
+  const headingWindow = Math.min(0.045 / totalLength, 0.04);
+  const beforeProgress = closed
+    ? normalizeProgress(normalizedProgress - headingWindow)
+    : Math.max(0, normalizedProgress - headingWindow);
+  const afterProgress = closed
+    ? normalizeProgress(normalizedProgress + headingWindow)
+    : Math.min(1, normalizedProgress + headingWindow);
+  const before = sampleFacilityPathPosition(
+    points,
+    segmentLengths,
+    totalLength,
+    beforeProgress,
+  );
+  const after = sampleFacilityPathPosition(
+    points,
+    segmentLengths,
+    totalLength,
+    afterProgress,
+  );
+  return {
+    ...position,
+    rotationY: Math.atan2(after.x - before.x, after.z - before.z),
+  };
+}
+
+function sampleFacilityPathPosition(
+  points: FacilityVehiclePath["points"],
+  segmentLengths: readonly number[],
+  totalLength: number,
+  progress: number,
+): Pick<FacilityRouteSample, "x" | "z"> {
+  let distance = progress * totalLength;
   for (let index = 0; index < segmentLengths.length; index += 1) {
     const length = segmentLengths[index] ?? 0;
-    const from = route.points[index];
-    const to = route.points[index + 1];
+    const from = points[index];
+    const to = points[index + 1];
     if (from === undefined || to === undefined) {
       continue;
     }
@@ -1204,13 +1288,31 @@ export function sampleFacilityRoute(
       return {
         x: from[0] + (to[0] - from[0]) * ratio,
         z: from[1] + (to[1] - from[1]) * ratio,
-        rotationY: Math.atan2(to[0] - from[0], to[1] - from[1]),
       };
     }
     distance -= length;
   }
-  const [x, z] = route.points[route.points.length - 1];
-  return { x, z, rotationY: 0 };
+  const [x, z] = points[points.length - 1];
+  return { x, z };
+}
+
+function facilityPathLength(
+  points: readonly FacilityRoutePoint[],
+): number {
+  return points.slice(1).reduce((total, point, index) => {
+    const previous = points[index];
+    if (previous === undefined) {
+      return total;
+    }
+    return total + Math.hypot(
+      point[0] - previous[0],
+      point[1] - previous[1],
+    );
+  }, 0);
+}
+
+function normalizeProgress(progress: number): number {
+  return ((progress % 1) + 1) % 1;
 }
 
 function facilityElement(
