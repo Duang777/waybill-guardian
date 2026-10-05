@@ -337,8 +337,12 @@ func TestKPIsReturnZeroRealizedImpactWithoutExecutedRuns(t *testing.T) {
 }
 
 func TestKPIsRequireCompletedRunWithMatchingExecution(t *testing.T) {
-	service, ids := openSimulatedOverviewService(t)
+	var now time.Time
+	service, ids := openSimulatedOverviewServiceWithConfig(t, nil, func() time.Time {
+		return now
+	})
 	items := newestAnomaliesWithImpact(t, service, 2)
+	now = items[0].LastRecordedAt
 	executedRunID := domain.RunID("run-realized-impact")
 	unconfirmedRunID := domain.RunID("run-unconfirmed-impact")
 	appendRunStarted(t, service, executedRunID, items[0].WaybillID)
@@ -368,6 +372,7 @@ func TestKPIsRequireCompletedRunWithMatchingExecution(t *testing.T) {
 	assertRealizedImpact(t, report, *timeMetric.Value, *costMetric.Value)
 
 	latestRunID := domain.RunID("run-latest-without-execution")
+	now = now.Add(time.Second)
 	appendRunStarted(t, service, latestRunID, items[0].WaybillID)
 	appendRunCompleted(t, service, latestRunID)
 	report, err = service.KPIs(context.Background(), ids, 24*time.Hour)
@@ -375,6 +380,37 @@ func TestKPIsRequireCompletedRunWithMatchingExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertRealizedImpact(t, report, 0, 0)
+}
+
+func TestKPIsExcludeRunsCompletedOutsideWindow(t *testing.T) {
+	var now time.Time
+	service, ids := openSimulatedOverviewServiceWithConfig(t, nil, func() time.Time {
+		return now
+	})
+	item := newestAnomaliesWithImpact(t, service, 1)[0]
+	now = item.LastRecordedAt.Add(-25 * time.Hour)
+
+	runID := domain.RunID("run-outside-kpi-window")
+	appendRunStarted(t, service, runID, item.WaybillID)
+	appendHumanApprovedExecution(
+		t,
+		service,
+		runID,
+		domain.ApprovalID("approval-outside-kpi-window"),
+	)
+	appendRunCompleted(t, service, runID)
+
+	report, err := service.KPIs(t.Context(), ids, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRealizedImpact(t, report, 0, 0)
+	for _, metric := range report.Metrics {
+		if metric.Key == "anomaly_closure_rate_pct" &&
+			(metric.Value == nil || *metric.Value != 0) {
+			t.Fatalf("closure metric includes a run outside the window: %+v", metric)
+		}
+	}
 }
 
 func TestOverviewCachesBriefByAuthorizedScopeAndReturnsClones(t *testing.T) {
@@ -412,6 +448,45 @@ func TestOverviewCachesBriefByAuthorizedScopeAndReturnsClones(t *testing.T) {
 	}
 }
 
+func TestOverviewRetriesCachedBriefFailureAfterTTL(t *testing.T) {
+	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
+	generator := &briefGeneratorStub{err: errors.New("provider unavailable")}
+	service, ids := openSimulatedOverviewServiceWithConfig(t, generator, func() time.Time {
+		return now
+	})
+
+	first, err := service.Overview(t.Context(), ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Brief.FallbackReason != BriefFallbackProvider {
+		t.Fatalf("first fallback reason = %q", first.Brief.FallbackReason)
+	}
+
+	generator.mu.Lock()
+	generator.err = nil
+	generator.result = generatedBriefFixture()
+	generator.mu.Unlock()
+	if _, err := service.Overview(t.Context(), ids); err != nil {
+		t.Fatal(err)
+	}
+	if generator.callCount() != 1 {
+		t.Fatalf("failure cache was not reused before TTL: %d calls", generator.callCount())
+	}
+
+	now = now.Add(time.Minute)
+	recovered, err := service.Overview(t.Context(), ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Brief.Mode != "model_read_only" {
+		t.Fatalf("brief did not recover after failure TTL: %+v", recovered.Brief)
+	}
+	if generator.callCount() != 2 {
+		t.Fatalf("generator calls = %d, want 2 after failure TTL", generator.callCount())
+	}
+}
+
 func TestOverviewCoalescesConcurrentBriefGeneration(t *testing.T) {
 	generator := &blockingBriefGenerator{
 		result:  generatedBriefFixture(),
@@ -439,6 +514,87 @@ func TestOverviewCoalescesConcurrentBriefGeneration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+	if generator.callCount() != 1 {
+		t.Fatalf("generator calls = %d, want 1", generator.callCount())
+	}
+}
+
+func TestOverviewCancelsBriefGenerationWithoutWaiters(t *testing.T) {
+	generator := &blockingBriefGenerator{
+		result:   generatedBriefFixture(),
+		started:  make(chan struct{}),
+		release:  make(chan struct{}),
+		canceled: make(chan struct{}),
+	}
+	service, ids := openSimulatedOverviewServiceWithBrief(t, generator)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{}, 1)
+	go func() {
+		_, _ = service.Overview(ctx, ids)
+		done <- struct{}{}
+	}()
+
+	<-generator.started
+	cancel()
+	select {
+	case <-generator.canceled:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("brief generation continued after its only waiter canceled")
+	}
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("overview did not return after request cancellation")
+	}
+}
+
+func TestOverviewKeepsBriefGenerationForRemainingWaiter(t *testing.T) {
+	generator := &blockingBriefGenerator{
+		result:   generatedBriefFixture(),
+		started:  make(chan struct{}),
+		release:  make(chan struct{}),
+		canceled: make(chan struct{}),
+	}
+	service, ids := openSimulatedOverviewServiceWithBrief(t, generator)
+	firstCtx, cancelFirst := context.WithCancel(t.Context())
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := service.Overview(firstCtx, ids)
+		firstDone <- err
+	}()
+	<-generator.started
+
+	secondDone := make(chan struct {
+		overview Overview
+		err      error
+	}, 1)
+	go func() {
+		overview, err := service.Overview(t.Context(), ids)
+		secondDone <- struct {
+			overview Overview
+			err      error
+		}{overview: overview, err: err}
+	}()
+	waitForBriefCacheWaiters(t, service.briefCache, 2)
+
+	cancelFirst()
+	select {
+	case <-generator.canceled:
+		t.Fatal("brief generation stopped while another waiter remained")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(generator.release)
+
+	if err := <-firstDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("first overview error = %v, want context canceled", err)
+	}
+	second := <-secondDone
+	if second.err != nil {
+		t.Fatal(second.err)
+	}
+	if second.overview.Brief.Mode != "model_read_only" {
+		t.Fatalf("remaining waiter received %+v", second.overview.Brief)
 	}
 	if generator.callCount() != 1 {
 		t.Fatalf("generator calls = %d, want 1", generator.callCount())
@@ -538,6 +694,14 @@ func openSimulatedOverviewServiceWithBrief(
 	t *testing.T,
 	briefGenerator agentkit.BriefGenerator,
 ) (*Service, []domain.WaybillID) {
+	return openSimulatedOverviewServiceWithConfig(t, briefGenerator, nil)
+}
+
+func openSimulatedOverviewServiceWithConfig(
+	t *testing.T,
+	briefGenerator agentkit.BriefGenerator,
+	clock func() time.Time,
+) (*Service, []domain.WaybillID) {
 	t.Helper()
 	loaded, err := filestore.Load(filepath.Join("..", "..", "data", "simulated", "waybills-v1.json"))
 	if err != nil {
@@ -549,6 +713,7 @@ func openSimulatedOverviewServiceWithBrief(
 		ReadSource:          loaded.Source.String(),
 		EvidenceStepMinutes: 8,
 		BriefGenerator:      briefGenerator,
+		Clock:               clock,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -659,12 +824,14 @@ func (s *briefGeneratorStub) callCount() int {
 }
 
 type blockingBriefGenerator struct {
-	result  agentkit.GeneratedBrief
-	started chan struct{}
-	release chan struct{}
-	calls   int
-	once    sync.Once
-	mu      sync.Mutex
+	result   agentkit.GeneratedBrief
+	started  chan struct{}
+	release  chan struct{}
+	canceled chan struct{}
+	calls    int
+	once     sync.Once
+	cancel   sync.Once
+	mu       sync.Mutex
 }
 
 func (s *blockingBriefGenerator) Generate(
@@ -679,6 +846,11 @@ func (s *blockingBriefGenerator) Generate(
 	})
 	select {
 	case <-ctx.Done():
+		s.cancel.Do(func() {
+			if s.canceled != nil {
+				close(s.canceled)
+			}
+		})
 		return agentkit.GeneratedBrief{}, ctx.Err()
 	case <-s.release:
 		return s.result, nil
@@ -816,4 +988,22 @@ func assertRealizedImpact(t *testing.T, report KPIReport, wantTime, wantCost flo
 			t.Fatalf("metric %q = %+v, want %v", key, metric, want)
 		}
 	}
+}
+
+func waitForBriefCacheWaiters(t *testing.T, cache *briefCache, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		cache.mu.Lock()
+		waiters := 0
+		for _, entry := range cache.entries {
+			waiters += entry.waiters
+		}
+		cache.mu.Unlock()
+		if waiters == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("brief cache did not reach %d waiters", want)
 }

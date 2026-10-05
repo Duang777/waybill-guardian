@@ -162,7 +162,7 @@ const executiveBriefSchema = z.discriminatedUnion("mode", [
   z
     .object({
       mode: z.literal("model_read_only"),
-      source: z.string().min(1).refine((source) => source !== "rules"),
+      source: z.string().min(1),
       items: z.array(executiveBriefItemSchema).length(3),
     })
     .strict(),
