@@ -243,6 +243,8 @@ describe("buildSceneView", () => {
     expect(view.markers).toHaveLength(0);
     expect(view.riskHubs).toHaveLength(0);
     expect(view.facilityParts).toHaveLength(0);
+    expect(view.detail.transportRoutes).toHaveLength(3);
+    expect(view.detail.vehicles.length).toBeGreaterThan(0);
     expect(new Set(view.detail.elements.map((part) => part.kind))).toEqual(
       new Set([
         "ground",
@@ -308,6 +310,8 @@ describe("buildSceneView", () => {
         dockBays: view.detail.dockBays,
         storageSlots: view.detail.storageSlots,
         occupiedSlots: view.detail.occupiedSlots,
+        transportRoutes: view.detail.transportRoutes.length,
+        vehicles: view.detail.vehicles.length,
       };
     });
 
@@ -316,21 +320,29 @@ describe("buildSceneView", () => {
         dockBays: 4,
         storageSlots: 6,
         occupiedSlots: 0,
+        transportRoutes: 3,
+        vehicles: 1,
       }),
       expect.objectContaining({
         dockBays: 6,
         storageSlots: 9,
         occupiedSlots: 3,
+        transportRoutes: 3,
+        vehicles: 3,
       }),
       expect.objectContaining({
         dockBays: 9,
         storageSlots: 13,
         occupiedSlots: 7,
+        transportRoutes: 3,
+        vehicles: 4,
       }),
       expect.objectContaining({
         dockBays: 10,
         storageSlots: 16,
         occupiedSlots: 16,
+        transportRoutes: 3,
+        vehicles: 5,
       }),
     ]);
     expect(new Set(details.map((detail) => detail.signature)).size).toBe(4);

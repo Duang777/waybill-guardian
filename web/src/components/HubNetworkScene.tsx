@@ -26,9 +26,15 @@ import type {
 } from "../api";
 import {
   buildFacilityLayouts,
+  sampleFacilityRoute,
   type FacilityElementKind,
   type FacilityLayout,
   type FacilityLayoutKind,
+  type FacilityRoutePoint,
+  type FacilityTransportRoute,
+  type FacilityTransportRouteStatus,
+  type FacilityVehicle,
+  type FacilityVehicleState,
 } from "./facilityLayout";
 
 type HubNetworkSceneProps = {
@@ -57,6 +63,11 @@ export type SceneStats = {
   storageSlots: number;
   occupiedSlots: number;
   warehouseCount: number;
+  transportRoutes: number;
+  vehicles: number;
+  movingVehicles: number;
+  loadingVehicles: number;
+  alertVehicles: number;
   layoutKind: FacilityLayoutKind | null;
   layoutLabel: string;
   layoutSignature: string;
@@ -170,6 +181,10 @@ const facilityPartMatrix = new Matrix4();
 const facilityPartColor = new Color();
 const detailPartTransform = new Object3D();
 const detailFacilityScale = 3.2;
+const detailRouteTransform = new Object3D();
+const detailVehicleRootTransform = new Object3D();
+const detailVehiclePartTransform = new Object3D();
+const detailVehiclePartMatrix = new Matrix4();
 
 const hubArchetypes = [
   "local-depot",
@@ -378,6 +393,17 @@ export default function HubNetworkScene({
       storageSlots: view.detail?.storageSlots ?? 0,
       occupiedSlots: view.detail?.occupiedSlots ?? 0,
       warehouseCount: view.detail?.warehouseCount ?? 0,
+      transportRoutes: view.detail?.transportRoutes.length ?? 0,
+      vehicles: view.detail?.vehicles.length ?? 0,
+      movingVehicles:
+        view.detail?.vehicles.filter((vehicle) => vehicle.state === "moving")
+          .length ?? 0,
+      loadingVehicles:
+        view.detail?.vehicles.filter((vehicle) => vehicle.state === "loading")
+          .length ?? 0,
+      alertVehicles:
+        view.detail?.vehicles.filter((vehicle) => vehicle.state === "alert")
+          .length ?? 0,
       layoutKind: view.detail?.kind ?? null,
       layoutLabel: view.detail?.label ?? "",
       layoutSignature: view.detail?.signature ?? "",
@@ -429,7 +455,12 @@ export default function HubNetworkScene({
           />
         </>
       ) : (
-        <FacilityDetailGround hub={view.selectedHub} detail={view.detail} />
+        <FacilityDetailGround
+          hub={view.selectedHub}
+          detail={view.detail}
+          reducedMotion={reducedMotion}
+          paused={paused}
+        />
       )}
       <CameraRig
         selectedHub={view.selectedHub}
@@ -626,9 +657,13 @@ function composeFacilityPartMatrix(
 function FacilityDetailGround({
   hub,
   detail,
+  reducedMotion,
+  paused,
 }: {
   hub: SceneHub;
   detail: FacilityLayout;
+  reducedMotion: boolean;
+  paused: boolean;
 }) {
   const mesh = useRef<InstancedMesh>(null);
 
@@ -678,8 +713,311 @@ function FacilityDetailGround({
           metalness={0.01}
         />
       </instancedMesh>
+      <FacilityTransportRoutes routes={detail.transportRoutes} />
+      <FacilityVehicleInstances
+        routes={detail.transportRoutes}
+        vehicles={detail.vehicles}
+        reducedMotion={reducedMotion}
+        paused={paused}
+      />
     </group>
   );
+}
+
+type FacilityRouteSegment = {
+  status: FacilityTransportRouteStatus;
+  from: FacilityRoutePoint;
+  to: FacilityRoutePoint;
+};
+
+function FacilityTransportRoutes({
+  routes,
+}: {
+  routes: readonly FacilityTransportRoute[];
+}) {
+  const segments = useMemo(
+    () =>
+      routes.flatMap((route) =>
+        route.points.slice(1).flatMap((point, index) => {
+          const previous = route.points[index];
+          return previous === undefined
+            ? []
+            : [{
+                status: route.status,
+                from: previous,
+                to: point,
+              }];
+        }),
+      ),
+    [routes],
+  );
+  const activeSegments = segments.filter(
+    (segment) => segment.status === "active",
+  );
+  const riskSegments = segments.filter(
+    (segment) => segment.status === "risk",
+  );
+
+  return (
+    <group>
+      <FacilityRouteSegmentInstances
+        segments={activeSegments}
+        color="#0b746d"
+        width={0.024}
+      />
+      <FacilityRouteSegmentInstances
+        segments={riskSegments}
+        color="#df3f30"
+        width={0.032}
+      />
+    </group>
+  );
+}
+
+function FacilityRouteSegmentInstances({
+  segments,
+  color,
+  width,
+}: {
+  segments: readonly FacilityRouteSegment[];
+  color: string;
+  width: number;
+}) {
+  const mesh = useRef<InstancedMesh>(null);
+
+  useLayoutEffect(() => {
+    if (mesh.current === null) {
+      return;
+    }
+    segments.forEach((segment, index) => {
+      const deltaX = segment.to[0] - segment.from[0];
+      const deltaZ = segment.to[1] - segment.from[1];
+      const length = Math.hypot(deltaX, deltaZ);
+      detailRouteTransform.position.set(
+        (segment.from[0] + segment.to[0]) / 2,
+        -0.143,
+        (segment.from[1] + segment.to[1]) / 2,
+      );
+      detailRouteTransform.rotation.set(
+        0,
+        Math.atan2(deltaX, deltaZ),
+        0,
+      );
+      detailRouteTransform.scale.set(width, 0.012, length);
+      detailRouteTransform.updateMatrix();
+      mesh.current?.setMatrixAt(index, detailRouteTransform.matrix);
+    });
+    mesh.current.instanceMatrix.needsUpdate = true;
+  }, [segments, width]);
+
+  if (segments.length === 0) {
+    return null;
+  }
+
+  return (
+    <instancedMesh
+      ref={mesh}
+      args={[undefined, undefined, segments.length]}
+      frustumCulled={false}
+      raycast={() => undefined}
+    >
+      <boxGeometry args={[1, 1, 1]} />
+      <meshBasicMaterial color={color} toneMapped={false} />
+    </instancedMesh>
+  );
+}
+
+function FacilityVehicleInstances({
+  routes,
+  vehicles,
+  reducedMotion,
+  paused,
+}: {
+  routes: readonly FacilityTransportRoute[];
+  vehicles: readonly FacilityVehicle[];
+  reducedMotion: boolean;
+  paused: boolean;
+}) {
+  const bodyMesh = useRef<InstancedMesh>(null);
+  const cabinMesh = useRef<InstancedMesh>(null);
+  const chassisMesh = useRef<InstancedMesh>(null);
+  const elapsed = useRef(0);
+  const { gl } = useThree();
+  const routeByKind = useMemo(
+    () => new Map(routes.map((route) => [route.kind, route])),
+    [routes],
+  );
+
+  const updateVehicles = useCallback(
+    (time: number) => {
+      const body = bodyMesh.current;
+      const cabin = cabinMesh.current;
+      const chassis = chassisMesh.current;
+      if (
+        body === null ||
+        cabin === null ||
+        chassis === null
+      ) {
+        return;
+      }
+      let firstPosition = "";
+      vehicles.forEach((vehicle, index) => {
+        const route = routeByKind.get(vehicle.routeKind);
+        if (route === undefined) {
+          return;
+        }
+        const progress = vehicle.phase + time * vehicle.speed;
+        const sample = sampleFacilityRoute(route, progress);
+        if (index === 0) {
+          firstPosition =
+            `${sample.x.toFixed(4)},${sample.z.toFixed(4)}`;
+        }
+        detailVehicleRootTransform.position.set(
+          sample.x,
+          -0.105,
+          sample.z,
+        );
+        detailVehicleRootTransform.rotation.set(
+          0,
+          sample.rotationY,
+          0,
+        );
+        detailVehicleRootTransform.scale.set(1, 1, 1);
+        detailVehicleRootTransform.updateMatrix();
+
+        setVehiclePartMatrix(body, index, {
+          x: 0,
+          y: 0,
+          z: 0,
+          width: 0.058,
+          height: 0.055,
+          depth: 0.13,
+        });
+        setVehiclePartMatrix(cabin, index, {
+          x: 0,
+          y: 0.008,
+          z: 0.042,
+          width: 0.054,
+          height: 0.067,
+          depth: 0.046,
+        });
+        setVehiclePartMatrix(chassis, index, {
+          x: 0,
+          y: -0.032,
+          z: -0.004,
+          width: 0.068,
+          height: 0.018,
+          depth: 0.14,
+        });
+      });
+      body.instanceMatrix.needsUpdate = true;
+      cabin.instanceMatrix.needsUpdate = true;
+      chassis.instanceMatrix.needsUpdate = true;
+      if (import.meta.env.DEV) {
+        gl.domElement.dataset.facilityVehiclePosition = firstPosition;
+      }
+    },
+    [gl, routeByKind, vehicles],
+  );
+
+  useLayoutEffect(() => {
+    elapsed.current = 0;
+    const body = bodyMesh.current;
+    vehicles.forEach((vehicle, index) => {
+      facilityPartColor.set(vehicleColor(vehicle.state));
+      body?.setColorAt(index, facilityPartColor);
+    });
+    if (body?.instanceColor !== null && body?.instanceColor !== undefined) {
+      body.instanceColor.needsUpdate = true;
+    }
+    updateVehicles(0);
+  }, [updateVehicles, vehicles]);
+
+  useFrame((_, delta) => {
+    if (reducedMotion || paused) {
+      return;
+    }
+    elapsed.current += Math.min(delta, 0.05);
+    updateVehicles(elapsed.current);
+  });
+
+  return (
+    <group>
+      <instancedMesh
+        ref={chassisMesh}
+        args={[undefined, undefined, vehicles.length]}
+        frustumCulled={false}
+        raycast={() => undefined}
+      >
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial color="#253431" roughness={0.82} />
+      </instancedMesh>
+      <instancedMesh
+        ref={bodyMesh}
+        args={[undefined, undefined, vehicles.length]}
+        frustumCulled={false}
+        raycast={() => undefined}
+      >
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial
+          color="#ffffff"
+          roughness={0.68}
+          metalness={0.02}
+        />
+      </instancedMesh>
+      <instancedMesh
+        ref={cabinMesh}
+        args={[undefined, undefined, vehicles.length]}
+        frustumCulled={false}
+        raycast={() => undefined}
+      >
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial color="#edf1ee" roughness={0.76} />
+      </instancedMesh>
+    </group>
+  );
+}
+
+function setVehiclePartMatrix(
+  mesh: InstancedMesh,
+  index: number,
+  part: {
+    x: number;
+    y: number;
+    z: number;
+    width: number;
+    height: number;
+    depth: number;
+  },
+) {
+  detailVehiclePartTransform.position.set(part.x, part.y, part.z);
+  detailVehiclePartTransform.rotation.set(0, 0, 0);
+  detailVehiclePartTransform.scale.set(
+    part.width,
+    part.height,
+    part.depth,
+  );
+  detailVehiclePartTransform.updateMatrix();
+  detailVehiclePartMatrix.multiplyMatrices(
+    detailVehicleRootTransform.matrix,
+    detailVehiclePartTransform.matrix,
+  );
+  mesh.setMatrixAt(index, detailVehiclePartMatrix);
+}
+
+function vehicleColor(state: FacilityVehicleState): string {
+  switch (state) {
+    case "moving":
+      return "#243b38";
+    case "loading":
+      return "#c58d2d";
+    case "alert":
+      return "#df3f30";
+    default: {
+      const exhaustive: never = state;
+      return exhaustive;
+    }
+  }
 }
 
 function detailElementColor(
@@ -960,18 +1298,22 @@ function CameraRig({
     () =>
       selectedHub === undefined
         ? new Vector3(0, 0, 0)
-        : new Vector3(selectedHub.position.x, 0.4, selectedHub.position.z),
+        : new Vector3(
+            selectedHub.position.x - 0.42,
+            -0.08,
+            selectedHub.position.z + 0.08,
+          ),
     [selectedHub],
   );
   const desiredPosition = useMemo(
     () =>
       selectedHub === undefined
         ? new Vector3(11, 18, 15)
-        : focus.clone().add(new Vector3(4.8, 7.2, 5.8)),
+        : focus.clone().add(new Vector3(5.2, 7.8, 6.3)),
     [focus, selectedHub],
   );
   const baseZoom = Math.min(size.width / 23, size.height / 14);
-  const desiredZoom = baseZoom * (selectedHub === undefined ? 1 : 2.8);
+  const desiredZoom = baseZoom * (selectedHub === undefined ? 1 : 3.05);
 
   useEffect(() => {
     if (!(camera instanceof OrthographicCamera)) {

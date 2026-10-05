@@ -199,6 +199,15 @@ try {
     warehouseCount: Number(
       await networkMap.getAttribute("data-scene-warehouse-count"),
     ),
+    transportRoutes: Number(
+      await networkMap.getAttribute("data-scene-transport-routes"),
+    ),
+    vehicles: Number(
+      await networkMap.getAttribute("data-scene-vehicles"),
+    ),
+    movingVehicles: Number(
+      await networkMap.getAttribute("data-scene-moving-vehicles"),
+    ),
     layout: await networkMap.getAttribute("data-scene-layout"),
     layoutSignature: await networkMap.getAttribute(
       "data-scene-layout-signature",
@@ -213,11 +222,28 @@ try {
       detailStats.dockBays >= 4 &&
       detailStats.storageSlots >= 6 &&
       detailStats.warehouseCount >= 2 &&
+      detailStats.transportRoutes === 3 &&
+      detailStats.vehicles > 0 &&
+      detailStats.movingVehicles > 0 &&
       detailStats.layout !== "" &&
       detailStats.layoutSignature !== "",
     `facility detail layers are incomplete: ${JSON.stringify(detailStats)}`,
   );
+  const firstVehiclePosition = await networkCanvas.getAttribute(
+    "data-facility-vehicle-position",
+  );
   await page.waitForTimeout(1_400);
+  const movedVehiclePosition = await networkCanvas.getAttribute(
+    "data-facility-vehicle-position",
+  );
+  assert(
+    typeof firstVehiclePosition === "string" &&
+      firstVehiclePosition !== "" &&
+      typeof movedVehiclePosition === "string" &&
+      movedVehiclePosition !== "" &&
+      movedVehiclePosition !== firstVehiclePosition,
+    `facility vehicles did not move: ${firstVehiclePosition} -> ${movedVehiclePosition}`,
+  );
   const detailPixelProbe = await probeCanvasPixels(networkCanvas);
   assert(
     detailPixelProbe !== null && detailPixelProbe.colors >= 3,
@@ -290,6 +316,28 @@ try {
       path: join(artifactDir, `facility-layout-${layout}.png`),
     });
   }
+  const alertHub = overviewBody.hubs.find((hub) => hub.anomalies > 0);
+  assert(alertHub !== undefined, "overview fixture has no alert facility");
+  await hubPicker.selectOption(alertHub.hub_id);
+  await page.waitForFunction(
+    (hubID) => {
+      const stage = document.querySelector(
+        '[data-network-renderer="webgl"]',
+      );
+      return (
+        stage?.getAttribute("data-scene-selected-hub") === hubID &&
+        Number(stage.getAttribute("data-scene-alert-vehicles")) > 0
+      );
+    },
+    alertHub.hub_id,
+  );
+  const alertVehicleCount = Number(
+    await networkMap.getAttribute("data-scene-alert-vehicles"),
+  );
+  await page.waitForTimeout(500);
+  await networkCanvas.screenshot({
+    path: join(artifactDir, "facility-transport-alert.png"),
+  });
   await page
     .getByRole("button", { name: "返回全国视角", exact: true })
     .click();
@@ -574,6 +622,10 @@ try {
           dockBays: detailStats.dockBays,
           storageSlots: detailStats.storageSlots,
           warehouseCount: detailStats.warehouseCount,
+          transportRoutes: detailStats.transportRoutes,
+          vehicles: detailStats.vehicles,
+          movingVehicles: detailStats.movingVehicles,
+          alertVehicles: alertVehicleCount,
           layout: detailStats.layout,
         },
         facility_layouts: [...facilityLayouts.keys()],
@@ -734,12 +786,33 @@ async function verifyReducedMotion(browser, webURL) {
           ?.getAttribute("data-scene-ready") === "true",
     );
     const canvas = stage.locator("canvas");
+    await page
+      .getByLabel("选择公路港", { exact: true })
+      .selectOption({ index: 1 });
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[data-network-renderer="webgl"]')
+          ?.getAttribute("data-scene-mode") === "facility",
+    );
+    const firstPosition = await canvas.getAttribute(
+      "data-facility-vehicle-position",
+    );
     const firstFrame = await canvas.screenshot();
     await page.waitForTimeout(700);
+    const secondPosition = await canvas.getAttribute(
+      "data-facility-vehicle-position",
+    );
     const secondFrame = await canvas.screenshot();
     assert(
       firstFrame.equals(secondFrame),
-      "reduced-motion network continued animating",
+      "reduced-motion facility continued animating",
+    );
+    assert(
+      typeof firstPosition === "string" &&
+        firstPosition !== "" &&
+        secondPosition === firstPosition,
+      `reduced-motion vehicle moved: ${firstPosition} -> ${secondPosition}`,
     );
   } finally {
     await page.close();
@@ -821,6 +894,14 @@ async function verifyWebGLFallback(webURL) {
     assert(
       (await facilityMap.locator("rect").count()) >= 20,
       "SVG fallback did not render facility structures",
+    );
+    assert(
+      (await facilityMap.locator("polyline").count()) === 3,
+      "SVG fallback did not render all local transport routes",
+    );
+    assert(
+      (await facilityMap.locator("[data-vehicle-state]").count()) > 0,
+      "SVG fallback did not render facility vehicles",
     );
     const firstSignature = await page
       .locator('[data-fallback-mode="facility"]')

@@ -1,17 +1,22 @@
 import { describe, expect, it } from "vitest";
 import type { HubOverview, RouteOverview } from "../api";
-import { buildFacilityLayouts } from "./facilityLayout";
+import {
+  buildFacilityLayouts,
+  sampleFacilityRoute,
+} from "./facilityLayout";
 
 function hub({
   id,
   capacity,
   inFlight,
   anomalies,
+  handling = 0,
 }: {
   id: string;
   capacity: number;
   inFlight: number;
   anomalies: number;
+  handling?: number;
 }): HubOverview {
   return {
     hub_id: id,
@@ -24,7 +29,7 @@ function hub({
     waybills: Math.max(inFlight, anomalies, 1),
     in_flight: inFlight,
     anomalies,
-    handling: 0,
+    handling,
     closed: 0,
   };
 }
@@ -104,6 +109,87 @@ describe("buildFacilityLayouts", () => {
           reversed.get(item.hub_id)?.signature,
         ]),
       ),
+    );
+  });
+
+  it("connects the gate, dock, yard, and exit with stable local routes", () => {
+    const layouts = buildFacilityLayouts(hubs, routes);
+
+    for (const layout of layouts.values()) {
+      expect(layout.transportRoutes.map((item) => item.kind)).toEqual([
+        "gate-to-dock",
+        "dock-to-yard",
+        "yard-to-gate",
+      ]);
+      const [inbound, transfer, outbound] = layout.transportRoutes;
+      expect(inbound).toBeDefined();
+      expect(transfer).toBeDefined();
+      expect(outbound).toBeDefined();
+      if (
+        inbound === undefined ||
+        transfer === undefined ||
+        outbound === undefined
+      ) {
+        continue;
+      }
+      expect(inbound.points.at(-1)).toEqual(transfer.points[0]);
+      expect(transfer.points.at(-1)).toEqual(outbound.points[0]);
+      expect(outbound.points.at(-1)).toEqual(inbound.points[0]);
+      expect(layout.vehicles.length).toBeGreaterThan(0);
+      expect(layout.vehicles.length).toBeLessThanOrEqual(6);
+    }
+  });
+
+  it("derives vehicle states and route risk from operating data", () => {
+    const activeHub = hub({
+      id: "ACTIVE",
+      capacity: 4_000,
+      inFlight: 12,
+      anomalies: 1,
+      handling: 2,
+    });
+    const activeRoute = {
+      ...route("ACTIVE", 1_200),
+      anomalies: 2,
+      delay_heat: 70,
+      max_risk: 82,
+    } satisfies RouteOverview;
+    const layout = buildFacilityLayouts(
+      [activeHub],
+      [activeRoute],
+    ).get(activeHub.hub_id);
+
+    expect(layout?.transportRoutes.map((item) => item.status)).toEqual([
+      "risk",
+      "risk",
+      "active",
+    ]);
+    expect(layout?.vehicles.map((vehicle) => vehicle.state)).toEqual([
+      "alert",
+      "loading",
+      "loading",
+      "moving",
+      "moving",
+      "moving",
+    ]);
+  });
+
+  it("samples a vehicle position deterministically along the route", () => {
+    const layout = buildFacilityLayouts(hubs, routes).get("CROSS");
+    const route = layout?.transportRoutes[0];
+    expect(route).toBeDefined();
+    if (route === undefined) {
+      return;
+    }
+
+    expect(sampleFacilityRoute(route, 0)).toEqual(
+      sampleFacilityRoute(route, 1),
+    );
+    expect(sampleFacilityRoute(route, 0.35)).toEqual(
+      sampleFacilityRoute(route, 0.35),
+    );
+    expect(sampleFacilityRoute(route, 0.35)).not.toEqual(
+      sampleFacilityRoute(route, 0),
     );
   });
 });

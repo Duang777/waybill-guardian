@@ -7,8 +7,11 @@ import type {
 import styles from "../overview.module.css";
 import {
   buildFacilityLayouts,
+  sampleFacilityRoute,
   type FacilityElementKind,
   type FacilityLayout,
+  type FacilityTransportRoute,
+  type FacilityVehicleState,
 } from "./facilityLayout";
 
 type NetworkMapProps = {
@@ -16,6 +19,8 @@ type NetworkMapProps = {
   routes: readonly RouteOverview[];
   anomalies: readonly AnomalyOverview[];
   selectedHubID: string | null;
+  reducedMotion: boolean;
+  paused: boolean;
   onSelectHub: (hubID: string) => void;
 };
 
@@ -31,6 +36,8 @@ export function NetworkMap({
   routes,
   anomalies,
   selectedHubID,
+  reducedMotion,
+  paused,
   onSelectHub,
 }: NetworkMapProps) {
   const hubByID = new Map(hubs.map((hub) => [hub.hub_id, hub]));
@@ -44,7 +51,14 @@ export function NetworkMap({
     selectedHubID === null ? undefined : facilityLayouts.get(selectedHubID);
 
   if (selectedHub !== undefined && selectedLayout !== undefined) {
-    return <FacilityDetailMap hub={selectedHub} layout={selectedLayout} />;
+    return (
+      <FacilityDetailMap
+        hub={selectedHub}
+        layout={selectedLayout}
+        reducedMotion={reducedMotion}
+        paused={paused}
+      />
+    );
   }
 
   return (
@@ -161,20 +175,28 @@ export function NetworkMap({
 function FacilityDetailMap({
   hub,
   layout,
+  reducedMotion,
+  paused,
 }: {
   hub: HubOverview;
   layout: FacilityLayout;
+  reducedMotion: boolean;
+  paused: boolean;
 }) {
   const scale = Math.min(
-    760 / layout.campusWidth,
-    400 / layout.campusDepth,
+    650 / layout.campusWidth,
+    380 / layout.campusDepth,
   );
+  const centerX = 570;
+  const centerY = 280;
   return (
     <div
       className={styles.networkMapFrame}
       data-fallback-mode="facility"
       data-fallback-layout={layout.kind}
       data-fallback-signature={layout.signature}
+      data-fallback-routes={layout.transportRoutes.length}
+      data-fallback-vehicles={layout.vehicles.length}
     >
       <svg
         className={styles.networkMap}
@@ -185,19 +207,20 @@ function FacilityDetailMap({
       >
         <title id="facility-map-title">{hub.name}园区详情</title>
         <desc id="facility-map-description">
-          {layout.label}，展示该园区的仓库、月台、货位、场内道路和告警塔。
+          {layout.label}，展示该园区的场内运输链、作业车辆、仓库、月台、
+          货位和告警塔。
         </desc>
         <rect width="1000" height="560" className={styles.mapCanvas} />
         {layout.elements.map((element, index) => {
-          const centerX = 500 + element.x * scale;
-          const centerY = 280 + element.z * scale;
+          const elementCenterX = centerX + element.x * scale;
+          const elementCenterY = centerY + element.z * scale;
           const width = Math.max(element.width * scale, 2);
           const height = Math.max(element.depth * scale, 2);
           return (
           <rect
               key={`${element.kind}-${index}`}
-              x={centerX - width / 2}
-              y={centerY - height / 2}
+              x={elementCenterX - width / 2}
+              y={elementCenterY - height / 2}
               width={width}
               height={height}
               rx={element.kind === "beacon" ? width / 2 : 0}
@@ -205,13 +228,84 @@ function FacilityDetailMap({
               transform={
                 element.rotationY === 0
                   ? undefined
-                  : `rotate(${element.rotationY * (180 / Math.PI)} ${centerX} ${centerY})`
+                  : `rotate(${element.rotationY * (180 / Math.PI)} ${elementCenterX} ${elementCenterY})`
               }
           />
           );
         })}
+        <g className={styles.facilityTransportLayer}>
+          {layout.transportRoutes.map((route) => (
+            <polyline
+              key={route.kind}
+              points={route.points
+                .map(([x, z]) =>
+                  `${centerX + x * scale},${centerY + z * scale}`,
+                )
+                .join(" ")}
+              className={
+                route.status === "risk"
+                  ? styles.facilityRouteRisk
+                  : styles.facilityRouteActive
+              }
+            />
+          ))}
+          {layout.vehicles.map((vehicle) => {
+            const route = layout.transportRoutes.find(
+              (item) => item.kind === vehicle.routeKind,
+            );
+            if (route === undefined) {
+              return null;
+            }
+            const duration = Math.max(6, 1 / Math.max(vehicle.speed, 0.01));
+            const sample = sampleFacilityRoute(route, vehicle.phase);
+            const transform =
+              `translate(${centerX + sample.x * scale} ${
+                centerY + sample.z * scale
+              }) rotate(${90 - sample.rotationY * (180 / Math.PI)})`;
+            return (
+              <g
+                key={vehicle.id}
+                className={styles.facilityVehicle}
+                transform={
+                  reducedMotion || paused || vehicle.speed === 0
+                    ? transform
+                    : undefined
+                }
+                data-vehicle-state={vehicle.state}
+              >
+                {!reducedMotion && !paused && vehicle.speed > 0 && (
+                  <animateMotion
+                    path={facilityRoutePath(route, centerX, centerY, scale)}
+                    begin={`-${vehicle.phase * duration}s`}
+                    dur={`${duration}s`}
+                    repeatCount="indefinite"
+                    rotate="auto"
+                  />
+                )}
+                <rect
+                  x="-11"
+                  y="-6"
+                  width="22"
+                  height="12"
+                  rx="2"
+                  className={fallbackVehicleClass(vehicle.state)}
+                />
+                <rect
+                  x="3"
+                  y="-5"
+                  width="7"
+                  height="10"
+                  rx="1"
+                  className={styles.facilityVehicleCab}
+                />
+              </g>
+            );
+          })}
+        </g>
       </svg>
       <div className={styles.mapLegend} aria-hidden="true">
+        <span><i className={styles.sceneLocalRouteKey} />场内链路</span>
+        <span><i className={styles.sceneVehicleKey} />作业车辆</span>
         <span><i className={styles.sceneWarehouseKey} />仓库</span>
         <span><i className={styles.sceneDockKey} />月台</span>
         <span><i className={styles.sceneCargoKey} />货位</span>
@@ -219,6 +313,37 @@ function FacilityDetailMap({
       </div>
     </div>
   );
+}
+
+function facilityRoutePath(
+  route: FacilityTransportRoute,
+  centerX: number,
+  centerY: number,
+  scale: number,
+): string {
+  return route.points
+    .map(
+      ([x, z], index) =>
+        `${index === 0 ? "M" : "L"} ${centerX + x * scale} ${
+          centerY + z * scale
+        }`,
+    )
+    .join(" ");
+}
+
+function fallbackVehicleClass(state: FacilityVehicleState): string {
+  switch (state) {
+    case "moving":
+      return styles.facilityVehicleMoving;
+    case "loading":
+      return styles.facilityVehicleLoading;
+    case "alert":
+      return styles.facilityVehicleAlert;
+    default: {
+      const exhaustive: never = state;
+      return exhaustive;
+    }
+  }
 }
 
 function fallbackElementClass(

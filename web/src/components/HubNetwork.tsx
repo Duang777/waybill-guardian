@@ -119,6 +119,11 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
       data-scene-storage-slots={sceneStats?.storageSlots ?? ""}
       data-scene-occupied-slots={sceneStats?.occupiedSlots ?? ""}
       data-scene-warehouse-count={sceneStats?.warehouseCount ?? ""}
+      data-scene-transport-routes={sceneStats?.transportRoutes ?? ""}
+      data-scene-vehicles={sceneStats?.vehicles ?? ""}
+      data-scene-moving-vehicles={sceneStats?.movingVehicles ?? ""}
+      data-scene-loading-vehicles={sceneStats?.loadingVehicles ?? ""}
+      data-scene-alert-vehicles={sceneStats?.alertVehicles ?? ""}
       data-scene-layout={sceneStats?.layoutKind ?? ""}
       data-scene-layout-label={sceneStats?.layoutLabel ?? ""}
       data-scene-layout-signature={sceneStats?.layoutSignature ?? ""}
@@ -133,6 +138,8 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
           routes={routes}
           anomalies={anomalies}
           selectedHubID={selectedHubID}
+          reducedMotion={reducedMotion}
+          paused={!pageVisible}
           onSelectHub={setSelectedHubID}
         />
       ) : (
@@ -177,7 +184,12 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
               <span>华南</span>
             </div>
           )}
-          <div className={styles.sceneLegend} aria-hidden="true">
+          <div
+            className={`${styles.sceneLegend} ${
+              selectedHub === undefined ? "" : styles.sceneLegendFacility
+            }`}
+            aria-hidden="true"
+          >
             {selectedHub === undefined ? (
               <>
                 <span><i className={styles.sceneHubKey} />公路港</span>
@@ -186,6 +198,8 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
               </>
             ) : (
               <>
+                <span><i className={styles.sceneLocalRouteKey} />场内链路</span>
+                <span><i className={styles.sceneVehicleKey} />作业车辆</span>
                 <span><i className={styles.sceneWarehouseKey} />仓库</span>
                 <span><i className={styles.sceneDockKey} />月台</span>
                 <span><i className={styles.sceneCargoKey} />货位</span>
@@ -239,7 +253,14 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
         </button>
       </div>
       {selectedHub !== undefined && (
-        <div className={styles.sceneSelection} role="status">
+        <div
+          className={`${styles.sceneSelection} ${
+            sceneStats?.mode === "facility"
+              ? styles.sceneSelectionFacility
+              : ""
+          }`}
+          role="status"
+        >
           <span>{selectedHub.province} / {selectedHub.city}</span>
           <strong>{selectedHub.name}</strong>
           <dl>
@@ -252,17 +273,25 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
           </dl>
           {sceneStats?.mode === "facility" && (
             <p className={styles.sceneFacilityMeta}>
-              <span>
+              <span className={styles.sceneFacilityMetaPrimary}>
                 {sceneStats.layoutLabel} · {sceneStats.warehouseCount} 仓
               </span>
-              <span>月台 {sceneStats.dockBays}</span>
-              <span>
-                货位 {sceneStats.occupiedSlots}/{sceneStats.storageSlots}
+              <span className={styles.sceneFacilityMetaResources}>
+                月台 {sceneStats.dockBays} · 货位{" "}
+                {sceneStats.occupiedSlots}/{sceneStats.storageSlots}
               </span>
-              <span>
-                {selectedHub.anomalies > 0
-                  ? `告警 ${selectedHub.anomalies}`
-                  : "告警正常"}
+              <span className={styles.sceneFacilityMetaFlow}>
+                链路 {sceneStats.transportRoutes} · 车辆 {sceneStats.vehicles}
+                {sceneStats.loadingVehicles > 0
+                  ? ` · 装卸 ${sceneStats.loadingVehicles}`
+                  : ""}
+              </span>
+              <span className={styles.sceneFacilityMetaAlert}>
+                {sceneStats.alertVehicles > 0
+                  ? `异常车 ${sceneStats.alertVehicles}`
+                  : selectedHub.anomalies > 0
+                    ? `告警 ${selectedHub.anomalies}`
+                    : "告警正常"}
               </span>
             </p>
           )}

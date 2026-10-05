@@ -33,6 +33,41 @@ export type FacilityElement = {
   rotationY: number;
 };
 
+export type FacilityTransportRouteKind =
+  | "gate-to-dock"
+  | "dock-to-yard"
+  | "yard-to-gate";
+
+export type FacilityTransportRouteStatus = "active" | "risk";
+
+export type FacilityRoutePoint = readonly [x: number, z: number];
+
+export type FacilityTransportRoute = {
+  kind: FacilityTransportRouteKind;
+  status: FacilityTransportRouteStatus;
+  points: readonly [
+    FacilityRoutePoint,
+    FacilityRoutePoint,
+    ...FacilityRoutePoint[],
+  ];
+};
+
+export type FacilityVehicleState = "moving" | "loading" | "alert";
+
+export type FacilityVehicle = {
+  id: string;
+  routeKind: FacilityTransportRouteKind;
+  state: FacilityVehicleState;
+  phase: number;
+  speed: number;
+};
+
+export type FacilityRouteSample = {
+  x: number;
+  z: number;
+  rotationY: number;
+};
+
 export type FacilityLayout = {
   kind: FacilityLayoutKind;
   label: string;
@@ -44,6 +79,8 @@ export type FacilityLayout = {
   storageSlots: number;
   occupiedSlots: number;
   elements: readonly FacilityElement[];
+  transportRoutes: readonly FacilityTransportRoute[];
+  vehicles: readonly FacilityVehicle[];
 };
 
 type LayoutContext = {
@@ -87,6 +124,16 @@ type YardGrid = {
   xStep: number;
   zStep: number;
   rotationY: number;
+};
+
+type FacilityRoadSpine =
+  | { axis: "x"; z: number }
+  | { axis: "z"; x: number };
+
+type FacilityTopology = {
+  dockLine: DockLine;
+  yard: YardGrid;
+  spine: FacilityRoadSpine;
 };
 
 const layoutLabels = {
@@ -168,18 +215,31 @@ function buildFacilityLayout(
     occupiedSlots,
     signals.activity,
   );
-  addEntrance({
+  const entrance = addEntrance({
     elements,
     campusWidth,
     campusDepth,
     entranceSide: primaryRoute?.entranceSide ?? 1,
     signals,
   });
+  const transportRoutes = buildTransportRoutes({
+    entrance,
+    topology,
+    storageSlots,
+    hubRisk: hub.anomalies > 0,
+    routeRisk: (primaryRoute?.route.anomalies ?? 0) > 0,
+  });
+  const vehicles = buildFacilityVehicles({
+    hub,
+    primaryRoute,
+    signals,
+    transportRoutes,
+  });
 
   const warehouseCount = elements.filter(
     (element) => element.kind === "warehouse",
   ).length;
-  const signature = elements
+  const elementSignature = elements
     .map((element) => [
       element.kind,
       roundSignature(element.x),
@@ -190,6 +250,26 @@ function buildFacilityLayout(
       roundSignature(element.rotationY),
     ].join(","))
     .join("|");
+  const routeSignature = transportRoutes
+    .map((route) => [
+      route.kind,
+      route.status,
+      route.points
+        .map(([x, z]) => `${roundSignature(x)},${roundSignature(z)}`)
+        .join(";"),
+    ].join(","))
+    .join("|");
+  const vehicleSignature = vehicles
+    .map((vehicle) => [
+      vehicle.id,
+      vehicle.routeKind,
+      vehicle.state,
+      roundSignature(vehicle.phase),
+      roundSignature(vehicle.speed),
+    ].join(","))
+    .join("|");
+  const signature =
+    `${elementSignature}#${routeSignature}#${vehicleSignature}`;
 
   return {
     kind,
@@ -202,6 +282,8 @@ function buildFacilityLayout(
     storageSlots,
     occupiedSlots,
     elements,
+    transportRoutes,
+    vehicles,
   };
 }
 
@@ -305,7 +387,7 @@ function addTopology({
   campusDepth: number;
   signals: LayoutSignals;
   warehouseTarget: number;
-}): { dockLine: DockLine; yard: YardGrid } {
+}): FacilityTopology {
   const warehouseHeight = 0.16 + signals.capacity * 0.08;
   const locationSkew = (signals.latitude - 0.5) * 0.16;
   switch (kind) {
@@ -354,6 +436,10 @@ function addTopology({
           xStep: 0.1,
           zStep: 0.1,
           rotationY: locationSkew,
+        },
+        spine: {
+          axis: "z",
+          x: campusWidth * 0.33,
         },
       };
     }
@@ -419,6 +505,10 @@ function addTopology({
           zStep: -0.1,
           rotationY: 0,
         },
+        spine: {
+          axis: "z",
+          x: campusWidth * 0.33,
+        },
       };
     }
     case "courtyard": {
@@ -477,6 +567,10 @@ function addTopology({
           zStep: 0.1,
           rotationY: 0,
         },
+        spine: {
+          axis: "x",
+          z: campusDepth * 0.34,
+        },
       };
     }
     case "split-yard": {
@@ -533,6 +627,10 @@ function addTopology({
           xStep: 0.1,
           zStep: 0.1,
           rotationY: -locationSkew,
+        },
+        spine: {
+          axis: "z",
+          x: 0,
         },
       };
     }
@@ -598,6 +696,10 @@ function addTopology({
           xStep: 0.1,
           zStep: 0.1,
           rotationY: angle,
+        },
+        spine: {
+          axis: "z",
+          x: campusWidth * 0.34,
         },
       };
     }
@@ -827,7 +929,7 @@ function addEntrance({
   campusDepth: number;
   entranceSide: -1 | 1;
   signals: LayoutSignals;
-}) {
+}): FacilityRoutePoint {
   const entranceX = entranceSide * campusWidth * 0.4;
   const entranceZ = campusDepth * (0.34 - signals.longitude * 0.08);
   const towerHeight = 0.24 + signals.risk * 0.34;
@@ -860,6 +962,209 @@ function addEntrance({
       0.075,
     ),
   );
+  return [entranceSide * campusWidth * 0.49, entranceZ];
+}
+
+function buildTransportRoutes({
+  entrance,
+  topology,
+  storageSlots,
+  hubRisk,
+  routeRisk,
+}: {
+  entrance: FacilityRoutePoint;
+  topology: FacilityTopology;
+  storageSlots: number;
+  hubRisk: boolean;
+  routeRisk: boolean;
+}): readonly FacilityTransportRoute[] {
+  const dock = dockRoutePoint(topology.dockLine);
+  const yard = yardRoutePoint(topology.yard, storageSlots);
+  return [
+    {
+      kind: "gate-to-dock",
+      status: routeRisk ? "risk" : "active",
+      points: connectViaSpine(entrance, dock, topology.spine),
+    },
+    {
+      kind: "dock-to-yard",
+      status: hubRisk ? "risk" : "active",
+      points: connectViaSpine(dock, yard, topology.spine),
+    },
+    {
+      kind: "yard-to-gate",
+      status: "active",
+      points: connectViaSpine(yard, entrance, offsetSpine(topology.spine)),
+    },
+  ];
+}
+
+function dockRoutePoint(dockLine: DockLine): FacilityRoutePoint {
+  return dockLine.axis === "x"
+    ? [
+        dockLine.x,
+        dockLine.z + dockLine.facing * dockLine.apronDepth * 0.22,
+      ]
+    : [
+        dockLine.x + dockLine.facing * dockLine.apronDepth * 0.22,
+        dockLine.z,
+      ];
+}
+
+function yardRoutePoint(
+  yard: YardGrid,
+  storageSlots: number,
+): FacilityRoutePoint {
+  const columns = Math.min(yard.columns, storageSlots);
+  const rows = Math.ceil(storageSlots / yard.columns);
+  return [
+    yard.x + ((columns - 1) * yard.xStep) / 2,
+    yard.z + ((rows - 1) * yard.zStep) / 2,
+  ];
+}
+
+function connectViaSpine(
+  from: FacilityRoutePoint,
+  to: FacilityRoutePoint,
+  spine: FacilityRoadSpine,
+): [
+  FacilityRoutePoint,
+  FacilityRoutePoint,
+  FacilityRoutePoint,
+  FacilityRoutePoint,
+] {
+  return spine.axis === "z"
+    ? [
+        from,
+        [spine.x, from[1]],
+        [spine.x, to[1]],
+        to,
+      ]
+    : [
+        from,
+        [from[0], spine.z],
+        [to[0], spine.z],
+        to,
+      ];
+}
+
+function offsetSpine(spine: FacilityRoadSpine): FacilityRoadSpine {
+  return spine.axis === "z"
+    ? { axis: "z", x: spine.x - 0.045 }
+    : { axis: "x", z: spine.z - 0.045 };
+}
+
+function buildFacilityVehicles({
+  hub,
+  primaryRoute,
+  signals,
+  transportRoutes,
+}: {
+  hub: HubOverview;
+  primaryRoute: PrimaryRoute | undefined;
+  signals: LayoutSignals;
+  transportRoutes: readonly FacilityTransportRoute[];
+}): readonly FacilityVehicle[] {
+  const vehicleCount = Math.min(
+    6,
+    Math.max(
+      1,
+      1 +
+        Math.round(signals.activity * 3) +
+        Math.min(hub.anomalies, 1) +
+        Math.min(hub.handling, 1),
+    ),
+  );
+  const alertCount = Math.min(hub.anomalies, vehicleCount, 2);
+  const loadingCount = Math.min(
+    hub.handling,
+    vehicleCount - alertCount,
+    2,
+  );
+  const routeKinds = transportRoutes.map((route) => route.kind);
+  const seed = stableSeed(
+    `${hub.hub_id}:${primaryRoute?.route.route_id ?? "local"}`,
+  );
+
+  return Array.from({ length: vehicleCount }, (_, index) => {
+    const state =
+      index < alertCount
+        ? "alert"
+        : index < alertCount + loadingCount
+          ? "loading"
+          : "moving";
+    const routeKind =
+      state === "alert"
+        ? "dock-to-yard"
+        : state === "loading"
+          ? "gate-to-dock"
+          : routeKinds[(seed + index) % routeKinds.length] ?? "gate-to-dock";
+    return {
+      id: `${hub.hub_id}-VEH-${String(index + 1).padStart(2, "0")}`,
+      routeKind,
+      state,
+      phase:
+        state === "loading"
+          ? 0.94
+          : ((seed % 997) / 997 + index / vehicleCount) % 1,
+      speed:
+        state === "loading"
+          ? 0
+          : 0.035 +
+            signals.throughput * 0.025 +
+            ((seed + index * 7) % 5) * 0.004,
+    };
+  });
+}
+
+function stableSeed(value: string): number {
+  let hash = 2166136261;
+  for (const character of value) {
+    hash ^= character.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+export function sampleFacilityRoute(
+  route: FacilityTransportRoute,
+  progress: number,
+): FacilityRouteSample {
+  const segmentLengths = route.points.slice(1).map((point, index) => {
+    const previous = route.points[index];
+    if (previous === undefined) {
+      return 0;
+    }
+    return Math.hypot(point[0] - previous[0], point[1] - previous[1]);
+  });
+  const totalLength = segmentLengths.reduce(
+    (total, length) => total + length,
+    0,
+  );
+  if (totalLength === 0) {
+    const [x, z] = route.points[0];
+    return { x, z, rotationY: 0 };
+  }
+  let distance = (((progress % 1) + 1) % 1) * totalLength;
+  for (let index = 0; index < segmentLengths.length; index += 1) {
+    const length = segmentLengths[index] ?? 0;
+    const from = route.points[index];
+    const to = route.points[index + 1];
+    if (from === undefined || to === undefined) {
+      continue;
+    }
+    if (distance <= length || index === segmentLengths.length - 1) {
+      const ratio = length === 0 ? 0 : Math.min(distance / length, 1);
+      return {
+        x: from[0] + (to[0] - from[0]) * ratio,
+        z: from[1] + (to[1] - from[1]) * ratio,
+        rotationY: Math.atan2(to[0] - from[0], to[1] - from[1]),
+      };
+    }
+    distance -= length;
+  }
+  const [x, z] = route.points[route.points.length - 1];
+  return { x, z, rotationY: 0 };
 }
 
 function facilityElement(
