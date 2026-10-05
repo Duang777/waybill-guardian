@@ -70,9 +70,9 @@
   height: 38px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid oklch(0.72 0.14 67);
+  border: 1px solid oklch(0.62 0.08 183);
   border-radius: 4px;
-  color: oklch(0.83 0.115 75);
+  color: oklch(0.82 0.055 183);
   font-family: "SFMono-Regular", "JetBrains Mono", monospace;
   font-size: 12px;
   font-weight: 700;
@@ -107,7 +107,7 @@
 }
 
 .waybillPicker > span {
-  color: oklch(0.74 0.105 75);
+  color: oklch(0.72 0.055 183);
   font-family: "SFMono-Regular", "JetBrains Mono", monospace;
   font-size: 10px;
 }
@@ -139,7 +139,7 @@
 }
 
 .runLabel {
-  color: oklch(0.74 0.105 75);
+  color: oklch(0.72 0.055 183);
   font-family: "SFMono-Regular", "JetBrains Mono", monospace;
   font-size: 10px;
 }
@@ -186,8 +186,8 @@
   gap: 8px;
   min-width: 132px;
   padding: 0 16px;
-  background: oklch(0.75 0.145 72);
-  color: oklch(0.22 0.035 67);
+  background: oklch(0.97 0.004 185);
+  color: oklch(0.21 0.018 245);
   font-size: 13px;
   font-weight: 700;
 }
@@ -198,7 +198,7 @@
 
 .main {
   min-height: calc(100vh - 64px);
-  background: oklch(0.965 0.006 95);
+  background: oklch(0.955 0.005 185);
 }
 
 .summaryStrip {
@@ -229,8 +229,8 @@
   flex: 0 0 auto;
   place-items: center;
   border-radius: 8px;
-  background: oklch(0.94 0.045 75);
-  color: oklch(0.48 0.13 62);
+  background: oklch(0.93 0.025 183);
+  color: oklch(0.4 0.085 183);
 }
 
 .routeSummary > div:last-child {
@@ -362,11 +362,11 @@
 }
 
 .riskFillHigh {
-  background: oklch(0.64 0.16 55);
+  background: oklch(0.58 0.2 28);
 }
 
 .riskFillMedium {
-  background: oklch(0.68 0.12 86);
+  background: oklch(0.56 0.09 86);
 }
 
 .riskFillLow {
@@ -438,9 +438,9 @@
   display: grid;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid oklch(0.875 0.012 95);
-  border-radius: 8px;
-  background: oklch(0.992 0.003 95);
+  border: 1px solid oklch(0.86 0.009 185);
+  border-radius: 4px;
+  background: oklch(0.995 0.002 185);
 }
 
 .mapPanel {
@@ -469,29 +469,43 @@
   text-wrap: balance;
 }
 
+.panelTitleRow {
+  min-height: 64px;
+  padding-inline: 18px;
+  background: oklch(0.995 0.002 185);
+}
+
 .anomalyLegend {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  color: oklch(0.42 0.09 55);
+  color: oklch(0.46 0.15 28);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .anomalyLegend > span {
   width: 8px;
   height: 8px;
-  border: 2px solid oklch(0.87 0.08 75);
+  border: 2px solid oklch(0.93 0.065 28);
   border-radius: 50%;
-  background: oklch(0.64 0.16 55);
+  background: oklch(0.58 0.2 28);
 }
 
 .mapStage {
   position: relative;
-  height: 330px;
-  min-height: 330px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 238px;
+  height: 356px;
+  min-height: 356px;
   overflow: hidden;
-  background: oklch(0.925 0.013 105);
+  background: oklch(0.985 0.003 185);
+}
+
+.mapViewport {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .mapEmpty,
@@ -506,8 +520,8 @@
 }
 
 .mapEmpty {
-  height: 330px;
-  background: oklch(0.94 0.01 105);
+  height: 356px;
+  background: oklch(0.97 0.006 185);
 }
 
 .amapCanvas {
@@ -527,17 +541,43 @@
   inset: 0;
   z-index: 1;
   overflow: hidden;
-  background: oklch(0.925 0.013 105);
+  background:
+    linear-gradient(145deg, oklch(0.99 0.002 185), oklch(0.955 0.008 185));
 }
 
 .mapGrid {
   position: absolute;
   inset: 0;
-  opacity: 0.58;
+  opacity: 0.5;
   background-image:
-    linear-gradient(oklch(0.82 0.018 105 / 0.5) 1px, transparent 1px),
-    linear-gradient(90deg, oklch(0.82 0.018 105 / 0.5) 1px, transparent 1px);
-  background-size: 42px 42px;
+    linear-gradient(oklch(0.82 0.014 185 / 0.34) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(0.82 0.014 185 / 0.34) 1px, transparent 1px);
+  background-size: 56px 56px;
+}
+
+.mapTopography {
+  position: absolute;
+  inset: -26% -8% -20% 18%;
+  opacity: 0.42;
+  background:
+    radial-gradient(
+      ellipse at 38% 56%,
+      transparent 0 12%,
+      oklch(0.69 0.025 185 / 0.3) 12.2% 12.5%,
+      transparent 12.7% 20%,
+      oklch(0.69 0.025 185 / 0.24) 20.2% 20.5%,
+      transparent 20.7% 31%,
+      oklch(0.69 0.025 185 / 0.18) 31.2% 31.5%,
+      transparent 31.7%
+    ),
+    radial-gradient(
+      ellipse at 78% 30%,
+      transparent 0 15%,
+      oklch(0.69 0.025 185 / 0.22) 15.2% 15.5%,
+      transparent 15.7% 27%,
+      oklch(0.69 0.025 185 / 0.16) 27.2% 27.5%,
+      transparent 27.7%
+    );
 }
 
 .routeLine {
@@ -550,10 +590,19 @@
 
 .routeLine polyline {
   fill: none;
-  stroke: oklch(0.32 0.025 255);
-  stroke-width: 5px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.routeLine .routeCorridor {
+  stroke: oklch(0.72 0.018 185 / 0.48);
+  stroke-width: 12px;
+}
+
+.routeLine .routePath {
+  stroke: oklch(0.26 0.026 245);
+  stroke-width: 3px;
+  stroke-dasharray: 1 0;
 }
 
 .routePoint {
@@ -572,12 +621,14 @@
 }
 
 .routePoint > span {
-  width: 10px;
-  height: 10px;
-  border: 2px solid oklch(0.992 0.003 95);
+  width: 11px;
+  height: 11px;
+  border: 3px solid oklch(0.995 0.002 185);
   border-radius: 50%;
-  background: oklch(0.32 0.025 255);
-  box-shadow: 0 1px 5px oklch(0.22 0.02 255 / 0.25);
+  background: oklch(0.3 0.026 245);
+  box-shadow:
+    0 0 0 1px oklch(0.3 0.026 245 / 0.22),
+    0 2px 8px oklch(0.22 0.02 255 / 0.16);
   transition:
     transform 120ms cubic-bezier(0.16, 1, 0.3, 1),
     box-shadow 160ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -588,29 +639,50 @@
 }
 
 .routePointAnomaly > span {
-  width: 15px;
-  height: 15px;
-  border: 4px solid oklch(0.91 0.07 75);
-  background: oklch(0.64 0.16 55);
+  width: 16px;
+  height: 16px;
+  border: 4px solid oklch(0.95 0.045 28);
+  background: oklch(0.58 0.2 28);
 }
 
 .routePointSelected > span {
   box-shadow:
-    0 0 0 5px oklch(0.69 0.145 67 / 0.2),
-    0 2px 7px oklch(0.22 0.02 255 / 0.25);
+    0 0 0 7px oklch(0.58 0.2 28 / 0.14),
+    0 0 0 14px oklch(0.58 0.2 28 / 0.06),
+    0 2px 7px oklch(0.22 0.02 255 / 0.2);
 }
 
 .routeEndpointLabel {
   position: absolute;
   z-index: 2;
-  max-width: 9ch;
+  display: grid;
+  max-width: 12ch;
   overflow: hidden;
-  color: oklch(0.43 0.02 255);
-  font-size: 11px;
-  font-weight: 650;
+  padding: 5px 7px;
+  border: 1px solid oklch(0.82 0.012 185);
+  border-radius: 3px;
+  color: oklch(0.28 0.022 245);
+  background: oklch(0.995 0.002 185 / 0.9);
+  box-shadow: 0 3px 10px oklch(0.22 0.02 255 / 0.08);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.25;
   white-space: nowrap;
   text-overflow: clip;
-  transform: translate(-50%, 15px);
+}
+
+.routeEndpointLabel small {
+  color: oklch(0.55 0.025 185);
+  font-size: 8px;
+  font-weight: 600;
+}
+
+.routeOriginLabel {
+  transform: translate(-6px, 18px);
+}
+
+.routeDestinationLabel {
+  transform: translate(calc(-100% + 6px), 18px);
 }
 
 .mapLoading,
@@ -621,75 +693,131 @@
   left: 12px;
   max-width: calc(100% - 24px);
   padding: 8px 10px;
-  border-radius: 4px;
-  background: oklch(0.992 0.003 95 / 0.94);
-  box-shadow: 0 2px 10px oklch(0.22 0.02 255 / 0.12);
-  color: oklch(0.43 0.02 255);
-  font-size: 11px;
+  border: 1px solid oklch(0.83 0.014 185);
+  border-radius: 3px;
+  background: oklch(0.99 0.003 185 / 0.92);
+  color: oklch(0.4 0.035 185);
+  font-size: 10px;
 }
 
 .mapNotice {
   display: flex;
   align-items: center;
   gap: 7px;
-  color: oklch(0.42 0.09 55);
+}
+
+.mapCoordinates {
+  position: absolute;
+  z-index: 4;
+  right: 12px;
+  bottom: 10px;
+  display: flex;
+  gap: 10px;
+  color: oklch(0.55 0.02 185);
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-size: 8px;
+  font-variant-numeric: tabular-nums;
 }
 
 .pointInspector {
-  position: absolute;
-  z-index: 6;
-  right: 12px;
-  bottom: 12px;
-  left: 12px;
   display: grid;
-  grid-template-columns: minmax(145px, 1fr) minmax(300px, 1.6fr);
-  align-items: center;
-  gap: 16px;
-  padding: 11px 13px;
-  border-radius: 6px;
-  background: oklch(0.215 0.018 255 / 0.94);
-  color: oklch(0.96 0.006 95);
-  box-shadow: 0 8px 22px oklch(0.22 0.02 255 / 0.22);
+  min-width: 0;
+  align-content: space-between;
+  gap: 18px;
+  padding: 20px 18px 16px;
+  border-left: 1px solid oklch(0.86 0.009 185);
+  background: oklch(0.995 0.002 185);
+  color: oklch(0.22 0.02 245);
 }
 
-.pointInspector > div {
+.pointInspectorLead {
   display: grid;
-  gap: 2px;
+  gap: 14px;
+}
+
+.pointInspectorLead > div {
+  display: grid;
+  gap: 5px;
 }
 
 .pointInspector .eyebrow {
-  color: oklch(0.72 0.012 255);
+  color: oklch(0.53 0.025 245);
 }
 
 .pointInspector strong {
   overflow-wrap: anywhere;
-  font-size: 14px;
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.pointIndex {
+  color: oklch(0.58 0.2 28);
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-size: 30px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.pointIndex small {
+  color: oklch(0.65 0.016 245);
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .pointInspector dl {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
+  gap: 0;
   margin: 0;
 }
 
 .pointInspector dl > div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
   min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 0;
+  border-top: 1px solid oklch(0.9 0.006 185);
 }
 
 .pointInspector dt {
-  color: oklch(0.7 0.012 255);
+  color: oklch(0.55 0.02 245);
   font-size: 10px;
 }
 
 .pointInspector dd {
   overflow: hidden;
-  margin: 2px 0 0;
+  margin: 0;
   font-family: "SFMono-Regular", "JetBrains Mono", monospace;
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  text-align: right;
+}
+
+.pointInspectorStatus {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-top: 12px;
+  border-top: 1px solid oklch(0.86 0.009 185);
+}
+
+.riskSignal,
+.normalSignal {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.riskSignal {
+  background: oklch(0.58 0.2 28);
+  box-shadow: 0 0 0 4px oklch(0.58 0.2 28 / 0.12);
+}
+
+.normalSignal {
+  background: oklch(0.48 0.09 183);
 }
 
 .playbackBand {
@@ -697,18 +825,18 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 54px;
-  padding: 7px 12px 7px 16px;
-  border-top: 1px solid oklch(0.875 0.012 95);
-  border-bottom: 1px solid oklch(0.875 0.012 95);
-  background: oklch(0.975 0.005 95);
+  min-height: 62px;
+  padding: 9px 14px 9px 18px;
+  border-top: 1px solid oklch(0.86 0.009 185);
+  border-bottom: 1px solid oklch(0.86 0.009 185);
+  background: oklch(0.98 0.004 185);
 }
 
 .playbackLabel {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  color: oklch(0.43 0.02 255);
+  color: oklch(0.34 0.028 245);
   font-size: 12px;
   font-weight: 650;
 }
@@ -725,8 +853,9 @@
   width: 40px;
   padding: 0;
   place-items: center;
-  background: oklch(0.9 0.009 95);
-  color: oklch(0.3 0.02 255);
+  border-radius: 3px;
+  background: oklch(0.24 0.02 245);
+  color: oklch(0.98 0.003 185);
 }
 
 .iconButton:disabled {
@@ -735,7 +864,7 @@
 
 .playbackRange {
   width: 100%;
-  accent-color: oklch(0.59 0.13 67);
+  accent-color: oklch(0.58 0.2 28);
   cursor: pointer;
 }
 
@@ -764,8 +893,8 @@
 }
 
 .liveButtonActive {
-  color: oklch(0.45 0.1 155);
-  background: oklch(0.92 0.035 155);
+  color: oklch(0.38 0.09 183);
+  background: oklch(0.94 0.025 183);
 }
 
 .timelinePanel {
@@ -1392,7 +1521,7 @@
 @media (hover: hover) {
   .triggerButton:hover,
   .primaryButton:hover {
-    background: oklch(0.73 0.15 67);
+    background: oklch(0.9 0.008 185);
   }
 
   .secondaryButton:hover,
@@ -1466,10 +1595,6 @@
 
   .workspace {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .approvalPanel {
-    order: -1;
   }
 
   .approvalIdle {
@@ -1560,19 +1685,52 @@
     text-align: right;
   }
 
-  .mapStage,
+  .mapStage {
+    grid-template-columns: 1fr;
+    grid-template-rows: 260px auto;
+    height: auto;
+    min-height: 0;
+  }
+
   .mapEmpty {
     height: 310px;
     min-height: 310px;
   }
 
   .pointInspector {
-    grid-template-columns: 1fr;
-    gap: 7px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    padding: 14px 12px 12px;
+    border-top: 1px solid oklch(0.86 0.009 185);
+    border-left: 0;
+  }
+
+  .pointInspectorLead {
+    grid-template-columns: 52px minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
   }
 
   .pointInspector dl {
-    gap: 8px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .pointInspector dl > div {
+    display: grid;
+    grid-template-columns: 1fr;
+    align-content: start;
+    gap: 3px;
+    padding: 8px 7px;
+    border-top: 1px solid oklch(0.9 0.006 185);
+    border-right: 1px solid oklch(0.9 0.006 185);
+  }
+
+  .pointInspector dl > div:last-child {
+    border-right: 0;
+  }
+
+  .pointInspector dd {
+    text-align: left;
   }
 
   .playbackBand {

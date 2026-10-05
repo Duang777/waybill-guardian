@@ -1,4 +1,4 @@
-import { AlertTriangle, MapPin } from "lucide-react";
+import { Compass, MapPin } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { hasAMapKey, loadAMap } from "../amap";
 import type { TrackPoint } from "../api";
@@ -118,34 +118,48 @@ export function RouteMap({
 
   return (
     <div className={styles.mapStage}>
-      <div
-        ref={mapElement}
-        className={`${styles.amapCanvas} ${mode.kind === "amap" ? styles.mapVisible : ""}`}
-        aria-hidden={mode.kind !== "amap"}
-      />
-      {mode.kind !== "amap" && (
-        <FallbackMap
-          points={projected}
-          origin={origin}
-          destination={destination}
-          selectedIndex={selectedIndex}
-          onSelect={setSelectedIndex}
+      <div className={styles.mapViewport}>
+        <div
+          ref={mapElement}
+          className={`${styles.amapCanvas} ${mode.kind === "amap" ? styles.mapVisible : ""}`}
+          aria-hidden={mode.kind !== "amap"}
         />
-      )}
-      {mode.kind === "loading" && (
-        <div className={styles.mapLoading}>正在连接高德地图</div>
-      )}
-      {mode.kind === "fallback" && (
-        <div className={styles.mapNotice}>
-          <AlertTriangle aria-hidden="true" size={14} />
-          <span>{mode.reason}</span>
+        {mode.kind !== "amap" && (
+          <FallbackMap
+            points={projected}
+            origin={origin}
+            destination={destination}
+            selectedIndex={selectedIndex}
+            onSelect={setSelectedIndex}
+          />
+        )}
+        {mode.kind === "loading" && (
+          <div className={styles.mapLoading}>正在连接高德地图</div>
+        )}
+        {mode.kind === "fallback" && (
+          <div className={styles.mapNotice} title={mode.reason}>
+            <Compass aria-hidden="true" size={14} />
+            <span>本地轨迹视图</span>
+          </div>
+        )}
+        <div className={styles.mapCoordinates} aria-hidden="true">
+          <span>N 31.23°</span>
+          <span>E 121.47°</span>
         </div>
-      )}
+      </div>
       {selected !== null && (
         <div className={styles.pointInspector} aria-live="polite">
-          <div>
-            <span className={styles.eyebrow}>当前轨迹点</span>
-            <strong>{selected.label}</strong>
+          <div className={styles.pointInspectorLead}>
+            <span className={styles.pointIndex}>
+              {(selectedIndex + 1).toString().padStart(2, "0")}
+              <small>/{points.length.toString().padStart(2, "0")}</small>
+            </span>
+            <div>
+              <span className={styles.eyebrow}>
+                {selected.anomaly ? "风险轨迹点" : "轨迹点"}
+              </span>
+              <strong>{selected.label}</strong>
+            </div>
           </div>
           <dl>
             <div>
@@ -157,10 +171,21 @@ export function RouteMap({
               <dd>{selected.speed_kph} km/h</dd>
             </div>
             <div>
-              <dt>停留</dt>
-              <dd>{selected.stop_hours === undefined ? "行驶中" : `${selected.stop_hours} 小时`}</dd>
+              <dt>节点状态</dt>
+              <dd>
+                {selected.stop_hours === undefined
+                  ? "正常通行"
+                  : `停留 ${selected.stop_hours} 小时`}
+              </dd>
             </div>
           </dl>
+          <div className={styles.pointInspectorStatus}>
+            <span
+              className={selected.anomaly ? styles.riskSignal : styles.normalSignal}
+              aria-hidden="true"
+            />
+            <span className={styles.eyebrow}>当前轨迹点</span>
+          </div>
         </div>
       )}
     </div>
@@ -205,19 +230,22 @@ function FallbackMap({
   return (
     <div className={styles.localMap}>
       <div className={styles.mapGrid} aria-hidden="true" />
+      <div className={styles.mapTopography} aria-hidden="true" />
       {origin !== null && firstPoint !== undefined && (
         <span
-          className={styles.routeEndpointLabel}
+          className={`${styles.routeEndpointLabel} ${styles.routeOriginLabel}`}
           style={{ left: `${firstPoint.x}%`, top: `${firstPoint.y}%` }}
         >
+          <small>起点</small>
           {origin}
         </span>
       )}
       {destination !== null && lastPoint !== undefined && (
         <span
-          className={styles.routeEndpointLabel}
+          className={`${styles.routeEndpointLabel} ${styles.routeDestinationLabel}`}
           style={{ left: `${lastPoint.x}%`, top: `${lastPoint.y}%` }}
         >
+          <small>终点</small>
           {destination}
         </span>
       )}
@@ -227,7 +255,16 @@ function FallbackMap({
         preserveAspectRatio="none"
         aria-hidden="true"
       >
-        <polyline points={route} vectorEffect="non-scaling-stroke" />
+        <polyline
+          className={styles.routeCorridor}
+          points={route}
+          vectorEffect="non-scaling-stroke"
+        />
+        <polyline
+          className={styles.routePath}
+          points={route}
+          vectorEffect="non-scaling-stroke"
+        />
       </svg>
       {points.map((point, index) => (
         <button

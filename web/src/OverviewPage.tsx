@@ -296,18 +296,27 @@ export function OverviewPage() {
         </header>
 
         <main id="overview-main">
-          <section className={styles.commandBand} aria-labelledby="overview-title">
-            <div>
-              <span className={styles.eyebrow}>Executive control tower</span>
-              <h1 id="overview-title">全国公路港异常总览</h1>
-            </div>
-            {resource.kind === "ready" && (
-              <div className={styles.snapshot}>
-                <Clock3 aria-hidden="true" size={15} />
-                数据截至 {formatDate(resource.overview.as_of)}
+          <div className={styles.overviewHead}>
+            <section className={styles.commandBand} aria-labelledby="overview-title">
+              <div>
+                <span className={styles.eyebrow}>National operations / 24h</span>
+                <h1 id="overview-title">全国公路港异常态势</h1>
               </div>
+              {resource.kind === "ready" && (
+                <div className={styles.snapshot}>
+                  <Clock3 aria-hidden="true" size={15} />
+                  数据截至 {formatDate(resource.overview.as_of)}
+                </div>
+              )}
+            </section>
+            {resource.kind === "ready" && (
+              <section className={styles.kpiStrip} aria-label="24 小时经营指标">
+                {primaryKPIs.map((metric) => (
+                  <KPI key={metric.key} metric={metric} />
+                ))}
+              </section>
             )}
-          </section>
+          </div>
 
           {resource.kind === "loading" && <LoadingOverview />}
           {resource.kind === "error" && (
@@ -325,46 +334,36 @@ export function OverviewPage() {
           )}
           {resource.kind === "ready" && (
             <>
-              <section className={styles.kpiStrip} aria-label="24 小时经营指标">
-                {primaryKPIs.map((metric) => (
-                  <KPI key={metric.key} metric={metric} />
-                ))}
-              </section>
-
-              <section className={styles.operationalStrip} aria-label="网络运行摘要">
-                <OperationalFact
-                  icon={<Route aria-hidden="true" size={17} />}
-                  value={resource.overview.hubs.length}
-                  label="覆盖公路港"
-                />
-                <OperationalFact
-                  icon={<CircleGauge aria-hidden="true" size={17} />}
-                  value={resource.overview.totals.in_flight}
-                  label="在途运单"
-                />
-                <OperationalFact
-                  icon={<AlertTriangle aria-hidden="true" size={17} />}
-                  value={resource.overview.totals.anomalies}
-                  label="异常运单"
-                  signal
-                />
-                <OperationalFact
-                  icon={<Bot aria-hidden="true" size={17} />}
-                  value={resource.overview.totals.handling}
-                  label="Agent 处置中"
-                />
-              </section>
-
               <div className={styles.workspace}>
                 <section className={styles.mapPanel} aria-labelledby="map-heading">
-                  <div className={styles.sectionHeader}>
+                  <div className={`${styles.sectionHeader} ${styles.mapHeader}`}>
                     <div>
                       <span className={styles.eyebrow}>Network pulse</span>
                       <h2 id="map-heading">公路港网络态势</h2>
                     </div>
-                    <span className={styles.sectionMeta}>
-                      {resource.overview.routes.length} 条线路
-                    </span>
+                    <div className={styles.mapFacts} aria-label="网络运行摘要">
+                      <OperationalFact
+                        icon={<Route aria-hidden="true" size={15} />}
+                        value={resource.overview.hubs.length}
+                        label="公路港"
+                      />
+                      <OperationalFact
+                        icon={<CircleGauge aria-hidden="true" size={15} />}
+                        value={resource.overview.totals.in_flight}
+                        label="在途"
+                      />
+                      <OperationalFact
+                        icon={<AlertTriangle aria-hidden="true" size={15} />}
+                        value={resource.overview.totals.anomalies}
+                        label="异常"
+                        signal
+                      />
+                      <OperationalFact
+                        icon={<Bot aria-hidden="true" size={15} />}
+                        value={resource.overview.totals.handling}
+                        label="处置中"
+                      />
+                    </div>
                   </div>
                   <HubNetwork
                     hubs={resource.overview.hubs}
@@ -532,8 +531,9 @@ export function OverviewPage() {
 }
 
 function KPI({ metric }: { metric: KPIMetric }) {
+  const detail = metric.value === null ? metric.reason : metric.formula;
   return (
-    <article className={styles.kpi}>
+    <article className={styles.kpi} title={detail}>
       <div className={styles.kpiLabel}>
         <span>{metric.label}</span>
         <span>24H</span>
@@ -541,9 +541,7 @@ function KPI({ metric }: { metric: KPIMetric }) {
       <strong className={metric.value === null ? styles.kpiUnavailable : undefined}>
         {metric.value === null ? "待接入" : formatMetric(metric)}
       </strong>
-      <span className={styles.kpiFoot}>
-        {metric.value === null ? metric.reason : metric.formula}
-      </span>
+      <span className={styles.kpiFoot}>{detail}</span>
     </article>
   );
 }

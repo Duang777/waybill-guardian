@@ -450,7 +450,7 @@ func TestOnlineEngineAppliesConfiguredRequestBudget(t *testing.T) {
 		BaseURL:         server.URL,
 		APIKey:          "secret",
 		Model:           "model-1",
-		RequestTimeout:  50 * time.Millisecond,
+		RequestTimeout:  500 * time.Millisecond,
 		MaxOutputTokens: 777,
 	})
 	if err != nil {

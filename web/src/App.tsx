@@ -604,8 +604,8 @@ function WaybillWorkbench({
               <section className={styles.mapPanel} aria-labelledby="route-map-title">
                 <div className={styles.panelTitleRow}>
                   <div>
-                    <span className={styles.eyebrow}>Live route evidence</span>
-                    <h2 id="route-map-title">异常轨迹</h2>
+                    <span className={styles.eyebrow}>Route evidence / live</span>
+                    <h2 id="route-map-title">运输轨迹证据</h2>
                   </div>
                   <span className={styles.anomalyLegend}>
                     <span aria-hidden="true" />
@@ -618,8 +618,8 @@ function WaybillWorkbench({
                           ? "等待异常轨迹"
                           : "未发现异常轨迹"
                       : anomaly.stop_hours === undefined
-                        ? anomaly.label
-                        : `${anomaly.label}停留 ${formatHours(anomaly.stop_hours)} 小时`}
+                        ? "检测到异常节点"
+                        : `异常停留 ${formatHours(anomaly.stop_hours)} 小时`}
                   </span>
                 </div>
                 <RouteMap
@@ -633,7 +633,7 @@ function WaybillWorkbench({
               <div className={styles.playbackBand}>
                 <div className={styles.playbackLabel}>
                   <Route aria-hidden="true" size={15} />
-                  <span>事故回放</span>
+                  <span>轨迹回放</span>
                 </div>
                 <PlaybackControls state={timeline} dispatch={dispatch} />
               </div>
