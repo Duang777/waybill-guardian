@@ -112,10 +112,10 @@ func (s *Service) resolveExecutiveBrief(
 	ctx context.Context,
 	waybillIDs []domain.WaybillID,
 	overview Overview,
-) ExecutiveBrief {
+) (ExecutiveBrief, error) {
 	fallback := buildExecutiveBrief(overview)
 	if s.briefGenerator == nil {
-		return fallback
+		return fallback, nil
 	}
 	input := briefInputForOverview(overview)
 	key, err := newBriefCacheKey(
@@ -126,20 +126,22 @@ func (s *Service) resolveExecutiveBrief(
 	if err != nil {
 		fallback.FallbackReason = BriefFallbackSchema
 		slog.WarnContext(s.ctx, "executive brief fell back", "reason", fallback.FallbackReason)
-		return fallback
+		return fallback, nil
 	}
-	outcome, err := s.briefCache.getOrLoad(ctx, key, func() briefCacheOutcome {
-		generated, generateErr := s.briefGenerator.Generate(s.ctx, input)
+	outcome, err := s.briefCache.getOrLoad(ctx, key, func(loadCtx context.Context) briefCacheOutcome {
+		generated, generateErr := s.briefGenerator.Generate(loadCtx, input)
 		if generateErr != nil {
 			reason := guardianBriefFailure(agentkit.BriefFailureOf(generateErr))
-			slog.WarnContext(
-				s.ctx,
-				"executive brief fell back",
-				"reason",
-				reason,
-				"cache_key",
-				fmt.Sprintf("%x", key[:6]),
-			)
+			if loadCtx.Err() == nil {
+				slog.WarnContext(
+					loadCtx,
+					"executive brief fell back",
+					"reason",
+					reason,
+					"cache_key",
+					fmt.Sprintf("%x", key[:6]),
+				)
+			}
 			return briefCacheOutcome{Failure: reason}
 		}
 		brief, materializeErr := materializeGeneratedBrief(
@@ -150,7 +152,7 @@ func (s *Service) resolveExecutiveBrief(
 		if materializeErr != nil {
 			reason := materializedBriefFailure(materializeErr)
 			slog.WarnContext(
-				s.ctx,
+				loadCtx,
 				"executive brief fell back",
 				"reason",
 				reason,
@@ -162,13 +164,13 @@ func (s *Service) resolveExecutiveBrief(
 		return briefCacheOutcome{Brief: brief}
 	})
 	if err != nil {
-		return fallback
+		return ExecutiveBrief{}, err
 	}
 	if outcome.Failure != "" {
 		fallback.FallbackReason = outcome.Failure
-		return fallback
+		return fallback, nil
 	}
-	return outcome.Brief
+	return outcome.Brief, nil
 }
 
 func guardianBriefFailure(reason agentkit.BriefFailureReason) BriefFallbackReason {

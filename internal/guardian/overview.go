@@ -298,7 +298,10 @@ func (s *Service) Overview(
 		}
 		return result.AnomalyDistribution[i].Count > result.AnomalyDistribution[j].Count
 	})
-	result.Brief = s.resolveExecutiveBrief(ctx, waybillIDs, result)
+	result.Brief, err = s.resolveExecutiveBrief(ctx, waybillIDs, result)
+	if err != nil {
+		return Overview{}, err
+	}
 	return result, nil
 }
 
@@ -341,7 +344,8 @@ func (s *Service) KPIs(
 	closed := 0
 	impactPopulation := make([]platform.WaybillSummary, 0)
 	latest := latestRunMap(runs, allowed)
-	executedRuns := humanApprovedExecutionRuns(events)
+	executedRuns := humanApprovedExecutionRuns(events, windowStart, asOf)
+	completedRuns, closedRuns := terminalRunsInWindow(events, windowStart, asOf)
 	for _, item := range catalog {
 		if item.LastRecordedAt.Before(windowStart) || item.LastRecordedAt.After(asOf) {
 			continue
@@ -352,11 +356,10 @@ func (s *Service) KPIs(
 		}
 		anomalies++
 		run := latest[item.WaybillID]
-		status := run.Status
-		if status == domain.RunCompleted || status == domain.RunRejected {
+		if _, ok := closedRuns[run.RunID]; ok {
 			closed++
 		}
-		if status == domain.RunCompleted {
+		if _, completed := completedRuns[run.RunID]; completed {
 			if _, executed := executedRuns[run.RunID]; executed {
 				impactPopulation = append(impactPopulation, item)
 			}
@@ -452,7 +455,11 @@ func (s *Service) KPIs(
 	return report, nil
 }
 
-func humanApprovedExecutionRuns(events []audit.Event) map[domain.RunID]struct{} {
+func humanApprovedExecutionRuns(
+	events []audit.Event,
+	windowStart time.Time,
+	asOf time.Time,
+) map[domain.RunID]struct{} {
 	confirmed := make(map[domain.RunID]map[domain.ApprovalID]struct{})
 	result := make(map[domain.RunID]struct{})
 	for _, event := range events {
@@ -471,7 +478,10 @@ func humanApprovedExecutionRuns(events []audit.Event) map[domain.RunID]struct{} 
 				confirmed[event.RunID] = make(map[domain.ApprovalID]struct{})
 			}
 			confirmed[event.RunID][payload.ApprovalID] = struct{}{}
-		case event.Type == audit.EventApprovalExecuted && event.Actor == audit.ActorSystem:
+		case event.Type == audit.EventApprovalExecuted &&
+			event.Actor == audit.ActorSystem &&
+			!event.TS.Before(windowStart) &&
+			!event.TS.After(asOf):
 			var payload struct {
 				ApprovalID domain.ApprovalID `json:"approval_id"`
 			}
@@ -484,6 +494,28 @@ func humanApprovedExecutionRuns(events []audit.Event) map[domain.RunID]struct{} 
 		}
 	}
 	return result
+}
+
+func terminalRunsInWindow(
+	events []audit.Event,
+	windowStart time.Time,
+	asOf time.Time,
+) (map[domain.RunID]struct{}, map[domain.RunID]struct{}) {
+	completed := make(map[domain.RunID]struct{})
+	closed := make(map[domain.RunID]struct{})
+	for _, event := range events {
+		if event.TS.Before(windowStart) || event.TS.After(asOf) {
+			continue
+		}
+		switch event.Type {
+		case audit.EventRunCompleted:
+			completed[event.RunID] = struct{}{}
+			closed[event.RunID] = struct{}{}
+		case audit.EventRunRejected:
+			closed[event.RunID] = struct{}{}
+		}
+	}
+	return completed, closed
 }
 
 func simulationImpactMetrics(

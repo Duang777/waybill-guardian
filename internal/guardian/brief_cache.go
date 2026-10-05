@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"sort"
 	"sync"
+	"time"
 
 	agentkit "github.com/Duang777/waybill-guardian/internal/agent"
 	"github.com/Duang777/waybill-guardian/internal/domain"
@@ -14,6 +15,7 @@ import (
 const (
 	briefContractVersion = "overview-brief-v2"
 	maxBriefCacheEntries = 128
+	briefFailureCacheTTL = time.Minute
 )
 
 type briefCacheKey [sha256.Size]byte
@@ -24,19 +26,34 @@ type briefCacheOutcome struct {
 }
 
 type briefCacheEntry struct {
-	ready    chan struct{}
-	complete bool
-	outcome  briefCacheOutcome
+	ready     chan struct{}
+	cancel    context.CancelFunc
+	waiters   int
+	complete  bool
+	abandoned bool
+	outcome   briefCacheOutcome
+	expiresAt time.Time
 }
 
 type briefCache struct {
 	entries map[briefCacheKey]*briefCacheEntry
+	ctx     context.Context
+	clock   func() time.Time
 	mu      sync.Mutex
+	wg      sync.WaitGroup
 }
 
-func newBriefCache() *briefCache {
+func newBriefCache(ctx context.Context, clock func() time.Time) *briefCache {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if clock == nil {
+		clock = time.Now
+	}
 	return &briefCache{
 		entries: make(map[briefCacheKey]*briefCacheEntry),
+		ctx:     ctx,
+		clock:   clock,
 	}
 }
 
@@ -79,52 +96,122 @@ func newBriefCacheKey(
 func (c *briefCache) getOrLoad(
 	ctx context.Context,
 	key briefCacheKey,
-	load func() briefCacheOutcome,
+	load func(context.Context) briefCacheOutcome,
 ) (briefCacheOutcome, error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return briefCacheOutcome{}, err
+		}
 		c.mu.Lock()
 		entry := c.entries[key]
-		if entry == nil {
-			c.evictCompletedLocked()
-			entry = &briefCacheEntry{ready: make(chan struct{})}
-			c.entries[key] = entry
-			c.mu.Unlock()
-
-			outcome := cloneBriefCacheOutcome(load())
-
-			c.mu.Lock()
-			entry.outcome = outcome
-			entry.complete = true
-			close(entry.ready)
-			c.mu.Unlock()
-			return cloneBriefCacheOutcome(outcome), nil
+		if entry != nil && entry.complete && c.entryExpiredLocked(entry) {
+			delete(c.entries, key)
+			entry = nil
 		}
-		if entry.complete {
+		if entry == nil {
+			if !c.makeRoomLocked() {
+				c.mu.Unlock()
+				return briefCacheOutcome{Failure: BriefFallbackProvider}, nil
+			}
+			loadCtx, cancel := context.WithCancel(c.ctx)
+			entry = &briefCacheEntry{
+				ready:   make(chan struct{}),
+				cancel:  cancel,
+				waiters: 1,
+			}
+			c.entries[key] = entry
+			c.wg.Add(1)
+			go c.load(key, entry, loadCtx, load)
+		} else if entry.complete {
 			outcome := cloneBriefCacheOutcome(entry.outcome)
 			c.mu.Unlock()
 			return outcome, nil
+		} else if entry.abandoned {
+			c.mu.Unlock()
+			return briefCacheOutcome{Failure: BriefFallbackProvider}, nil
+		} else {
+			entry.waiters++
 		}
 		ready := entry.ready
 		c.mu.Unlock()
 
 		select {
 		case <-ctx.Done():
+			c.releaseWaiter(entry)
 			return briefCacheOutcome{}, ctx.Err()
 		case <-ready:
+			c.mu.Lock()
+			if entry.waiters > 0 {
+				entry.waiters--
+			}
+			outcome := cloneBriefCacheOutcome(entry.outcome)
+			c.mu.Unlock()
+			return outcome, nil
 		}
 	}
 }
 
-func (c *briefCache) evictCompletedLocked() {
-	if len(c.entries) < maxBriefCacheEntries {
-		return
+func (c *briefCache) load(
+	key briefCacheKey,
+	entry *briefCacheEntry,
+	ctx context.Context,
+	load func(context.Context) briefCacheOutcome,
+) {
+	defer c.wg.Done()
+	outcome := cloneBriefCacheOutcome(load(ctx))
+
+	c.mu.Lock()
+	entry.outcome = outcome
+	entry.complete = true
+	if outcome.Failure != "" {
+		entry.expiresAt = c.clock().Add(briefFailureCacheTTL)
 	}
-	for key, entry := range c.entries {
-		if entry.complete {
-			delete(c.entries, key)
-			return
+	entry.cancel()
+	close(entry.ready)
+	if entry.abandoned && c.entries[key] == entry {
+		delete(c.entries, key)
+	}
+	if c.entries[key] != entry {
+		entry.waiters = 0
+	}
+	c.mu.Unlock()
+}
+
+func (c *briefCache) releaseWaiter(entry *briefCacheEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry.waiters > 0 {
+		entry.waiters--
+	}
+	if entry.waiters == 0 && !entry.complete {
+		entry.abandoned = true
+		entry.cancel()
+	}
+}
+
+func (c *briefCache) entryExpiredLocked(entry *briefCacheEntry) bool {
+	return !entry.expiresAt.IsZero() && !c.clock().Before(entry.expiresAt)
+}
+
+func (c *briefCache) makeRoomLocked() bool {
+	for len(c.entries) >= maxBriefCacheEntries {
+		removed := false
+		for key, entry := range c.entries {
+			if entry.complete {
+				delete(c.entries, key)
+				removed = true
+				break
+			}
+		}
+		if !removed {
+			return false
 		}
 	}
+	return true
+}
+
+func (c *briefCache) wait() {
+	c.wg.Wait()
 }
 
 func cloneBriefCacheOutcome(value briefCacheOutcome) briefCacheOutcome {

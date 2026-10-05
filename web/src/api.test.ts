@@ -356,13 +356,28 @@ describe("waybill API", () => {
         items,
       }),
     ).toThrow();
-    expect(() =>
-      overviewSchema.shape.brief.parse({
-        mode: "model_read_only",
-        source: "rules",
-        items,
-      }),
-    ).toThrow();
+  });
+
+  it("uses the mode discriminator when a model is named rules", () => {
+    const brief = overviewSchema.shape.brief.parse({
+      mode: "model_read_only",
+      source: "rules",
+      items: [1, 2, 3].map((index) => ({
+        id: `model-${index}`,
+        headline: `建议 ${index}`,
+        body: "使用模型聚合结果。",
+        evidence: [
+          {
+            label: "异常运单",
+            value: "1 单",
+            source: "totals.anomalies",
+          },
+        ],
+      })),
+    });
+
+    expect(brief.mode).toBe("model_read_only");
+    expect(brief.source).toBe("rules");
   });
 
   it("posts batch IDs and parses independent run outcomes", async () => {

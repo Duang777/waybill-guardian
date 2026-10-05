@@ -271,7 +271,7 @@ func openService(
 		registry:            registry,
 		engine:              engine,
 		briefGenerator:      briefGenerator,
-		briefCache:          newBriefCache(),
+		briefCache:          newBriefCache(ctx, config.Clock),
 		briefSource:         briefModelSource(config.Model.Model),
 		coordinator:         coordinator,
 		recovery:            recovery,
@@ -1281,6 +1281,7 @@ func (s *Service) Close() error {
 	s.mu.Unlock()
 	s.cancel()
 	s.wg.Wait()
+	s.briefCache.wait()
 	closeErr := errors.Join(s.engine.Close(), s.journal.Close())
 	s.mu.Lock()
 	s.closeErr = closeErr

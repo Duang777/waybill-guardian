@@ -1122,6 +1122,7 @@
   min-width: 0;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 14px;
 }
 
@@ -1353,6 +1354,7 @@
 
   .briefMeta {
     max-width: 52%;
+    gap: 4px 10px;
   }
 
   .briefSource {
