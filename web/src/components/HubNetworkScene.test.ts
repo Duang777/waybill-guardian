@@ -242,18 +242,20 @@ describe("buildSceneView", () => {
     expect(view.routes).toHaveLength(0);
     expect(view.markers).toHaveLength(0);
     expect(view.riskHubs).toHaveLength(0);
-    expect(
-      new Set(view.facilityParts.map((part) => part.sceneHub.hub.hub_id)),
-    ).toEqual(new Set(["HUB-A"]));
-    expect(new Set(view.detail.parts.map((part) => part.kind))).toEqual(
+    expect(view.facilityParts).toHaveLength(0);
+    expect(new Set(view.detail.elements.map((part) => part.kind))).toEqual(
       new Set([
         "ground",
+        "perimeter",
         "road",
         "apron",
+        "warehouse",
+        "roof",
         "dock",
         "slot",
         "cargo",
         "marking",
+        "gatehouse",
         "tower",
         "beacon",
       ]),
@@ -302,6 +304,7 @@ describe("buildSceneView", () => {
         throw new Error(`expected facility scene for ${hubID}`);
       }
       return {
+        signature: view.detail.signature,
         dockBays: view.detail.dockBays,
         storageSlots: view.detail.storageSlots,
         occupiedSlots: view.detail.occupiedSlots,
@@ -309,11 +312,28 @@ describe("buildSceneView", () => {
     });
 
     expect(details).toEqual([
-      { dockBays: 4, storageSlots: 6, occupiedSlots: 0 },
-      { dockBays: 6, storageSlots: 8, occupiedSlots: 2 },
-      { dockBays: 8, storageSlots: 10, occupiedSlots: 5 },
-      { dockBays: 10, storageSlots: 12, occupiedSlots: 12 },
+      expect.objectContaining({
+        dockBays: 4,
+        storageSlots: 6,
+        occupiedSlots: 0,
+      }),
+      expect.objectContaining({
+        dockBays: 6,
+        storageSlots: 9,
+        occupiedSlots: 3,
+      }),
+      expect.objectContaining({
+        dockBays: 9,
+        storageSlots: 13,
+        occupiedSlots: 7,
+      }),
+      expect.objectContaining({
+        dockBays: 10,
+        storageSlots: 16,
+        occupiedSlots: 16,
+      }),
     ]);
+    expect(new Set(details.map((detail) => detail.signature)).size).toBe(4);
   });
 
   it("falls back to the network for an unknown hub", () => {

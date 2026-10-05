@@ -196,15 +196,25 @@ try {
     storageSlots: Number(
       await networkMap.getAttribute("data-scene-storage-slots"),
     ),
+    warehouseCount: Number(
+      await networkMap.getAttribute("data-scene-warehouse-count"),
+    ),
+    layout: await networkMap.getAttribute("data-scene-layout"),
+    layoutSignature: await networkMap.getAttribute(
+      "data-scene-layout-signature",
+    ),
   };
   assert(
     detailStats.hubs === 1 &&
       detailStats.routes === 0 &&
       detailStats.markers === 0 &&
-      detailStats.facilityParts > 0 &&
+      detailStats.facilityParts === 0 &&
       detailStats.detailParts > 20 &&
       detailStats.dockBays >= 4 &&
-      detailStats.storageSlots >= 6,
+      detailStats.storageSlots >= 6 &&
+      detailStats.warehouseCount >= 2 &&
+      detailStats.layout !== "" &&
+      detailStats.layoutSignature !== "",
     `facility detail layers are incomplete: ${JSON.stringify(detailStats)}`,
   );
   await page.waitForTimeout(1_400);
@@ -216,6 +226,70 @@ try {
   await page.screenshot({
     path: join(artifactDir, "overview-facility-detail.png"),
   });
+  const facilitySignatures = [detailStats.layoutSignature];
+  const facilityLayouts = new Map([[detailStats.layout, firstHub]]);
+  let previousSignature = detailStats.layoutSignature;
+  for (const hub of overviewBody.hubs.slice(1)) {
+    await hubPicker.selectOption(hub.hub_id);
+    await page.waitForFunction(
+      ({ hubID, previous }) => {
+        const stage = document.querySelector(
+          '[data-network-renderer="webgl"]',
+        );
+        const signature = stage?.getAttribute(
+          "data-scene-layout-signature",
+        );
+        return (
+          stage?.getAttribute("data-scene-selected-hub") === hubID &&
+          typeof signature === "string" &&
+          signature !== "" &&
+          signature !== previous
+        );
+      },
+      { hubID: hub.hub_id, previous: previousSignature },
+    );
+    const signature = await networkMap.getAttribute(
+      "data-scene-layout-signature",
+    );
+    const layout = await networkMap.getAttribute("data-scene-layout");
+    assert(
+      typeof signature === "string" && signature !== "",
+      `${hub.hub_id} has no facility signature`,
+    );
+    assert(
+      typeof layout === "string" && layout !== "",
+      `${hub.hub_id} has no facility layout`,
+    );
+    facilitySignatures.push(signature);
+    previousSignature = signature;
+    if (!facilityLayouts.has(layout)) {
+      facilityLayouts.set(layout, hub);
+    }
+  }
+  assertUnique(facilitySignatures, "facility layout signatures");
+  assert(
+    facilityLayouts.size >= 4,
+    `facility layouts only used ${[...facilityLayouts.keys()].join(", ")}`,
+  );
+  for (const [layout, hub] of facilityLayouts) {
+    await hubPicker.selectOption(hub.hub_id);
+    await page.waitForFunction(
+      ({ hubID, expectedLayout }) => {
+        const stage = document.querySelector(
+          '[data-network-renderer="webgl"]',
+        );
+        return (
+          stage?.getAttribute("data-scene-selected-hub") === hubID &&
+          stage.getAttribute("data-scene-layout") === expectedLayout
+        );
+      },
+      { hubID: hub.hub_id, expectedLayout: layout },
+    );
+    await page.waitForTimeout(900);
+    await networkCanvas.screenshot({
+      path: join(artifactDir, `facility-layout-${layout}.png`),
+    });
+  }
   await page
     .getByRole("button", { name: "返回全国视角", exact: true })
     .click();
@@ -491,7 +565,19 @@ try {
         markers: sceneCounts.markers,
         facility_parts: facilityParts,
         facility_archetypes: archetypeCounts,
-        facility_detail: detailStats,
+        facility_detail: {
+          hubs: detailStats.hubs,
+          routes: detailStats.routes,
+          markers: detailStats.markers,
+          facilityParts: detailStats.facilityParts,
+          detailParts: detailStats.detailParts,
+          dockBays: detailStats.dockBays,
+          storageSlots: detailStats.storageSlots,
+          warehouseCount: detailStats.warehouseCount,
+          layout: detailStats.layout,
+        },
+        facility_layouts: [...facilityLayouts.keys()],
+        unique_facility_signatures: facilitySignatures.length,
         renderer: "webgl",
         draw_calls: drawCalls,
         sampled_canvas_colors: pixelProbe.colors,
@@ -735,6 +821,25 @@ async function verifyWebGLFallback(webURL) {
     assert(
       (await facilityMap.locator("rect").count()) >= 20,
       "SVG fallback did not render facility structures",
+    );
+    const firstSignature = await page
+      .locator('[data-fallback-mode="facility"]')
+      .getAttribute("data-fallback-signature");
+    await page
+      .getByLabel("选择公路港", { exact: true })
+      .selectOption({ index: 2 });
+    await page.waitForFunction(
+      (previousSignature) => {
+        const nextSignature = document
+          .querySelector('[data-fallback-mode="facility"]')
+          ?.getAttribute("data-fallback-signature");
+        return (
+          typeof nextSignature === "string" &&
+          nextSignature !== "" &&
+          nextSignature !== previousSignature
+        );
+      },
+      firstSignature,
     );
     await page
       .getByRole("button", { name: "返回全国视角", exact: true })

@@ -24,6 +24,12 @@ import type {
   RouteOverview,
   WaybillID,
 } from "../api";
+import {
+  buildFacilityLayouts,
+  type FacilityElementKind,
+  type FacilityLayout,
+  type FacilityLayoutKind,
+} from "./facilityLayout";
 
 type HubNetworkSceneProps = {
   hubs: readonly HubOverview[];
@@ -50,6 +56,10 @@ export type SceneStats = {
   dockBays: number;
   storageSlots: number;
   occupiedSlots: number;
+  warehouseCount: number;
+  layoutKind: FacilityLayoutKind | null;
+  layoutLabel: string;
+  layoutSignature: string;
   archetypes: Record<HubArchetype, number>;
 };
 
@@ -89,31 +99,6 @@ type HubPart = {
   color: string;
 };
 
-type FacilityDetailPartKind =
-  | "ground"
-  | "road"
-  | "apron"
-  | "dock"
-  | "slot"
-  | "cargo"
-  | "marking"
-  | "tower"
-  | "beacon";
-
-type FacilityDetailPart = {
-  kind: FacilityDetailPartKind;
-  offset: readonly [number, number, number];
-  size: readonly [number, number, number];
-  color: string;
-};
-
-type FacilityDetail = {
-  parts: readonly FacilityDetailPart[];
-  dockBays: number;
-  storageSlots: number;
-  occupiedSlots: number;
-};
-
 type CapacityBreaks = {
   lower: number;
   middle: number;
@@ -139,6 +124,7 @@ type SceneModel = {
   routes: readonly SceneRoute[];
   markers: readonly FlowMarker[];
   riskHubs: readonly SceneHub[];
+  facilityLayouts: ReadonlyMap<string, FacilityLayout>;
 };
 
 type NetworkSceneView = {
@@ -155,9 +141,9 @@ type NetworkSceneView = {
 type FacilitySceneView = {
   mode: "facility";
   selectedHub: SceneHub;
-  detail: FacilityDetail;
+  detail: FacilityLayout;
   hubs: readonly [SceneHub];
-  facilityParts: readonly HubPart[];
+  facilityParts: readonly [];
   routes: readonly [];
   markers: readonly [];
   riskHubs: readonly [];
@@ -387,10 +373,14 @@ export default function HubNetworkScene({
       routes: view.routes.length,
       markers: view.markers.length,
       facilityParts: view.facilityParts.length,
-      detailParts: view.detail?.parts.length ?? 0,
+      detailParts: view.detail?.elements.length ?? 0,
       dockBays: view.detail?.dockBays ?? 0,
       storageSlots: view.detail?.storageSlots ?? 0,
       occupiedSlots: view.detail?.occupiedSlots ?? 0,
+      warehouseCount: view.detail?.warehouseCount ?? 0,
+      layoutKind: view.detail?.kind ?? null,
+      layoutLabel: view.detail?.label ?? "",
+      layoutSignature: view.detail?.signature ?? "",
       archetypes: countArchetypes(view.hubs),
     });
   }, [onStats, view]);
@@ -439,15 +429,7 @@ export default function HubNetworkScene({
           />
         </>
       ) : (
-        <>
-          <FacilityDetailGround hub={view.selectedHub} detail={view.detail} />
-          <HubFacilities
-            parts={view.facilityParts}
-            scaleMultiplier={detailFacilityScale}
-            interactive={false}
-            onSelectHub={onSelectHub}
-          />
-        </>
+        <FacilityDetailGround hub={view.selectedHub} detail={view.detail} />
       )}
       <CameraRig
         selectedHub={view.selectedHub}
@@ -646,7 +628,7 @@ function FacilityDetailGround({
   detail,
 }: {
   hub: SceneHub;
-  detail: FacilityDetail;
+  detail: FacilityLayout;
 }) {
   const mesh = useRef<InstancedMesh>(null);
 
@@ -654,20 +636,28 @@ function FacilityDetailGround({
     if (mesh.current === null) {
       return;
     }
-    detail.parts.forEach((part, index) => {
-      detailPartTransform.position.set(...part.offset);
-      detailPartTransform.rotation.set(0, 0, 0);
-      detailPartTransform.scale.set(...part.size);
+    detail.elements.forEach((element, index) => {
+      detailPartTransform.position.set(
+        element.x,
+        element.centerY,
+        element.z,
+      );
+      detailPartTransform.rotation.set(0, element.rotationY, 0);
+      detailPartTransform.scale.set(
+        element.width,
+        element.height,
+        element.depth,
+      );
       detailPartTransform.updateMatrix();
       mesh.current?.setMatrixAt(index, detailPartTransform.matrix);
-      facilityPartColor.set(part.color);
+      facilityPartColor.set(detailElementColor(element.kind, hub));
       mesh.current?.setColorAt(index, facilityPartColor);
     });
     mesh.current.instanceMatrix.needsUpdate = true;
     if (mesh.current.instanceColor !== null) {
       mesh.current.instanceColor.needsUpdate = true;
     }
-  }, [detail.parts]);
+  }, [detail.elements, hub]);
 
   return (
     <group
@@ -677,7 +667,7 @@ function FacilityDetailGround({
     >
       <instancedMesh
         ref={mesh}
-        args={[undefined, undefined, detail.parts.length]}
+        args={[undefined, undefined, detail.elements.length]}
         frustumCulled={false}
         raycast={() => undefined}
       >
@@ -690,6 +680,44 @@ function FacilityDetailGround({
       </instancedMesh>
     </group>
   );
+}
+
+function detailElementColor(
+  kind: FacilityElementKind,
+  hub: SceneHub,
+): string {
+  switch (kind) {
+    case "ground":
+      return "#d9dfdc";
+    case "perimeter":
+      return "#64736f";
+    case "road":
+      return "#8f9b97";
+    case "apron":
+      return "#b7c0bc";
+    case "warehouse":
+      return structureColors[hub.archetype];
+    case "roof":
+      return "#eef1ee";
+    case "dock":
+      return "#263f3c";
+    case "slot":
+      return "#b8c2be";
+    case "cargo":
+      return hub.activity > 0.66 ? "#c58d2d" : "#4e7772";
+    case "marking":
+      return "#f4f3e8";
+    case "gatehouse":
+      return "#376f69";
+    case "tower":
+      return "#314c49";
+    case "beacon":
+      return hub.hub.anomalies > 0 ? "#df3f30" : "#427b75";
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
 }
 
 function RouteLines({ routes }: { routes: readonly SceneRoute[] }) {
@@ -1134,6 +1162,7 @@ export function buildSceneModel(
     hubs: sceneHubs,
     hubsByID,
     facilityParts: sceneHubs.flatMap(createFacilityParts),
+    facilityLayouts: buildFacilityLayouts(hubs, routes),
     routes: sceneRoutes,
     markers,
     riskHubs: sceneHubs
@@ -1149,7 +1178,11 @@ export function buildSceneView(
 ): SceneView {
   const selectedHub =
     selectedHubID === null ? undefined : model.hubsByID.get(selectedHubID);
-  if (selectedHub === undefined) {
+  const detail =
+    selectedHubID === null
+      ? undefined
+      : model.facilityLayouts.get(selectedHubID);
+  if (selectedHub === undefined || detail === undefined) {
     return {
       mode: "network",
       selectedHub: undefined,
@@ -1165,13 +1198,9 @@ export function buildSceneView(
   return {
     mode: "facility",
     selectedHub,
-    detail: buildFacilityDetail(selectedHub),
+    detail,
     hubs: [selectedHub],
-    facilityParts: model.facilityParts.filter(
-      (part) =>
-        part.sceneHub.hub.hub_id === selectedHubID &&
-        part.kind !== "signal",
-    ),
+    facilityParts: [],
     routes: [],
     markers: [],
     riskHubs: [],
@@ -1246,146 +1275,6 @@ function createFacilityParts(sceneHub: SceneHub): HubPart[] {
         ];
 
   return [...fixedParts, ...cargoParts, ...signalParts];
-}
-
-function buildFacilityDetail(sceneHub: SceneHub): FacilityDetail {
-  const archetypeIndex = hubArchetypes.indexOf(sceneHub.archetype);
-  const dockBays = 4 + archetypeIndex * 2;
-  const storageSlots = 6 + archetypeIndex * 2;
-  const occupiedSlots =
-    sceneHub.hub.in_flight === 0
-      ? 0
-      : Math.max(1, Math.ceil(sceneHub.activity * storageSlots));
-  const towerHeight = 0.22 + sceneHub.signalHeight * 0.9;
-  const parts: FacilityDetailPart[] = [
-    {
-      kind: "ground",
-      offset: [0, -0.2, 0],
-      size: [1.45, 0.04, 1.05],
-      color: "#d9dfdc",
-    },
-    {
-      kind: "road",
-      offset: [0.5, -0.172, 0],
-      size: [0.2, 0.012, 0.86],
-      color: "#8f9b97",
-    },
-    {
-      kind: "apron",
-      offset: [-0.04, -0.171, 0.34],
-      size: [0.78, 0.014, 0.2],
-      color: "#b7c0bc",
-    },
-    {
-      kind: "ground",
-      offset: [0, -0.172, -0.48],
-      size: [1.45, 0.014, 0.018],
-      color: "#64736f",
-    },
-    {
-      kind: "ground",
-      offset: [0, -0.172, 0.48],
-      size: [1.45, 0.014, 0.018],
-      color: "#64736f",
-    },
-    {
-      kind: "ground",
-      offset: [-0.69, -0.172, 0],
-      size: [0.018, 0.014, 0.98],
-      color: "#64736f",
-    },
-    {
-      kind: "ground",
-      offset: [0.69, -0.172, 0],
-      size: [0.018, 0.014, 0.98],
-      color: "#64736f",
-    },
-    {
-      kind: "road",
-      offset: [0.51, -0.09, 0.39],
-      size: [0.14, 0.16, 0.12],
-      color: "#376f69",
-    },
-    {
-      kind: "tower",
-      offset: [0.57, -0.18 + towerHeight / 2, -0.38],
-      size: [0.045, towerHeight, 0.045],
-      color: "#314c49",
-    },
-    {
-      kind: "beacon",
-      offset: [0.57, -0.15 + towerHeight, -0.38],
-      size: [0.075, 0.06, 0.075],
-      color: sceneHub.hub.anomalies > 0 ? "#df3f30" : "#427b75",
-    },
-  ];
-
-  for (let index = 0; index < 7; index += 1) {
-    parts.push({
-      kind: "marking",
-      offset: [0.5, -0.162, -0.32 + index * 0.11],
-      size: [0.018, 0.008, 0.055],
-      color: "#eef1ee",
-    });
-  }
-
-  for (let index = 0; index < dockBays; index += 1) {
-    const x = distributedPosition(-0.35, 0.24, index, dockBays);
-    parts.push(
-      {
-        kind: "dock",
-        offset: [x, -0.105, 0.235],
-        size: [0.052, 0.11, 0.025],
-        color: "#263f3c",
-      },
-      {
-        kind: "marking",
-        offset: [x, -0.161, 0.36],
-        size: [0.012, 0.008, 0.18],
-        color: "#f4f3e8",
-      },
-    );
-  }
-
-  for (let index = 0; index < storageSlots; index += 1) {
-    const column = index % 3;
-    const row = Math.floor(index / 3);
-    const x = -0.59 + column * 0.105;
-    const z = -0.36 + row * 0.105;
-    parts.push({
-      kind: "slot",
-      offset: [x, -0.16, z],
-      size: [0.08, 0.012, 0.075],
-      color: "#b8c2be",
-    });
-    if (index < occupiedSlots) {
-      parts.push({
-        kind: "cargo",
-        offset: [x, -0.13, z],
-        size: [0.064, 0.05, 0.058],
-        color: sceneHub.activity > 0.66 ? "#c58d2d" : "#4e7772",
-      });
-    }
-  }
-
-  return {
-    parts,
-    dockBays,
-    storageSlots,
-    occupiedSlots,
-  };
-}
-
-function distributedPosition(
-  start: number,
-  end: number,
-  index: number,
-  count: number,
-): number {
-  if (count <= 1) {
-    return (start + end) / 2;
-  }
-  return start + ((end - start) * index) / (count - 1);
 }
 
 function facilityPartColorFor(

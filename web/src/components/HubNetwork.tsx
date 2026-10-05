@@ -118,6 +118,11 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
       data-scene-dock-bays={sceneStats?.dockBays ?? ""}
       data-scene-storage-slots={sceneStats?.storageSlots ?? ""}
       data-scene-occupied-slots={sceneStats?.occupiedSlots ?? ""}
+      data-scene-warehouse-count={sceneStats?.warehouseCount ?? ""}
+      data-scene-layout={sceneStats?.layoutKind ?? ""}
+      data-scene-layout-label={sceneStats?.layoutLabel ?? ""}
+      data-scene-layout-signature={sceneStats?.layoutSignature ?? ""}
+      data-scene-selected-hub={selectedHubID ?? ""}
       data-scene-archetypes={
         sceneStats === null ? "" : JSON.stringify(sceneStats.archetypes)
       }
@@ -247,6 +252,9 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
           </dl>
           {sceneStats?.mode === "facility" && (
             <p className={styles.sceneFacilityMeta}>
+              <span>
+                {sceneStats.layoutLabel} · {sceneStats.warehouseCount} 仓
+              </span>
               <span>月台 {sceneStats.dockBays}</span>
               <span>
                 货位 {sceneStats.occupiedSlots}/{sceneStats.storageSlots}

@@ -70,8 +70,11 @@ markers. Four facility archetypes reuse warehouse, dock, yard, tower, and signal
 Daily capacity selects the archetype and footprint, in-flight volume fills cargo bays,
 anomalies raise a red signal mast, and the primary route sets the facility orientation.
 Selecting a hub replaces the nationwide layers with one enlarged facility inspection view.
-That view adds a perimeter, internal road, loading apron, dock bays, storage slots, occupied
-cargo positions, and an anomaly tower derived from the selected hub's operating data.
+That view uses five road and warehouse topologies: long-haul linear, cross-dock, courtyard,
+split-yard, and gateway. Capacity, route distance, location, throughput, in-flight volume, and
+risk determine the campus proportions, warehouse arrangement, docks, storage slots, entrance,
+and alert tower. The same hub must keep a stable geometry signature, while different hubs must
+not share one.
 Do not use a dark skybox, bloom, glass panels, map tiles, or decorative gradients.
 
 ## 6. Depth and elevation

@@ -1,10 +1,15 @@
-import type { CSSProperties } from "react";
+import { useMemo, type CSSProperties } from "react";
 import type {
   AnomalyOverview,
   HubOverview,
   RouteOverview,
 } from "../api";
 import styles from "../overview.module.css";
+import {
+  buildFacilityLayouts,
+  type FacilityElementKind,
+  type FacilityLayout,
+} from "./facilityLayout";
 
 type NetworkMapProps = {
   hubs: readonly HubOverview[];
@@ -29,11 +34,17 @@ export function NetworkMap({
   onSelectHub,
 }: NetworkMapProps) {
   const hubByID = new Map(hubs.map((hub) => [hub.hub_id, hub]));
+  const facilityLayouts = useMemo(
+    () => buildFacilityLayouts(hubs, routes),
+    [hubs, routes],
+  );
   const selectedHub =
     selectedHubID === null ? undefined : hubByID.get(selectedHubID);
+  const selectedLayout =
+    selectedHubID === null ? undefined : facilityLayouts.get(selectedHubID);
 
-  if (selectedHub !== undefined) {
-    return <FacilityDetailMap hub={selectedHub} hubs={hubs} />;
+  if (selectedHub !== undefined && selectedLayout !== undefined) {
+    return <FacilityDetailMap hub={selectedHub} layout={selectedLayout} />;
   }
 
   return (
@@ -149,14 +160,22 @@ export function NetworkMap({
 
 function FacilityDetailMap({
   hub,
-  hubs,
+  layout,
 }: {
   hub: HubOverview;
-  hubs: readonly HubOverview[];
+  layout: FacilityLayout;
 }) {
-  const detail = buildFallbackFacilityDetail(hub, hubs);
+  const scale = Math.min(
+    760 / layout.campusWidth,
+    400 / layout.campusDepth,
+  );
   return (
-    <div className={styles.networkMapFrame} data-fallback-mode="facility">
+    <div
+      className={styles.networkMapFrame}
+      data-fallback-mode="facility"
+      data-fallback-layout={layout.kind}
+      data-fallback-signature={layout.signature}
+    >
       <svg
         className={styles.networkMap}
         viewBox="0 0 1000 560"
@@ -166,125 +185,31 @@ function FacilityDetailMap({
       >
         <title id="facility-map-title">{hub.name}园区详情</title>
         <desc id="facility-map-description">
-          展示该园区的仓库、月台、货位、场内道路和告警塔。
+          {layout.label}，展示该园区的仓库、月台、货位、场内道路和告警塔。
         </desc>
         <rect width="1000" height="560" className={styles.mapCanvas} />
-        <rect
-          x="84"
-          y="68"
-          width="832"
-          height="424"
-          className={styles.facilityCampus}
-        />
-        <rect
-          x="720"
-          y="100"
-          width="118"
-          height="360"
-          className={styles.facilityRoad}
-        />
-        {Array.from({ length: 6 }, (_, index) => (
-          <rect
-            key={`road-${index}`}
-            x="774"
-            y={126 + index * 54}
-            width="10"
-            height="28"
-            className={styles.facilityRoadMark}
-          />
-        ))}
-        <rect
-          x="250"
-          y="155"
-          width={detail.warehouseWidth}
-          height="152"
-          className={styles.facilityWarehouse}
-        />
-        {detail.warehouseCount > 1 && (
-          <rect
-            x="250"
-            y="322"
-            width={detail.warehouseWidth * 0.72}
-            height="80"
-            className={styles.facilityWarehouseSecondary}
-          />
-        )}
-        <rect
-          x="218"
-          y="294"
-          width={detail.warehouseWidth + 64}
-          height="78"
-          className={styles.facilityApron}
-        />
-        {Array.from({ length: detail.dockBays }, (_, index) => {
-          const x = distributedPosition(
-            258,
-            242 + detail.warehouseWidth,
-            index,
-            detail.dockBays,
-          );
+        {layout.elements.map((element, index) => {
+          const centerX = 500 + element.x * scale;
+          const centerY = 280 + element.z * scale;
+          const width = Math.max(element.width * scale, 2);
+          const height = Math.max(element.depth * scale, 2);
           return (
-            <g key={`dock-${index}`}>
-              <rect
-                x={x}
-                y="282"
-                width="20"
-                height="24"
-                className={styles.facilityDock}
-              />
-              <line
-                x1={x + 10}
-                y1="316"
-                x2={x + 10}
-                y2="360"
-                className={styles.facilityBayLine}
-              />
-            </g>
+          <rect
+              key={`${element.kind}-${index}`}
+              x={centerX - width / 2}
+              y={centerY - height / 2}
+              width={width}
+              height={height}
+              rx={element.kind === "beacon" ? width / 2 : 0}
+              className={fallbackElementClass(element.kind, hub)}
+              transform={
+                element.rotationY === 0
+                  ? undefined
+                  : `rotate(${element.rotationY * (180 / Math.PI)} ${centerX} ${centerY})`
+              }
+          />
           );
         })}
-        {Array.from({ length: detail.storageSlots }, (_, index) => {
-          const column = index % 4;
-          const row = Math.floor(index / 4);
-          const x = 112 + column * 30;
-          const y = 126 + row * 42;
-          return (
-            <g key={`slot-${index}`}>
-              <rect
-                x={x}
-                y={y}
-                width="22"
-                height="30"
-                className={styles.facilitySlot}
-              />
-              {index < detail.occupiedSlots && (
-                <rect
-                  x={x + 3}
-                  y={y + 4}
-                  width="16"
-                  height="22"
-                  className={styles.facilityCargo}
-                />
-              )}
-            </g>
-          );
-        })}
-        <rect
-          x="852"
-          y={360 - detail.towerHeight}
-          width="12"
-          height={detail.towerHeight}
-          className={styles.facilityTower}
-        />
-        <circle
-          cx="858"
-          cy={348 - detail.towerHeight}
-          r="16"
-          className={
-            hub.anomalies > 0
-              ? styles.facilityAlarm
-              : styles.facilityNormal
-          }
-        />
       </svg>
       <div className={styles.mapLegend} aria-hidden="true">
         <span><i className={styles.sceneWarehouseKey} />仓库</span>
@@ -296,51 +221,44 @@ function FacilityDetailMap({
   );
 }
 
-function buildFallbackFacilityDetail(
+function fallbackElementClass(
+  kind: FacilityElementKind,
   hub: HubOverview,
-  hubs: readonly HubOverview[],
-) {
-  const capacities = hubs
-    .map((item) => item.daily_capacity)
-    .sort((left, right) => left - right);
-  const rank = capacities.findIndex(
-    (capacity) => capacity >= hub.daily_capacity,
-  );
-  const quartile = Math.min(
-    3,
-    Math.floor((Math.max(rank, 0) * 4) / Math.max(capacities.length, 1)),
-  );
-  const maxInFlight = Math.max(...hubs.map((item) => item.in_flight), 1);
-  const dockBays = 4 + quartile * 2;
-  const storageSlots = 6 + quartile * 2;
-  const occupiedSlots =
-    hub.in_flight === 0
-      ? 0
-      : Math.max(
-          1,
-          Math.ceil((hub.in_flight / maxInFlight) * storageSlots),
-        );
-
-  return {
-    dockBays,
-    storageSlots,
-    occupiedSlots,
-    towerHeight: 58 + Math.min(hub.anomalies, 8) * 8,
-    warehouseCount: 1 + Math.floor(quartile / 2),
-    warehouseWidth: 280 + quartile * 42,
-  };
-}
-
-function distributedPosition(
-  start: number,
-  end: number,
-  index: number,
-  count: number,
-): number {
-  if (count <= 1) {
-    return (start + end) / 2;
+): string {
+  switch (kind) {
+    case "ground":
+      return styles.facilityCampus;
+    case "perimeter":
+      return styles.facilityPerimeter;
+    case "road":
+      return styles.facilityRoad;
+    case "apron":
+      return styles.facilityApron;
+    case "warehouse":
+      return styles.facilityWarehouse;
+    case "roof":
+      return styles.facilityRoof;
+    case "dock":
+      return styles.facilityDock;
+    case "slot":
+      return styles.facilitySlot;
+    case "cargo":
+      return styles.facilityCargo;
+    case "marking":
+      return styles.facilityRoadMark;
+    case "gatehouse":
+      return styles.facilityGatehouse;
+    case "tower":
+      return styles.facilityTower;
+    case "beacon":
+      return hub.anomalies > 0
+        ? styles.facilityAlarm
+        : styles.facilityNormal;
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
   }
-  return start + ((end - start) * index) / (count - 1);
 }
 
 function project(hub: HubOverview): { x: number; y: number } {
