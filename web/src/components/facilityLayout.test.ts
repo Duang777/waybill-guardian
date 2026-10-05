@@ -146,6 +146,9 @@ describe("buildFacilityLayouts", () => {
       expect(inbound.points.at(-1)).toEqual(transfer.points[0]);
       expect(transfer.points.at(-1)).toEqual(outbound.points[0]);
       expect(outbound.points.at(-1)).toEqual(inbound.points[0]);
+      expect(layout.vehiclePath.points.at(-1)).toEqual(
+        layout.vehiclePath.points[0],
+      );
       expect(layout.vehicles.length).toBeGreaterThan(0);
       expect(layout.vehicles.length).toBeLessThanOrEqual(6);
     }
@@ -216,6 +219,9 @@ describe("buildFacilityLayouts", () => {
       "moving",
       "moving",
     ]);
+    expect(
+      new Set(layout?.vehicles.map((vehicle) => vehicle.phase)).size,
+    ).toBe(layout?.vehicles.length);
   });
 
   it("samples a vehicle position deterministically along the route", () => {
@@ -235,5 +241,46 @@ describe("buildFacilityLayouts", () => {
     expect(sampleFacilityRoute(route, 0.35)).not.toEqual(
       sampleFacilityRoute(route, 0),
     );
+  });
+
+  it("keeps vehicle headings continuous through route corners", () => {
+    const route = buildFacilityLayouts(hubs, routes)
+      .get("CROSS")
+      ?.transportRoutes[0];
+    expect(route).toBeDefined();
+    if (route === undefined) {
+      return;
+    }
+    const lengths = route.points.slice(1).map((point, index) => {
+      const previous = route.points[index] ?? point;
+      return Math.hypot(
+        point[0] - previous[0],
+        point[1] - previous[1],
+      );
+    });
+    const cornerProgress =
+      (lengths[0] ?? 0) /
+      lengths.reduce((total, length) => total + length, 0);
+    const before = sampleFacilityRoute(route, cornerProgress - 0.0001);
+    const after = sampleFacilityRoute(route, cornerProgress + 0.0001);
+    const headingDelta = Math.abs(
+      Math.atan2(
+        Math.sin(after.rotationY - before.rotationY),
+        Math.cos(after.rotationY - before.rotationY),
+      ),
+    );
+
+    expect(headingDelta).toBeLessThan(0.1);
+  });
+
+  it("keeps moving vehicles at one speed so they cannot overlap", () => {
+    const layout = buildFacilityLayouts(hubs, routes).get("SPLIT");
+    const movingSpeeds =
+      layout?.vehicles
+        .filter((vehicle) => vehicle.speed > 0)
+        .map((vehicle) => vehicle.speed) ?? [];
+
+    expect(movingSpeeds.length).toBeGreaterThan(1);
+    expect(new Set(movingSpeeds).size).toBe(1);
   });
 });

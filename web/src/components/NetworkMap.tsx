@@ -7,10 +7,10 @@ import type {
 import styles from "../overview.module.css";
 import {
   buildFacilityLayouts,
-  sampleFacilityRoute,
+  sampleFacilityVehiclePath,
   type FacilityElementKind,
   type FacilityLayout,
-  type FacilityTransportRoute,
+  type FacilityVehiclePath,
   type FacilityVehicleState,
 } from "./facilityLayout";
 
@@ -255,14 +255,11 @@ function FacilityDetailMap({
             />
           ))}
           {layout.vehicles.map((vehicle) => {
-            const route = layout.transportRoutes.find(
-              (item) => item.kind === vehicle.routeKind,
-            );
-            if (route === undefined) {
-              return null;
-            }
             const duration = Math.max(6, 1 / Math.max(vehicle.speed, 0.01));
-            const sample = sampleFacilityRoute(route, vehicle.phase);
+            const sample = sampleFacilityVehiclePath(
+              layout.vehiclePath,
+              vehicle.phase,
+            );
             const transform =
               `translate(${centerX + sample.x * scale} ${
                 centerY + sample.z * scale
@@ -280,7 +277,12 @@ function FacilityDetailMap({
               >
                 {!reducedMotion && !paused && vehicle.speed > 0 && (
                   <animateMotion
-                    path={facilityRoutePath(route, centerX, centerY, scale)}
+                    path={facilityVehiclePathData(
+                      layout.vehiclePath,
+                      centerX,
+                      centerY,
+                      scale,
+                    )}
                     begin={`-${vehicle.phase * duration}s`}
                     dur={`${duration}s`}
                     repeatCount="indefinite"
@@ -320,20 +322,73 @@ function FacilityDetailMap({
   );
 }
 
-function facilityRoutePath(
-  route: FacilityTransportRoute,
+function facilityVehiclePathData(
+  path: FacilityVehiclePath,
   centerX: number,
   centerY: number,
   scale: number,
 ): string {
-  return route.points
-    .map(
-      ([x, z], index) =>
-        `${index === 0 ? "M" : "L"} ${centerX + x * scale} ${
-          centerY + z * scale
-        }`,
-    )
-    .join(" ");
+  const projected = path.points.map(([x, z]) => ({
+    x: centerX + x * scale,
+    y: centerY + z * scale,
+  }));
+  if (
+    projected.length > 2 &&
+    projected[0]?.x === projected.at(-1)?.x &&
+    projected[0]?.y === projected.at(-1)?.y
+  ) {
+    projected.pop();
+  }
+  const rounded = projected.map((point, index) => {
+    const previous = projected[(index - 1 + projected.length) % projected.length];
+    const next = projected[(index + 1) % projected.length];
+    if (previous === undefined || next === undefined) {
+      return { point, entry: point, exit: point };
+    }
+    const radius = Math.min(
+      12,
+      Math.hypot(point.x - previous.x, point.y - previous.y) / 3,
+      Math.hypot(next.x - point.x, next.y - point.y) / 3,
+    );
+    return {
+      point,
+      entry: moveToward(point, previous, radius),
+      exit: moveToward(point, next, radius),
+    };
+  });
+  const first = rounded[0];
+  if (first === undefined) {
+    return "";
+  }
+  const commands = [`M ${first.exit.x} ${first.exit.y}`];
+  for (let index = 1; index < rounded.length; index += 1) {
+    const corner = rounded[index];
+    if (corner !== undefined) {
+      commands.push(
+        `L ${corner.entry.x} ${corner.entry.y}`,
+        `Q ${corner.point.x} ${corner.point.y} ${corner.exit.x} ${corner.exit.y}`,
+      );
+    }
+  }
+  commands.push(
+    `L ${first.entry.x} ${first.entry.y}`,
+    `Q ${first.point.x} ${first.point.y} ${first.exit.x} ${first.exit.y}`,
+    "Z",
+  );
+  return commands.join(" ");
+}
+
+function moveToward(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  distance: number,
+): { x: number; y: number } {
+  const length = Math.hypot(to.x - from.x, to.y - from.y);
+  const ratio = length === 0 ? 0 : distance / length;
+  return {
+    x: from.x + (to.x - from.x) * ratio,
+    y: from.y + (to.y - from.y) * ratio,
+  };
 }
 
 function fallbackVehicleClass(state: FacilityVehicleState): string {
