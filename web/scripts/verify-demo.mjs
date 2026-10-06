@@ -94,6 +94,10 @@ try {
     await page.getByText("置信度 86%", { exact: true }).waitFor();
 
     if (index === 0) {
+      await verifyWideWorkbench(page, 1600, 900);
+      await verifyWideWorkbench(page, 1920, 1080);
+      await page.setViewportSize({ width: 1280, height: 900 });
+
       const evidenceLink = page
         .getByRole("button", { name: /出现异常停留/ })
         .first();
@@ -268,6 +272,8 @@ try {
       alternative: "蜀道联运",
     },
     screenshots: [
+      join(artifactDir, "workbench-pending-1600.png"),
+      join(artifactDir, "workbench-pending-1920.png"),
       join(artifactDir, "desktop-pending.png"),
       join(artifactDir, "mobile-completed.png"),
       join(artifactDir, "mobile-alternative.png"),
@@ -278,6 +284,68 @@ try {
   await browser?.close();
   stopProcesses(processes);
   await rm(dataDir, { recursive: true, force: true });
+}
+
+async function verifyWideWorkbench(page, width, height) {
+  await page.setViewportSize({ width, height });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(250);
+
+  const layout = await page.evaluate(() => {
+    const bounds = (element) => {
+      const rect = element?.getBoundingClientRect();
+      return rect === undefined
+        ? null
+        : {
+            top: Math.round(rect.top),
+            right: Math.round(rect.right),
+            bottom: Math.round(rect.bottom),
+            left: Math.round(rect.left),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          };
+    };
+    return {
+      viewportHeight: window.innerHeight,
+      documentHeight: document.documentElement.scrollHeight,
+      map: bounds(document.querySelector('[aria-labelledby="route-map-title"]')),
+      timeline: bounds(document.querySelector("#timeline-title")?.closest("section")),
+      approval: bounds(
+        document.querySelector('aside[aria-labelledby="approval-title"]'),
+      ),
+    };
+  });
+  const actionBounds = await page
+    .getByRole("button", { name: "确认并执行", exact: true })
+    .boundingBox();
+  assert(
+    layout.documentHeight <= layout.viewportHeight + 1,
+    `${width}x${height} workbench scrolls to ${layout.documentHeight}px`,
+  );
+  assert(
+    layout.map !== null &&
+      layout.timeline !== null &&
+      layout.approval !== null &&
+      layout.map.right <= layout.timeline.left + 1 &&
+      layout.timeline.right <= layout.approval.left &&
+      layout.map.width >= 600 &&
+      layout.timeline.width >= 320 &&
+      layout.approval.width >= 450,
+    `${width}x${height} workbench is not a readable three-column layout: ${JSON.stringify(layout)}`,
+  );
+  assert(
+    actionBounds !== null &&
+      actionBounds.y >= 0 &&
+      actionBounds.y + actionBounds.height <= height,
+    `${width}x${height} approval action is outside the viewport`,
+  );
+  assert(
+    !(await hasHorizontalOverflow(page)),
+    `${width}x${height} workbench has horizontal overflow`,
+  );
+  await page.screenshot({
+    path: join(artifactDir, `workbench-pending-${width}.png`),
+  });
 }
 
 async function hasHorizontalOverflow(page) {

@@ -38,7 +38,7 @@ The overview calculates time recovered, cost impact, labor saved, anomaly closur
 
 `PLATFORM=mock` loads only the embedded waybill `YD2026101001` from [`internal/tools/testdata/demo.json`](internal/tools/testdata/demo.json). `PLATFORM=file` loads one JSON or CSV v1 file at startup and supports optional highway-port, vehicle, and route network entities. The page can select a waybill from that file and start a run. Writes in file mode stay on the in-memory fixture write runtime, and SMS is not actually sent.
 
-The home page is a nationwide highway-port overview with the network, KPIs, anomaly queue, and cited operating briefs. The nationwide view is an abstract network diagram for demonstration, not a survey map, and it does not draw administrative boundaries. It can start five independent runs in one batch. Selecting a waybill opens its workbench; every run keeps its own approval and SSE timeline. The current UI is still not the black and orange command center in [issue 77](https://github.com/Duang777/waybill-guardian/issues/77).
+The home page is a nationwide highway-port overview with the network, KPIs, anomaly queue, and cited operating briefs. The nationwide view is an abstract network diagram for demonstration, not a survey map, and it does not draw administrative boundaries. It can start five independent runs in one batch. Selecting a waybill opens its workbench; every run keeps its own approval and SSE timeline. At 1600 by 900 and 1920 by 1080, the overview fits the network, queue, and operating briefs in one viewport. The waybill workbench uses three columns for map evidence, audit timeline, and approval so the operator can act without scrolling the page. The current UI is still not the black and orange command center in [issue 77](https://github.com/Duang777/waybill-guardian/issues/77).
 
 <p align="center">
   <img alt="Desktop width. The embedded fixture is waiting for approval. The waybill selector shows Hangzhou to Chengdu, YD2026101001, and the button reads 重新处置. The proposal reassigns to 川行快运 and notifies the shipper and driver. The map is the local track. Display scores are ETA 83, road 75, weather 0." src="docs/assets/console-approval.png" width="840">
@@ -146,7 +146,13 @@ cd web
 npm run record:demo
 ```
 
-The recording script inherits the model settings above and defaults to `online`. To record without credentials, run `AGENT_MODE=offline npm run record:demo`. The file is `web/artifacts/waybill-guardian-demo.mp4`, at 1600 by 900. That directory is gitignored. A dubbed narration is not in the repository. `RECORD_OUTPUT`, `RECORD_BACKEND_PORT`, and `RECORD_WEB_PORT` change the output path and ports.
+The recording script inherits the model settings above and defaults to `online`. To record without credentials, run `AGENT_MODE=offline npm run record:demo`. The file is `web/artifacts/waybill-guardian-demo.mp4`, at 1600 by 900 by default. For a full-HD recording, run:
+
+```bash
+RECORD_RESOLUTION=1920x1080 npm run record:demo
+```
+
+`RECORD_RESOLUTION` accepts only `1600x900` and `1920x1080`. The output directory is gitignored, and a dubbed narration is not in the repository. `RECORD_OUTPUT`, `RECORD_BACKEND_PORT`, and `RECORD_WEB_PORT` change the output path and ports.
 
 ## Quick start
 
