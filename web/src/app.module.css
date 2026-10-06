@@ -1022,21 +1022,166 @@
   text-wrap: pretty;
 }
 
-.timelineList {
-  max-height: 360px;
+.timelineFlow {
+  border-top: 1px solid oklch(0.875 0.012 95);
+}
+
+.phaseStepper {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   margin: 0;
   padding: 0;
-  overflow-y: auto;
   list-style: none;
-  scroll-behavior: smooth;
+  border-bottom: 1px solid oklch(0.875 0.012 95);
+}
+
+.phaseStep {
+  display: flex;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  color: oklch(0.59 0.016 255);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.phaseStep + .phaseStep {
+  border-left: 1px solid oklch(0.875 0.012 95);
+}
+
+.phaseStepIndex {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-size: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.phaseStepComplete {
+  color: oklch(0.42 0.08 155);
+  background: oklch(0.965 0.015 155);
+}
+
+.phaseStepCurrent {
+  color: oklch(0.45 0.13 28);
+  background: oklch(0.965 0.025 29);
+}
+
+.phaseStepUpcoming {
+  color: oklch(0.64 0.012 255);
+}
+
+.timelinePhaseList {
+  display: grid;
+}
+
+.timelinePhase {
+  min-width: 0;
+}
+
+.timelinePhase + .timelinePhase {
+  border-top: 1px solid oklch(0.9 0.009 95);
+}
+
+.timelinePhaseToggle {
+  display: grid;
+  width: 100%;
+  min-height: 56px;
+  grid-template-columns: 38px 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px 8px 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: oklch(0.215 0.018 255);
+  text-align: left;
+}
+
+.timelinePhaseToggle:disabled {
+  color: oklch(0.59 0.016 255);
+}
+
+.timelinePhaseCurrent > .timelinePhaseToggle {
+  background: oklch(0.978 0.014 29);
+}
+
+.timelinePhaseUpcoming > .timelinePhaseToggle {
+  opacity: 0.68;
+}
+
+.timelinePhaseIndex {
+  color: oklch(0.59 0.016 255);
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.timelinePhaseSignal {
+  display: grid;
+  place-items: center;
+}
+
+.timelinePhaseCopy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.timelinePhaseCopy strong {
+  font-size: 13px;
+  font-weight: 680;
+}
+
+.timelinePhaseCopy > span {
+  overflow: hidden;
+  color: oklch(0.49 0.018 255);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.timelinePhaseMeta {
+  display: inline-flex;
+  min-width: 110px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  color: oklch(0.59 0.016 255);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.timelinePhaseMeta svg {
+  transition: transform 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.timelineChevronOpen {
+  transform: rotate(180deg);
+}
+
+.timelineStepList {
+  margin: 0;
+  padding: 0 0 0 38px;
+  border-top: 1px solid oklch(0.92 0.007 95);
+  background: oklch(0.989 0.003 95);
+  list-style: none;
 }
 
 .timelineEvent {
   position: relative;
   display: grid;
   grid-template-columns: 38px 24px minmax(0, 1fr);
-  min-height: 82px;
-  padding: 15px 22px 15px 12px;
+  min-height: 68px;
+  padding: 11px 18px 11px 8px;
   outline: 0 solid transparent;
   outline-offset: -2px;
   transition:
@@ -1045,13 +1190,13 @@
 }
 
 .timelineEventFocused {
-  background: oklch(0.965 0.035 85);
+  background: oklch(0.96 0.035 75);
   outline-width: 2px;
-  outline-color: oklch(0.7 0.11 75);
+  outline-color: oklch(0.62 0.18 29);
 }
 
 .timelineEvent:not(:last-child) {
-  border-bottom: 1px solid oklch(0.915 0.008 95);
+  border-bottom: 1px solid oklch(0.925 0.007 95);
 }
 
 .sequence {
@@ -1074,7 +1219,7 @@
 .eventNode::after {
   position: absolute;
   top: 20px;
-  bottom: -20px;
+  bottom: -16px;
   left: 50%;
   width: 1px;
   background: oklch(0.875 0.012 95);
@@ -1170,13 +1315,28 @@
   font-size: 15px;
 }
 
+.panelHeadingPending {
+  background: oklch(0.2 0.025 55);
+}
+
+.panelHeadingSuccess {
+  background: oklch(0.2 0.025 155);
+}
+
+.panelHeadingDanger {
+  background: oklch(0.2 0.035 28);
+}
+
+.panelHeadingNeutral {
+  background: oklch(0.18 0.012 255);
+}
+
 .guardIndicator {
   width: 11px;
   height: 11px;
   border: 3px solid oklch(0.82 0.095 75);
   border-radius: 50%;
   background: oklch(0.59 0.13 67);
-  box-shadow: 0 0 0 5px oklch(0.69 0.145 67 / 0.15);
 }
 
 .successIcon {
@@ -1185,6 +1345,10 @@
 
 .reviewIcon {
   color: oklch(0.75 0.12 55);
+}
+
+.failureIcon {
+  color: oklch(0.74 0.13 28);
 }
 
 .approvalIdle {
@@ -1345,15 +1509,32 @@
   gap: 2px;
 }
 
+.alternativeHeading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .alternativeList strong {
   font-size: 12px;
 }
 
-.alternativeList span {
+.alternativeReason {
   color: oklch(0.49 0.018 255);
   font-size: 11px;
   line-height: 1.55;
   text-wrap: pretty;
+}
+
+.alternativeRole {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  color: oklch(0.42 0.1 55);
+  background: oklch(0.94 0.045 75);
+  font-size: 9px;
+  font-weight: 700;
 }
 
 .impactList {
@@ -1899,8 +2080,37 @@
     grid-template-columns: 40px minmax(80px, 1fr) 44px 62px;
   }
 
-  .timelineList {
-    max-height: 360px;
+  .phaseStep {
+    min-height: 48px;
+    flex-direction: column;
+    justify-content: center;
+    gap: 3px;
+    padding: 5px 2px;
+    font-size: 9px;
+  }
+
+  .phaseStepIndex {
+    width: 18px;
+    height: 18px;
+    flex-basis: 18px;
+  }
+
+  .timelinePhaseToggle {
+    grid-template-columns: 30px 20px minmax(0, 1fr) auto;
+    padding-right: 10px;
+    padding-left: 6px;
+  }
+
+  .timelinePhaseMeta {
+    min-width: 0;
+  }
+
+  .timelinePhaseMeta > span {
+    display: none;
+  }
+
+  .timelineStepList {
+    padding-left: 22px;
   }
 
   .timelineEvent {

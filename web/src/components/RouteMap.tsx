@@ -29,6 +29,12 @@ type RouteMapProps = {
   origin: string | null;
   destination: string | null;
   resourceKind: WaybillResource["kind"];
+  focusRequest: RoutePointFocusRequest | null;
+};
+
+export type RoutePointFocusRequest = {
+  sourceSeq: number;
+  pointIndex: number;
 };
 
 type MapProvider = "amap" | "vector";
@@ -42,12 +48,15 @@ type MapMode =
 type MapController =
   | {
       kind: "amap";
+      select: (index: number) => void;
+      focus: (index: number) => void;
       destroy: () => void;
     }
   | {
       kind: "vector";
       destroy: () => void;
       select: (index: number) => void;
+      focus: (index: number) => void;
     };
 
 type ProjectedPoint = TrackPoint & {
@@ -72,6 +81,7 @@ export function RouteMap({
   origin,
   destination,
   resourceKind,
+  focusRequest,
 }: RouteMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const mapController = useRef<MapController | null>(null);
@@ -149,10 +159,24 @@ export function RouteMap({
 
   useEffect(() => {
     const controller = mapController.current;
-    if (controller?.kind === "vector") {
+    if (controller !== null) {
       controller.select(selectedIndex);
     }
   }, [mode.kind, selectedIndex]);
+
+  useEffect(() => {
+    if (
+      focusRequest === null ||
+      focusRequest.pointIndex < 0 ||
+      focusRequest.pointIndex >= points.length
+    ) {
+      return;
+    }
+    setSelection({ points, index: focusRequest.pointIndex });
+    const controller = mapController.current;
+    controller?.select(focusRequest.pointIndex);
+    controller?.focus(focusRequest.pointIndex);
+  }, [focusRequest, mode.kind, points]);
 
   if (points.length === 0) {
     return (
@@ -205,7 +229,11 @@ export function RouteMap({
         )}
       </div>
       {selected !== null && (
-        <div className={styles.pointInspector} aria-live="polite">
+        <div
+          className={styles.pointInspector}
+          aria-label="轨迹点详情"
+          aria-live="polite"
+        >
           <div className={styles.pointInspectorLead}>
             <span className={styles.pointIndex}>
               {(selectedIndex + 1).toString().padStart(2, "0")}
@@ -300,13 +328,33 @@ async function initializeAMap({
       fillOpacity: 1,
       zIndex: point.anomaly ? 30 : 20,
     });
-    marker.on("click", () => onSelect(index));
+    marker.on("click", () => {
+      onSelect(index);
+      map.setZoomAndCenter(
+        7,
+        coordinate(point),
+        false,
+        mapFocusDuration(),
+      );
+    });
     return marker;
   });
   map.add([route, ...markers]);
   map.setFitView([route, ...markers], false, [56, 56, 56, 56], 12);
   return {
     kind: "amap",
+    select: () => undefined,
+    focus: (index) => {
+      const point = points[index];
+      if (point !== undefined) {
+        map.setZoomAndCenter(
+          7,
+          coordinate(point),
+          false,
+          mapFocusDuration(),
+        );
+      }
+    },
     destroy: () => map.destroy(),
   };
 }
@@ -480,6 +528,7 @@ async function initializeVectorMap({
         index < points.length
       ) {
         onSelect(index);
+        focusVectorPoint(map, points[index]);
       }
     };
     map.on("click", routePointLayerID, handlePointClick);
@@ -511,12 +560,32 @@ async function initializeVectorMap({
       select: (index) => {
         void pointSource.setData(buildRoutePointCollection(points, index));
       },
+      focus: (index) => focusVectorPoint(map, points[index]),
       destroy: () => map.remove(),
     };
   } catch (error) {
     map.remove();
     throw error;
   }
+}
+
+function focusVectorPoint(
+  map: MapLibreMap,
+  point: TrackPoint | undefined,
+): void {
+  if (point === undefined) {
+    return;
+  }
+  map.easeTo({
+    center: coordinate(point),
+    zoom: Math.max(map.getZoom(), 7),
+    duration: mapFocusDuration(),
+    essential: true,
+  });
+}
+
+function mapFocusDuration(): number {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 420;
 }
 
 function waitForMapEvent(

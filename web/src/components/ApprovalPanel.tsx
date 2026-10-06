@@ -12,6 +12,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import type { Approval, Proposal, RunStatus, WaybillView } from "../api";
 import styles from "../app.module.css";
+import type { EvidenceSelection } from "../timeline";
 
 type ApprovalPanelProps = {
   approval: Approval | null;
@@ -19,7 +20,7 @@ type ApprovalPanelProps = {
   runStatus: RunStatus | null;
   view: WaybillView | null;
   busy: boolean;
-  onEvidenceSelect: (sourceSeq: number) => void;
+  onEvidenceSelect: (selection: EvidenceSelection) => void;
   onConfirm: () => Promise<void>;
   onReject: (reason: string) => Promise<void>;
 };
@@ -75,6 +76,7 @@ export function ApprovalPanel({
   }
 
   const isPending = approval.status === "pending";
+  const selectedCarrierID = carrierID(approval);
   const primaryCarrier = carrierName(approval, view);
 
   const submitReject = async () => {
@@ -99,19 +101,7 @@ export function ApprovalPanel({
           <div>
             <span className={styles.eyebrow}>方案 v{approval.plan_version}</span>
             <h2 id="approval-title" ref={approvalTitle} tabIndex={-1}>
-              {isPending
-                ? `改派至${primaryCarrier}`
-                : approval.status === "executed"
-                  ? "方案已执行"
-                  : approval.status === "reconciliation_required"
-                    ? "方案等待平台对账"
-                  : approval.status === "partially_failed"
-                    ? "方案部分执行失败"
-                    : approval.status === "failed"
-                      ? "方案执行失败"
-                  : approval.status === "rejected"
-                    ? "方案已驳回"
-                    : "正在执行方案"}
+              {approvalHeading(approval.status, primaryCarrier)}
             </h2>
           </div>
           <div className={styles.approvalBadges}>
@@ -137,8 +127,17 @@ export function ApprovalPanel({
             <div className={styles.alternativeList}>
               {proposal.alternatives.map((alternative) => (
                 <div key={alternative.carrier_id}>
-                  <strong>{carrierDisplayName(alternative.carrier_id, view)}</strong>
-                  <span>{alternative.reason}</span>
+                  <div className={styles.alternativeHeading}>
+                    <strong>{carrierDisplayName(alternative.carrier_id, view)}</strong>
+                    <span className={styles.alternativeRole}>
+                      {alternative.carrier_id === selectedCarrierID
+                        ? "首选"
+                        : "备选"}
+                    </span>
+                  </div>
+                  <span className={styles.alternativeReason}>
+                    {alternative.reason}
+                  </span>
                 </div>
               ))}
             </div>
@@ -202,8 +201,14 @@ export function ApprovalPanel({
                     <button
                       className={styles.evidenceLink}
                       type="button"
+                      aria-label={`定位证据：${evidence.label}，审计事件 ${evidence.source.source_seq}`}
                       title={`定位到审计事件 #${evidence.source.source_seq}`}
-                      onClick={() => onEvidenceSelect(evidence.source.source_seq)}
+                      onClick={() =>
+                        onEvidenceSelect({
+                          sourceSeq: evidence.source.source_seq,
+                          fieldPath: evidence.source.field_path,
+                        })
+                      }
                     >
                       <span>{evidence.value}</span>
                       <Crosshair aria-hidden="true" size={13} />
@@ -222,10 +227,14 @@ export function ApprovalPanel({
 
         <div className={styles.approvalMeta}>
           <span className={styles.mono}>{approval.id}</span>
-          <span>
-            <Clock3 aria-hidden="true" size={13} />
-            {isPending ? `有效至 ${formatTime(approval.expires_at)}` : decisionCopy(approval)}
-          </span>
+          {isPending ? (
+            <ApprovalDeadline expiresAt={approval.expires_at} />
+          ) : (
+            <span>
+              <Clock3 aria-hidden="true" size={13} />
+              {decisionCopy(approval)}
+            </span>
+          )}
         </div>
 
         {isPending && !rejecting && (
@@ -298,7 +307,11 @@ function PanelHeading({
   status: Approval["status"] | "review_required" | "idle";
 }) {
   return (
-    <div className={styles.panelHeading}>
+    <div
+      className={`${styles.panelHeading} ${
+        styles[`panelHeading${headingTone(status)}`]
+      }`}
+    >
       <div>
         <span className={styles.eyebrow}>Human-in-the-loop</span>
         <strong>人工决策闸</strong>
@@ -307,11 +320,104 @@ function PanelHeading({
         <CheckCircle2 className={styles.successIcon} aria-hidden="true" size={20} />
       ) : status === "review_required" ? (
         <TriangleAlert className={styles.reviewIcon} aria-hidden="true" size={20} />
+      ) : status === "rejected" ||
+        status === "expired" ||
+        status === "failed" ||
+        status === "partially_failed" ? (
+        <X className={styles.failureIcon} aria-hidden="true" size={20} />
       ) : (
         <span className={styles.guardIndicator} aria-hidden="true" />
       )}
     </div>
   );
+}
+
+function ApprovalDeadline({ expiresAt }: { expiresAt: string }) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <span
+      aria-atomic="true"
+      aria-live="polite"
+      title={`有效至 ${formatTime(expiresAt)}`}
+    >
+      <Clock3 aria-hidden="true" size={13} />
+      {remainingTimeLabel(Date.parse(expiresAt) - now)}
+    </span>
+  );
+}
+
+function remainingTimeLabel(remainingMilliseconds: number): string {
+  if (!Number.isFinite(remainingMilliseconds) || remainingMilliseconds <= 0) {
+    return "审批时限已到";
+  }
+  const totalMinutes = Math.ceil(remainingMilliseconds / 60_000);
+  if (totalMinutes < 60) {
+    return `剩余 ${totalMinutes} 分钟`;
+  }
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes === 0
+    ? `剩余 ${hours} 小时`
+    : `剩余 ${hours} 小时 ${minutes} 分钟`;
+}
+
+function headingTone(
+  status: Approval["status"] | "review_required" | "idle",
+): "Pending" | "Success" | "Danger" | "Neutral" {
+  switch (status) {
+    case "pending":
+    case "reconciliation_required":
+    case "review_required":
+      return "Pending";
+    case "executed":
+      return "Success";
+    case "partially_failed":
+    case "failed":
+    case "rejected":
+    case "expired":
+      return "Danger";
+    case "confirmed":
+    case "idle":
+      return "Neutral";
+    default: {
+      const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
+}
+
+function approvalHeading(
+  status: Approval["status"],
+  primaryCarrier: string,
+): string {
+  switch (status) {
+    case "pending":
+      return `改派至${primaryCarrier}`;
+    case "confirmed":
+      return "正在执行方案";
+    case "reconciliation_required":
+      return "方案等待平台对账";
+    case "executed":
+      return "方案已执行";
+    case "partially_failed":
+      return "方案部分执行失败";
+    case "failed":
+      return "方案执行失败";
+    case "rejected":
+      return "方案已驳回";
+    case "expired":
+      return "方案已过期";
+    default: {
+      const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
 }
 
 function carrierDisplayName(carrierID: string, view: WaybillView | null): string {
@@ -375,16 +481,20 @@ function stringParam(params: Readonly<Record<string, unknown>>, key: string): st
 }
 
 function carrierName(approval: Approval, view: WaybillView | null): string {
+  const selectedCarrierID = carrierID(approval);
+  return (
+    view?.waybill.candidate_carriers.find(
+      (carrier) => carrier.carrier_id === selectedCarrierID,
+    )?.name ?? selectedCarrierID
+  );
+}
+
+function carrierID(approval: Approval): string {
   const reassign = approval.items.find((item) => item.action === "tms.reassign");
   if (reassign === undefined) {
     return "候选运力";
   }
-  const carrierID = stringParam(reassign.params, "carrier_id");
-  return (
-    view?.waybill.candidate_carriers.find(
-      (carrier) => carrier.carrier_id === carrierID,
-    )?.name ?? carrierID
-  );
+  return stringParam(reassign.params, "carrier_id");
 }
 
 function approvalStatusLabel(status: Approval["status"]): string {

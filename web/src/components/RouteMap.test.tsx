@@ -66,6 +66,7 @@ describe("RouteMap", () => {
         origin="沈阳"
         destination="南昌"
         resourceKind="ready"
+        focusRequest={null}
       />,
     );
 

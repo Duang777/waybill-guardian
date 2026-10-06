@@ -94,17 +94,28 @@ try {
     await page.getByText("置信度 86%", { exact: true }).waitFor();
 
     if (index === 0) {
-      const evidenceLink = page.locator('button[title^="定位到审计事件"]').first();
+      const evidenceLink = page
+        .getByRole("button", { name: /出现异常停留/ })
+        .first();
       assert((await evidenceLink.count()) === 1, "approval has no linked evidence");
       const evidenceTarget = await evidenceLink.getAttribute("title");
       const sourceSeq = Number(evidenceTarget?.match(/#(\d+)$/)?.[1]);
       assert(Number.isInteger(sourceSeq), `invalid evidence target ${evidenceTarget}`);
       await evidenceLink.click();
-      const focusedEvent = page.locator(`[data-event-seq="${sourceSeq}"]`);
+      const focusedEvent = page.locator(
+        `[data-event-seqs="${sourceSeq}"], [data-event-seqs$=",${sourceSeq}"]`,
+      );
       await focusedEvent.waitFor();
       assert(
-        (await focusedEvent.textContent())?.includes("工具返回证据"),
-        `evidence target #${sourceSeq} is not a tool result`,
+        (await focusedEvent.textContent())?.includes("读取轨迹") &&
+          (await focusedEvent.textContent())?.includes("证据已返回"),
+        `evidence target #${sourceSeq} is not a merged tracking step`,
+      );
+      assert(
+        (await page.locator('[aria-label="轨迹点详情"]').textContent())?.includes(
+          "绵阳北服务区",
+        ),
+        `evidence target #${sourceSeq} did not focus its route point`,
       );
       await page.getByRole("button", { name: "实时", exact: true }).click();
       await page.getByText("待确认", { exact: true }).waitFor();
@@ -137,7 +148,9 @@ try {
       .locator('[aria-label="运单状态摘要"]')
       .getByText("处置完成", { exact: true })
       .waitFor();
-    const eventCount = await page.locator("ol li").count();
+    await expandPhase(page, "attribution");
+    await expandPhase(page, "proposal");
+    const eventCount = await auditEventCount(page);
     assert(eventCount >= 26, `run ${index + 1} produced only ${eventCount} events`);
     assert(
       (await page.getByText("模型推理已完成", { exact: true }).count()) > 0,
@@ -214,7 +227,7 @@ try {
     (await page.getByLabel("驳回原因").count()) === 0,
     "new approval retained the previous rejection draft",
   );
-  const rejectionEventCount = await page.locator("ol li").count();
+  const rejectionEventCount = await auditEventCount(page);
   assert(rejectionEventCount >= 14, `reject path produced only ${rejectionEventCount} events`);
   assert(await skipLinkIsHidden(page), "skip link is visible after the reject flow");
   await page.evaluate(() => window.scrollTo(0, 0));
@@ -251,6 +264,22 @@ async function hasHorizontalOverflow(page) {
   return page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   );
+}
+
+async function auditEventCount(page) {
+  const label = await page.getByText(/^\d+ events$/).textContent();
+  const count = Number(label?.match(/^(\d+) events$/)?.[1]);
+  assert(Number.isInteger(count), `invalid audit event count ${label}`);
+  return count;
+}
+
+async function expandPhase(page, phaseID) {
+  const toggle = page.locator(
+    `button[aria-controls="timeline-phase-${phaseID}"]`,
+  );
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+    await toggle.click();
+  }
 }
 
 async function undersizedButtons(page) {

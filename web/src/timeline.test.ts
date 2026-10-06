@@ -6,6 +6,7 @@ import {
   type AuditEventType,
 } from "./api";
 import {
+  evidenceFocusTarget,
   initialTimelineState,
   inferenceMode,
   latestApproval,
@@ -13,6 +14,7 @@ import {
   playbackCursor,
   proposalForApproval,
   runStatus,
+  timelinePhases,
   timelineReducer,
   visibleEvents,
 } from "./timeline";
@@ -210,6 +212,126 @@ describe("timelineReducer", () => {
     const next = timelineReducer(hydrated, { type: "event_received", event: foreign });
 
     expect(next.events).toEqual([first]);
+  });
+});
+
+describe("timeline presentation selectors", () => {
+  it("groups the audit trail into six business phases and merges a tool call with its result", () => {
+    const events = [
+      event(1, "run_started", {}),
+      event(2, "tool_call", {
+        call_id: "call-tracking",
+        action: "tms.get_tracking",
+        wire_name: "tms_get_tracking",
+        arguments: { waybill_id: "YD2026101001" },
+      }),
+      event(3, "tool_result", {
+        call_id: "call-tracking",
+        action: "tms.get_tracking",
+        wire_name: "tms_get_tracking",
+        result: { points: [] },
+      }),
+      event(4, "attribution", { summary: "异常停留导致延误风险" }),
+      event(5, "proposal_prepared", {}),
+      event(6, "approval_requested", {}),
+      event(7, "approval_decided", {}),
+      event(8, "write_started", { action: "tms.reassign" }),
+      event(9, "write_executed", { action: "tms.reassign" }),
+      event(10, "approval_executed", {}),
+      event(11, "run_completed", {}),
+    ];
+
+    const phases = timelinePhases(events);
+
+    expect(phases.map((phase) => phase.id)).toEqual([
+      "perception",
+      "attribution",
+      "proposal",
+      "approval",
+      "execution",
+      "closure",
+    ]);
+    expect(phases.map((phase) => phase.status)).toEqual([
+      "complete",
+      "complete",
+      "complete",
+      "complete",
+      "complete",
+      "complete",
+    ]);
+    expect(phases[0]?.steps).toHaveLength(2);
+    expect(phases[0]?.steps[1]).toMatchObject({
+      label: "读取轨迹",
+      eventSeqs: [2, 3],
+    });
+  });
+
+  it("marks approval as current while execution and closure are still upcoming", () => {
+    const phases = timelinePhases([
+      event(1, "run_started", {}),
+      event(2, "attribution", {}),
+      event(3, "proposal_prepared", {}),
+      event(4, "approval_requested", {}),
+    ]);
+
+    expect(phases.map((phase) => phase.status)).toEqual([
+      "complete",
+      "complete",
+      "complete",
+      "current",
+      "upcoming",
+      "upcoming",
+    ]);
+  });
+
+  it("maps tracking evidence to the matching route point and keeps driver evidence on the timeline", () => {
+    const tracking = [
+      {
+        label: "杭州公路港",
+        recorded_at: "2026-10-10T01:00:00Z",
+        longitude: 120.1551,
+        latitude: 30.2741,
+        speed_kph: 68,
+        anomaly: false,
+      },
+      {
+        label: "绵阳北服务区",
+        recorded_at: "2026-10-10T09:00:00Z",
+        longitude: 104.6796,
+        latitude: 31.4675,
+        speed_kph: 0,
+        stop_hours: 6,
+        anomaly: true,
+        anomaly_type: "delay",
+      },
+    ];
+    const events = [
+      event(1, "tool_result", {
+        call_id: "call-tracking",
+        action: "tms.get_tracking",
+        wire_name: "tms_get_tracking",
+        result: { points: tracking },
+      }),
+      event(2, "tool_result", {
+        call_id: "call-driver",
+        action: "tms.get_driver",
+        wire_name: "tms_get_driver",
+        result: { continuous_drive_hours: 9 },
+      }),
+    ];
+
+    expect(
+      evidenceFocusTarget(events, tracking, {
+        sourceSeq: 1,
+        fieldPath: "/points/1/stop_hours",
+      }),
+    ).toEqual({ kind: "route_point", seq: 1, pointIndex: 1 });
+    expect(
+      evidenceFocusTarget(events, tracking, {
+        sourceSeq: 2,
+        fieldPath: "/continuous_drive_hours",
+      }),
+    ).toEqual({ kind: "timeline_event", seq: 2 });
   });
 });
 

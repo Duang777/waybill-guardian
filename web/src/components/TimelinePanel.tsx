@@ -1,5 +1,7 @@
 import {
   Bot,
+  Check,
+  ChevronDown,
   CircleDot,
   Cpu,
   History,
@@ -8,16 +10,19 @@ import {
   Radio,
   UserRound,
 } from "lucide-react";
-import { useEffect, useRef, type Dispatch } from "react";
+import { useEffect, useRef, useState, type Dispatch } from "react";
 import styles from "../app.module.css";
 import {
   inferenceMode,
   playbackCursor,
-  presentEvent,
+  timelinePhases,
   visibleEvents,
   type InferenceMode,
   type TimelineAction,
+  type TimelinePhase,
+  type TimelinePhaseID,
   type TimelineState,
+  type TimelineStep,
 } from "../timeline";
 
 type TimelinePanelProps = {
@@ -103,24 +108,38 @@ export function PlaybackControls({
 
 function TimelineFeed({ state }: TimelineFeedProps) {
   const events = visibleEvents(state);
-  const feed = useRef<HTMLOListElement>(null);
+  const phases = timelinePhases(events);
+  const feed = useRef<HTMLDivElement>(null);
+  const [expandedPhases, setExpandedPhases] = useState<
+    readonly TimelinePhaseID[]
+  >([]);
+  const focusedPhase = phaseContaining(phases, state.focusedSeq);
+  const currentPhase =
+    phases.find((phase) => phase.status === "current" && phase.steps.length > 0)
+      ?.id ?? null;
 
   useEffect(() => {
-    if (state.playback.kind === "live") {
-      feed.current?.scrollTo({ top: feed.current.scrollHeight, behavior: "smooth" });
+    if (state.runID === null || currentPhase === null) {
+      setExpandedPhases([]);
+      return;
     }
-  }, [events.length, state.playback.kind]);
+    setExpandedPhases([currentPhase]);
+  }, [currentPhase, state.runID]);
 
   useEffect(() => {
     if (state.focusedSeq === null) {
       return;
     }
-    const target = feed.current?.querySelector<HTMLElement>(
-      `[data-event-seq="${state.focusedSeq}"]`,
+    const target = Array.from(
+      feed.current?.querySelectorAll<HTMLElement>("[data-event-seqs]") ?? [],
+    ).find((candidate) =>
+      candidate.dataset.eventSeqs
+        ?.split(",")
+        .includes(state.focusedSeq?.toString() ?? ""),
     );
     target?.scrollIntoView({ block: "center", behavior: "smooth" });
     target?.focus({ preventScroll: true });
-  }, [state.focusedSeq]);
+  }, [focusedPhase, state.focusedSeq]);
 
   if (events.length === 0) {
     return (
@@ -133,40 +152,214 @@ function TimelineFeed({ state }: TimelineFeedProps) {
   }
 
   return (
-    <ol className={styles.timelineList} ref={feed}>
-      {events.map((event) => {
-        const presentation = presentEvent(event);
-        return (
+    <div className={styles.timelineFlow} ref={feed}>
+      <ol className={styles.phaseStepper} aria-label="处置阶段">
+        {phases.map((phase, index) => (
           <li
-            className={`${styles.timelineEvent} ${
-              state.focusedSeq === event.seq ? styles.timelineEventFocused : ""
+            className={`${styles.phaseStep} ${
+              styles[`phaseStep${capitalizeStatus(phase.status)}`]
             }`}
-            data-event-seq={event.seq}
-            key={`${event.run_id}-${event.seq}`}
-            tabIndex={-1}
+            aria-current={phase.status === "current" ? "step" : undefined}
+            key={phase.id}
           >
-            <span className={styles.sequence}>{event.seq.toString().padStart(2, "0")}</span>
-            <span
-              className={`${styles.eventNode} ${styles[`eventNode${capitalize(presentation.tone)}`]}`}
-            >
-              <CircleDot aria-hidden="true" size={12} />
+            <span className={styles.phaseStepIndex} aria-hidden="true">
+              {phase.status === "complete" ? (
+                <Check size={12} />
+              ) : (
+                (index + 1).toString().padStart(2, "0")
+              )}
             </span>
-            <div className={styles.eventContent}>
-              <div className={styles.eventTitle}>
-                <strong>{presentation.label}</strong>
-                <time dateTime={event.ts}>{formatTime(event.ts)}</time>
-              </div>
-              <p>{presentation.detail}</p>
-              <span className={styles.eventActor}>
-                {actorIcon(event.actor)}
-                {actorLabel(event.actor)}
-              </span>
-            </div>
+            <span>{phase.label}</span>
           </li>
-        );
-      })}
-    </ol>
+        ))}
+      </ol>
+
+      <div className={styles.timelinePhaseList}>
+        {phases.map((phase, index) => {
+          const expanded =
+            phase.steps.length > 0 &&
+            (focusedPhase === phase.id ||
+              expandedPhases.includes(phase.id));
+          const phaseTone = strongestTone(phase.steps);
+          return (
+            <section
+              className={`${styles.timelinePhase} ${
+                styles[`timelinePhase${capitalizeStatus(phase.status)}`]
+              }`}
+              key={phase.id}
+            >
+              <button
+                className={styles.timelinePhaseToggle}
+                type="button"
+                aria-expanded={expanded}
+                aria-controls={`timeline-phase-${phase.id}`}
+                disabled={phase.steps.length === 0}
+                onClick={() =>
+                  setExpandedPhases((current) =>
+                    current.includes(phase.id)
+                      ? current.filter((id) => id !== phase.id)
+                      : [...current, phase.id],
+                  )
+                }
+              >
+                <span className={styles.timelinePhaseIndex}>
+                  {(index + 1).toString().padStart(2, "0")}
+                </span>
+                <span
+                  className={`${styles.timelinePhaseSignal} ${
+                    styles[`eventNode${capitalize(phaseTone)}`]
+                  }`}
+                  aria-hidden="true"
+                >
+                  <CircleDot size={12} />
+                </span>
+                <span className={styles.timelinePhaseCopy}>
+                  <strong>{phase.label}</strong>
+                  <span>{phase.description}</span>
+                </span>
+                <span className={styles.timelinePhaseMeta}>
+                  <span>{phaseStatusLabel(phase)}</span>
+                  {phase.steps.length > 0 && (
+                    <ChevronDown
+                      className={expanded ? styles.timelineChevronOpen : ""}
+                      aria-hidden="true"
+                      size={15}
+                    />
+                  )}
+                </span>
+              </button>
+              {expanded && (
+                <ol
+                  className={styles.timelineStepList}
+                  id={`timeline-phase-${phase.id}`}
+                >
+                  {phase.steps.map((step) => (
+                    <TimelineStepRow
+                      focusedSeq={state.focusedSeq}
+                      step={step}
+                      key={step.key}
+                    />
+                  ))}
+                </ol>
+              )}
+            </section>
+          );
+        })}
+      </div>
+    </div>
   );
+}
+
+function TimelineStepRow({
+  focusedSeq,
+  step,
+}: {
+  focusedSeq: number | null;
+  step: TimelineStep;
+}) {
+  const focused =
+    focusedSeq !== null && step.eventSeqs.includes(focusedSeq);
+  return (
+    <li
+      className={`${styles.timelineEvent} ${
+        focused ? styles.timelineEventFocused : ""
+      }`}
+      data-event-seqs={step.eventSeqs.join(",")}
+      tabIndex={focused ? -1 : undefined}
+    >
+      <span className={styles.sequence}>{formatSequence(step.eventSeqs)}</span>
+      <span
+        className={`${styles.eventNode} ${
+          styles[`eventNode${capitalize(step.tone)}`]
+        }`}
+      >
+        <CircleDot aria-hidden="true" size={12} />
+      </span>
+      <div className={styles.eventContent}>
+        <div className={styles.eventTitle}>
+          <strong>{step.label}</strong>
+          <time dateTime={step.timestamp}>{formatTime(step.timestamp)}</time>
+        </div>
+        <p>{step.detail}</p>
+        <span className={styles.eventActor}>
+          {actorIcon(step.actor)}
+          {actorLabel(step.actor)}
+        </span>
+      </div>
+    </li>
+  );
+}
+
+function phaseContaining(
+  phases: readonly TimelinePhase[],
+  seq: number | null,
+): TimelinePhaseID | null {
+  if (seq === null) {
+    return null;
+  }
+  return (
+    phases.find((phase) =>
+      phase.steps.some((step) => step.eventSeqs.includes(seq)),
+    )?.id ?? null
+  );
+}
+
+function phaseStatusLabel(phase: TimelinePhase): string {
+  switch (phase.status) {
+    case "complete":
+      return `${phase.steps.length} 步已完成`;
+    case "current":
+      return `${phase.steps.length} 步进行中`;
+    case "upcoming":
+      return "等待前序阶段";
+    default: {
+      const exhaustive: never = phase.status;
+      return exhaustive;
+    }
+  }
+}
+
+function strongestTone(
+  steps: readonly TimelineStep[],
+): TimelineStep["tone"] {
+  if (steps.some((step) => step.tone === "danger")) {
+    return "danger";
+  }
+  if (steps.some((step) => step.tone === "warning")) {
+    return "warning";
+  }
+  if (steps.some((step) => step.tone === "success")) {
+    return "success";
+  }
+  return "neutral";
+}
+
+function capitalizeStatus(
+  status: TimelinePhase["status"],
+): "Complete" | "Current" | "Upcoming" {
+  switch (status) {
+    case "complete":
+      return "Complete";
+    case "current":
+      return "Current";
+    case "upcoming":
+      return "Upcoming";
+    default: {
+      const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
+}
+
+function formatSequence(sequences: readonly number[]): string {
+  const first = sequences[0];
+  const last = sequences.at(-1);
+  if (first === undefined || last === undefined) {
+    return "--";
+  }
+  const start = first.toString().padStart(2, "0");
+  const end = last.toString().padStart(2, "0");
+  return first === last ? start : `${start}-${end}`;
 }
 
 function modeClassName(mode: InferenceMode): string {
@@ -230,7 +423,7 @@ function actorLabel(actor: "agent" | "human" | "system"): string {
 }
 
 function capitalize(
-  value: ReturnType<typeof presentEvent>["tone"],
+  value: TimelineStep["tone"],
 ): "Neutral" | "Warning" | "Success" | "Danger" {
   switch (value) {
     case "neutral":
