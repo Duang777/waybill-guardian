@@ -100,6 +100,16 @@ try {
     (await page.locator('section[aria-label="24 小时经营指标"] article').count()) === 4,
     "overview did not render four primary KPIs",
   );
+  assert(
+    (await page.getByText("暂无已审批执行", { exact: true }).count()) === 2,
+    "empty impact KPIs did not explain the missing execution sample",
+  );
+  await page
+    .getByText("尚未完成自动取证", { exact: true })
+    .waitFor();
+  await page
+    .getByText("67 条异常待闭环", { exact: true })
+    .waitFor();
   const kpiFontSizes = await page
     .locator('section[aria-label="24 小时经营指标"] article strong')
     .evaluateAll((elements) =>

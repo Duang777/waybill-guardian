@@ -58,6 +58,23 @@ const primaryKPIKeys = [
   "anomaly_closure_rate_pct",
 ] as const;
 
+type PrimaryKPIKey = (typeof primaryKPIKeys)[number];
+
+type PrimaryKPI = {
+  key: PrimaryKPIKey;
+  metric: KPIMetric;
+};
+
+type KPIContext = {
+  anomalyCount: number;
+  hasClosedRunSample: boolean;
+};
+
+type KPIPresentation =
+  | { kind: "value"; value: number }
+  | { kind: "empty"; value: 0; detail: string }
+  | { kind: "unavailable"; detail: string };
+
 const queueViews = [
   { value: "all", label: "全部" },
   { value: "unassigned", label: "待分派" },
@@ -113,9 +130,9 @@ export function OverviewPage() {
       return [];
     }
     const byKey = new Map(resource.kpis.metrics.map((metric) => [metric.key, metric]));
-    return primaryKPIKeys.flatMap((key) => {
+    return primaryKPIKeys.flatMap<PrimaryKPI>((key) => {
       const metric = byKey.get(key);
-      return metric === undefined ? [] : [metric];
+      return metric === undefined ? [] : [{ key, metric }];
     });
   }, [resource]);
   const queueEntries = useMemo(
@@ -312,8 +329,16 @@ export function OverviewPage() {
             </section>
             {resource.kind === "ready" && (
               <section className={styles.kpiStrip} aria-label="24 小时经营指标">
-                {primaryKPIs.map((metric) => (
-                  <KPI key={metric.key} metric={metric} />
+                {primaryKPIs.map((kpi) => (
+                  <OverviewKPI
+                    key={kpi.key}
+                    metricKey={kpi.key}
+                    metric={kpi.metric}
+                    context={{
+                      anomalyCount: resource.overview.totals.anomalies,
+                      hasClosedRunSample: hasClosedRunSample(resource.kpis),
+                    }}
+                  />
                 ))}
               </section>
             )}
@@ -533,28 +558,110 @@ export function OverviewPage() {
   );
 }
 
-function KPI({ metric }: { metric: KPIMetric }) {
-  const detail = metric.value === null ? metric.reason : metric.formula;
+export function OverviewKPI({
+  metricKey,
+  metric,
+  context,
+}: {
+  metricKey: PrimaryKPIKey;
+  metric: KPIMetric;
+  context: KPIContext;
+}) {
+  const presentation = kpiPresentation(metricKey, metric, context);
+  const detail =
+    presentation.kind === "value" ? metric.formula : presentation.detail;
+  const detailID = `kpi-${metricKey}-detail`;
   return (
-    <article className={styles.kpi} title={detail}>
+    <article
+      className={[
+        styles.kpi,
+        presentation.kind === "empty" ? styles.kpiEmpty : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      title={detail}
+    >
       <div className={styles.kpiLabel}>
         <span>{metric.label}</span>
         <span>24H</span>
       </div>
-      <strong className={metric.value === null ? styles.kpiUnavailable : undefined}>
-        {metric.value === null ? (
+      <strong
+        className={
+          presentation.kind === "unavailable"
+            ? styles.kpiUnavailable
+            : undefined
+        }
+        aria-describedby={
+          presentation.kind === "value" ? undefined : detailID
+        }
+      >
+        {presentation.kind === "unavailable" ? (
           "待接入"
         ) : (
           <RollingNumber
-            value={metric.value}
+            value={presentation.value}
             precision={1}
             format={(value) => formatMetricValue(value, metric.unit)}
-            label={`${metric.label} ${formatMetricValue(metric.value, metric.unit)}`}
+            label={`${metric.label} ${formatMetricValue(
+              presentation.value,
+              metric.unit,
+            )}`}
           />
         )}
       </strong>
-      <span className={styles.kpiFoot}>{detail}</span>
+      <span
+        className={`${styles.kpiFoot} ${
+          presentation.kind === "value" ? "" : styles.kpiFootVisible
+        }`}
+        id={detailID}
+      >
+        {detail}
+      </span>
     </article>
+  );
+}
+
+function kpiPresentation(
+  metricKey: PrimaryKPIKey,
+  metric: KPIMetric,
+  context: KPIContext,
+): KPIPresentation {
+  if (metric.value === null) {
+    return {
+      kind: "unavailable",
+      detail: metric.reason ?? "当前指标缺少计算依据",
+    };
+  }
+  if (metric.value !== 0 || context.hasClosedRunSample) {
+    return { kind: "value", value: metric.value };
+  }
+  switch (metricKey) {
+    case "time_recovered_hours":
+    case "cost_impact_cny":
+      return { kind: "empty", value: 0, detail: "暂无已审批执行" };
+    case "labor_saved_hours":
+      return { kind: "empty", value: 0, detail: "尚未完成自动取证" };
+    case "anomaly_closure_rate_pct":
+      return {
+        kind: "empty",
+        value: 0,
+        detail:
+          context.anomalyCount === 0
+            ? "当前无异常运单"
+            : `${context.anomalyCount} 条异常待闭环`,
+      };
+    default: {
+      const exhaustive: never = metricKey;
+      return exhaustive;
+    }
+  }
+}
+
+function hasClosedRunSample(report: KPIReport): boolean {
+  return report.metrics.some(
+    (metric) =>
+      metric.key === "average_handling_minutes" &&
+      metric.availability === "available",
   );
 }
 
