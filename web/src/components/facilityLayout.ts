@@ -53,7 +53,9 @@ export type FacilityTransportRoute = {
 };
 
 export type FacilityTransportSegment = {
+  id: string;
   status: FacilityTransportRouteStatus;
+  routeKinds: readonly FacilityTransportRouteKind[];
   from: FacilityRoutePoint;
   to: FacilityRoutePoint;
 };
@@ -1030,16 +1032,27 @@ export function buildFacilityTransportSegments(
       }
       const key = physicalSegmentKey(previous, point);
       const current = segments.get(key);
-      if (
-        current === undefined ||
-        (current.status === "active" && route.status === "risk")
-      ) {
+      if (current === undefined) {
         segments.set(key, {
+          id: key,
           status: route.status,
+          routeKinds: [route.kind],
           from: previous,
           to: point,
         });
+        return;
       }
+      const routeKinds = current.routeKinds.includes(route.kind)
+        ? current.routeKinds
+        : [...current.routeKinds, route.kind];
+      segments.set(key, {
+        ...current,
+        status:
+          current.status === "risk" || route.status === "risk"
+            ? "risk"
+            : "active",
+        routeKinds,
+      });
     });
   }
   return [...segments.values()];

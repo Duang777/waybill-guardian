@@ -42,7 +42,6 @@ try {
     `${backendURL}/healthz`,
     backendProcess,
     processes,
-    /waybill guardian listening/,
   );
 
   const webProcess = startProcess(
@@ -66,7 +65,7 @@ try {
     },
   );
   processes.push(webProcess);
-  await waitForHTTP(webURL, webProcess, processes, /Local:/);
+  await waitForHTTP(webURL, webProcess, processes);
 
   browser = await chromium.launch({
     executablePath: await findChrome(),
@@ -125,7 +124,6 @@ try {
         `${backendURL}/healthz`,
         backendProcess,
         processes,
-        /waybill guardian listening/,
       );
       await page.reload({ waitUntil: "networkidle" });
       await page.getByText("改派至川行快运", { exact: true }).waitFor();

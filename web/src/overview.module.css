@@ -549,7 +549,31 @@
 }
 
 .facilityTransportLayer {
-  pointer-events: none;
+  pointer-events: auto;
+}
+
+.networkMap [data-facility-object],
+.networkMap [role="button"] {
+  cursor: pointer;
+  transition:
+    opacity 140ms ease-out,
+    filter 140ms ease-out;
+}
+
+.networkMap [data-dimmed="true"] {
+  opacity: 0.28;
+}
+
+.networkMap [data-selected="true"] {
+  filter: drop-shadow(0 0 5px oklch(0.2 0.02 200 / 0.4));
+}
+
+.networkMap [role="button"]:focus {
+  outline: none;
+}
+
+.networkMap [role="button"]:focus-visible {
+  filter: drop-shadow(0 0 6px oklch(0.2 0.02 200 / 0.54));
 }
 
 .facilityRouteActive,
@@ -671,8 +695,19 @@
   top: 12px;
   right: 14px;
   display: flex;
+  max-width: calc(100% - 28px);
+  flex-wrap: wrap;
   gap: 6px;
+  justify-content: flex-end;
   pointer-events: auto;
+}
+
+.sceneCameraPresets {
+  display: flex;
+  height: 40px;
+  border: 1px solid oklch(0.72 0.01 230);
+  border-radius: 2px;
+  background: oklch(0.99 0.002 95 / 0.94);
 }
 
 .sceneControls select {
@@ -702,6 +737,28 @@
     background-color 140ms ease-out,
     border-color 140ms ease-out,
     transform 120ms ease-out;
+}
+
+.sceneCameraPresets button {
+  display: inline-flex;
+  width: auto;
+  min-width: 58px;
+  gap: 5px;
+  padding: 0 9px;
+  border: 0;
+  border-right: 1px solid oklch(0.82 0.01 230);
+  background: transparent;
+  font-size: 10px;
+}
+
+.sceneCameraPresets button:last-child {
+  border-right: 0;
+}
+
+.sceneCameraPresets .scenePresetActive,
+.sceneCameraPresets .scenePresetActive:hover {
+  color: var(--paper);
+  background: var(--ink);
 }
 
 .sceneControls button:hover:not(:disabled) {
@@ -931,6 +988,27 @@
 .sceneFacilityMetaFlow {
   color: oklch(0.73 0.12 183);
   font-weight: 700;
+}
+
+.sceneEvidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 9px;
+  margin: 1px 0 0;
+  padding-top: 7px;
+  border-top: 1px solid oklch(0.38 0.008 250);
+  color: oklch(0.77 0.012 95);
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sceneEvidence span:first-child {
+  color: oklch(0.98 0.002 95);
+}
+
+.sceneEvidence span:nth-child(3) {
+  color: oklch(0.72 0.12 29);
 }
 
 .sceneSelection a {
@@ -1773,20 +1851,41 @@
     align-self: center;
   }
 
+  .sceneEvidence {
+    grid-column: 1 / -1;
+    padding-top: 5px;
+  }
+
   .sceneLegend {
     display: none;
   }
 
+  .sceneIdentity,
   .sceneRegions {
     display: none;
   }
 
   .sceneControls {
+    left: 8px;
     right: 8px;
+    display: grid;
+    max-width: none;
+    grid-template-columns: minmax(0, 1fr) 40px 40px;
   }
 
   .sceneControls select {
-    width: 112px;
+    width: 100%;
+  }
+
+  .sceneCameraPresets {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    width: fit-content;
+    justify-self: end;
+  }
+
+  .sceneCameraPresets button {
+    min-width: 56px;
   }
 
   .queueItem {

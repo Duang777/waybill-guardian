@@ -41,9 +41,12 @@ type HubNetworkSceneProps = {
   routes: readonly RouteOverview[];
   anomalies: readonly AnomalyOverview[];
   selectedHubID: string | null;
+  cameraPreset: FacilityCameraPreset;
+  facilitySelection: FacilitySceneSelection | null;
   reducedMotion: boolean;
   paused: boolean;
   onSelectHub: (hubID: string) => void;
+  onSelectFacilityObject: (selection: FacilitySceneSelection) => void;
   onSelectWaybill: (waybillID: WaybillID) => void;
   onFailure: () => void;
   onReady: () => void;
@@ -75,6 +78,13 @@ export type SceneStats = {
 };
 
 export type SceneMode = "network" | "facility";
+
+export type FacilityCameraPreset = "overview" | "follow" | "risk";
+
+export type FacilitySceneSelection =
+  | { kind: "vehicle"; id: string }
+  | { kind: "route"; id: string }
+  | { kind: "alert"; id: "facility-alert" };
 
 export type HubArchetype =
   | "local-depot"
@@ -185,6 +195,10 @@ const detailRouteTransform = new Object3D();
 const detailVehicleRootTransform = new Object3D();
 const detailVehiclePartTransform = new Object3D();
 const detailVehiclePartMatrix = new Matrix4();
+const sceneUp = new Vector3(0, 1, 0);
+const overviewCameraOffset = new Vector3(5.2, 7.8, 6.3);
+const followCameraOffset = new Vector3(3.1, 4.7, 3.8);
+const riskCameraOffset = new Vector3(3.5, 5.2, 4.2);
 
 const hubArchetypes = [
   "local-depot",
@@ -363,9 +377,12 @@ export default function HubNetworkScene({
   routes,
   anomalies,
   selectedHubID,
+  cameraPreset,
+  facilitySelection,
   reducedMotion,
   paused,
   onSelectHub,
+  onSelectFacilityObject,
   onSelectWaybill,
   onFailure,
   onReady,
@@ -459,12 +476,17 @@ export default function HubNetworkScene({
         <FacilityDetailGround
           hub={view.selectedHub}
           detail={view.detail}
+          selection={facilitySelection}
           reducedMotion={reducedMotion}
           paused={paused}
+          onSelect={onSelectFacilityObject}
         />
       )}
       <CameraRig
         selectedHub={view.selectedHub}
+        detail={view.detail}
+        preset={cameraPreset}
+        selection={facilitySelection}
         reducedMotion={reducedMotion}
         paused={paused}
       />
@@ -658,15 +680,20 @@ function composeFacilityPartMatrix(
 function FacilityDetailGround({
   hub,
   detail,
+  selection,
   reducedMotion,
   paused,
+  onSelect,
 }: {
   hub: SceneHub;
   detail: FacilityLayout;
+  selection: FacilitySceneSelection | null;
   reducedMotion: boolean;
   paused: boolean;
+  onSelect: (selection: FacilitySceneSelection) => void;
 }) {
   const mesh = useRef<InstancedMesh>(null);
+  const { gl } = useThree();
 
   useLayoutEffect(() => {
     if (mesh.current === null) {
@@ -686,14 +713,27 @@ function FacilityDetailGround({
       );
       detailPartTransform.updateMatrix();
       mesh.current?.setMatrixAt(index, detailPartTransform.matrix);
-      facilityPartColor.set(detailElementColor(element.kind, hub));
+      facilityPartColor.set(
+        detailElementColor(
+          element.kind,
+          hub,
+          selection !== null && element.kind !== "beacon",
+        ),
+      );
       mesh.current?.setColorAt(index, facilityPartColor);
     });
     mesh.current.instanceMatrix.needsUpdate = true;
     if (mesh.current.instanceColor !== null) {
       mesh.current.instanceColor.needsUpdate = true;
     }
-  }, [detail.elements, hub]);
+  }, [detail.elements, hub, selection]);
+
+  const setCursor = useCallback(
+    (cursor: "default" | "pointer") => {
+      gl.domElement.style.cursor = cursor;
+    },
+    [gl],
+  );
 
   return (
     <group
@@ -705,7 +745,25 @@ function FacilityDetailGround({
         ref={mesh}
         args={[undefined, undefined, detail.elements.length]}
         frustumCulled={false}
-        raycast={() => undefined}
+        onClick={(event) => {
+          event.stopPropagation();
+          const element =
+            event.instanceId === undefined
+              ? undefined
+              : detail.elements[event.instanceId];
+          if (element?.kind === "beacon") {
+            setCursor("default");
+            onSelect({ kind: "alert", id: "facility-alert" });
+          }
+        }}
+        onPointerMove={(event) => {
+          const element =
+            event.instanceId === undefined
+              ? undefined
+              : detail.elements[event.instanceId];
+          setCursor(element?.kind === "beacon" ? "pointer" : "default");
+        }}
+        onPointerOut={() => setCursor("default")}
       >
         <boxGeometry args={[1, 1, 1]} />
         <meshStandardMaterial
@@ -714,12 +772,18 @@ function FacilityDetailGround({
           metalness={0.01}
         />
       </instancedMesh>
-      <FacilityTransportRoutes segments={detail.transportSegments} />
+      <FacilityTransportRoutes
+        segments={detail.transportSegments}
+        selection={selection}
+        onSelect={onSelect}
+      />
       <FacilityVehicleInstances
         path={detail.vehiclePath}
         vehicles={detail.vehicles}
+        selection={selection}
         reducedMotion={reducedMotion}
         paused={paused}
+        onSelect={onSelect}
       />
     </group>
   );
@@ -727,42 +791,33 @@ function FacilityDetailGround({
 
 function FacilityTransportRoutes({
   segments,
+  selection,
+  onSelect,
 }: {
   segments: readonly FacilityTransportSegment[];
+  selection: FacilitySceneSelection | null;
+  onSelect: (selection: FacilitySceneSelection) => void;
 }) {
-  const activeSegments = segments.filter(
-    (segment) => segment.status === "active",
-  );
-  const riskSegments = segments.filter(
-    (segment) => segment.status === "risk",
-  );
-
   return (
-    <group>
-      <FacilityRouteSegmentInstances
-        segments={activeSegments}
-        color="#0b746d"
-        width={0.024}
-      />
-      <FacilityRouteSegmentInstances
-        segments={riskSegments}
-        color="#df3f30"
-        width={0.032}
-      />
-    </group>
+    <FacilityRouteSegmentInstances
+      segments={segments}
+      selection={selection}
+      onSelect={onSelect}
+    />
   );
 }
 
 function FacilityRouteSegmentInstances({
   segments,
-  color,
-  width,
+  selection,
+  onSelect,
 }: {
   segments: readonly FacilityTransportSegment[];
-  color: string;
-  width: number;
+  selection: FacilitySceneSelection | null;
+  onSelect: (selection: FacilitySceneSelection) => void;
 }) {
   const mesh = useRef<InstancedMesh>(null);
+  const { gl } = useThree();
 
   useLayoutEffect(() => {
     if (mesh.current === null) {
@@ -782,26 +837,62 @@ function FacilityRouteSegmentInstances({
         Math.atan2(deltaX, deltaZ),
         0,
       );
-      detailRouteTransform.scale.set(width, 0.012, length);
+      const selected =
+        selection?.kind === "route" && selection.id === segment.id;
+      detailRouteTransform.scale.set(
+        selected ? 0.052 : segment.status === "risk" ? 0.034 : 0.024,
+        selected ? 0.018 : 0.012,
+        length,
+      );
       detailRouteTransform.updateMatrix();
       mesh.current?.setMatrixAt(index, detailRouteTransform.matrix);
+      facilityPartColor.set(
+        segment.status === "risk"
+          ? "#df3f30"
+          : selection === null || selected
+            ? "#0b746d"
+            : "#aab5b1",
+      );
+      mesh.current?.setColorAt(index, facilityPartColor);
     });
     mesh.current.instanceMatrix.needsUpdate = true;
-  }, [segments, width]);
+    if (mesh.current.instanceColor !== null) {
+      mesh.current.instanceColor.needsUpdate = true;
+    }
+  }, [segments, selection]);
 
   if (segments.length === 0) {
     return null;
   }
+
+  const setCursor = (cursor: "default" | "pointer") => {
+    gl.domElement.style.cursor = cursor;
+  };
 
   return (
     <instancedMesh
       ref={mesh}
       args={[undefined, undefined, segments.length]}
       frustumCulled={false}
-      raycast={() => undefined}
+      onClick={(event) => {
+        event.stopPropagation();
+        const segment =
+          event.instanceId === undefined
+            ? undefined
+            : segments[event.instanceId];
+        if (segment !== undefined) {
+          setCursor("default");
+          onSelect({ kind: "route", id: segment.id });
+        }
+      }}
+      onPointerOver={(event) => {
+        event.stopPropagation();
+        setCursor("pointer");
+      }}
+      onPointerOut={() => setCursor("default")}
     >
       <boxGeometry args={[1, 1, 1]} />
-      <meshBasicMaterial color={color} toneMapped={false} />
+      <meshBasicMaterial color="#ffffff" toneMapped={false} />
     </instancedMesh>
   );
 }
@@ -809,18 +900,24 @@ function FacilityRouteSegmentInstances({
 function FacilityVehicleInstances({
   path,
   vehicles,
+  selection,
   reducedMotion,
   paused,
+  onSelect,
 }: {
   path: FacilityVehiclePath;
   vehicles: readonly FacilityVehicle[];
+  selection: FacilitySceneSelection | null;
   reducedMotion: boolean;
   paused: boolean;
+  onSelect: (selection: FacilitySceneSelection) => void;
 }) {
   const bodyMesh = useRef<InstancedMesh>(null);
   const cabinMesh = useRef<InstancedMesh>(null);
   const chassisMesh = useRef<InstancedMesh>(null);
   const elapsed = useRef(0);
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
   const { gl } = useThree();
 
   const updateVehicles = useCallback(
@@ -853,7 +950,10 @@ function FacilityVehicleInstances({
           sample.rotationY,
           0,
         );
-        detailVehicleRootTransform.scale.set(1, 1, 1);
+        const selected =
+          selectionRef.current?.kind === "vehicle" &&
+          selectionRef.current.id === vehicle.id;
+        detailVehicleRootTransform.scale.setScalar(selected ? 1.18 : 1);
         detailVehicleRootTransform.updateMatrix();
 
         setVehiclePartMatrix(body, index, {
@@ -893,16 +993,28 @@ function FacilityVehicleInstances({
 
   useLayoutEffect(() => {
     elapsed.current = 0;
+    updateVehicles(0);
+  }, [updateVehicles, vehicles]);
+
+  useLayoutEffect(() => {
     const body = bodyMesh.current;
     vehicles.forEach((vehicle, index) => {
-      facilityPartColor.set(vehicleColor(vehicle.state));
+      const selected =
+        selection?.kind === "vehicle" && selection.id === vehicle.id;
+      facilityPartColor.set(
+        vehicleColor(
+          vehicle.state,
+          selected,
+          selection !== null && !selected && vehicle.state !== "alert",
+        ),
+      );
       body?.setColorAt(index, facilityPartColor);
     });
     if (body?.instanceColor !== null && body?.instanceColor !== undefined) {
       body.instanceColor.needsUpdate = true;
     }
-    updateVehicles(0);
-  }, [updateVehicles, vehicles]);
+    updateVehicles(elapsed.current);
+  }, [selection, updateVehicles, vehicles]);
 
   useFrame((_, delta) => {
     if (reducedMotion || paused) {
@@ -927,7 +1039,24 @@ function FacilityVehicleInstances({
         ref={bodyMesh}
         args={[undefined, undefined, vehicles.length]}
         frustumCulled={false}
-        raycast={() => undefined}
+        onClick={(event) => {
+          event.stopPropagation();
+          const vehicle =
+            event.instanceId === undefined
+              ? undefined
+              : vehicles[event.instanceId];
+          if (vehicle !== undefined) {
+            gl.domElement.style.cursor = "default";
+            onSelect({ kind: "vehicle", id: vehicle.id });
+          }
+        }}
+        onPointerOver={(event) => {
+          event.stopPropagation();
+          gl.domElement.style.cursor = "pointer";
+        }}
+        onPointerOut={() => {
+          gl.domElement.style.cursor = "default";
+        }}
       >
         <boxGeometry args={[1, 1, 1]} />
         <meshStandardMaterial
@@ -976,10 +1105,17 @@ function setVehiclePartMatrix(
   mesh.setMatrixAt(index, detailVehiclePartMatrix);
 }
 
-function vehicleColor(state: FacilityVehicleState): string {
+function vehicleColor(
+  state: FacilityVehicleState,
+  selected: boolean,
+  dimmed: boolean,
+): string {
+  if (dimmed) {
+    return "#aeb8b4";
+  }
   switch (state) {
     case "moving":
-      return "#243b38";
+      return selected ? "#087b74" : "#243b38";
     case "loading":
       return "#c58d2d";
     case "alert":
@@ -994,7 +1130,35 @@ function vehicleColor(state: FacilityVehicleState): string {
 function detailElementColor(
   kind: FacilityElementKind,
   hub: SceneHub,
+  dimmed: boolean,
 ): string {
+  if (dimmed) {
+    switch (kind) {
+      case "ground":
+        return "#dfe3e0";
+      case "road":
+      case "apron":
+      case "perimeter":
+      case "dock":
+      case "slot":
+        return "#bdc6c2";
+      case "warehouse":
+      case "gatehouse":
+      case "tower":
+        return "#93a29e";
+      case "roof":
+      case "marking":
+        return "#f0f2ef";
+      case "cargo":
+        return "#b5bcb8";
+      case "beacon":
+        break;
+      default: {
+        const exhaustive: never = kind;
+        return exhaustive;
+      }
+    }
+  }
   switch (kind) {
     case "ground":
       return "#d9dfdc";
@@ -1254,71 +1418,208 @@ function RiskRings({
   );
 }
 
+export type FacilityCameraTarget = {
+  x: number;
+  y: number;
+  z: number;
+  zoom: number;
+  tracking: boolean;
+};
+
+export function resolveFacilityCameraTarget(
+  detail: FacilityLayout,
+  preset: FacilityCameraPreset,
+  selection: FacilitySceneSelection | null,
+  elapsed: number,
+): FacilityCameraTarget {
+  if (preset === "follow") {
+    const selectedVehicle =
+      selection?.kind === "vehicle"
+        ? detail.vehicles.find((vehicle) => vehicle.id === selection.id)
+        : undefined;
+    const vehicle =
+      selectedVehicle ??
+      detail.vehicles.find((item) => item.state === "alert") ??
+      detail.vehicles.find((item) => item.state === "moving") ??
+      detail.vehicles[0];
+    if (vehicle !== undefined) {
+      const sample = sampleFacilityVehiclePath(
+        detail.vehiclePath,
+        vehicle.phase + elapsed * vehicle.speed,
+      );
+      return {
+        x: sample.x,
+        y: -0.06,
+        z: sample.z,
+        zoom: 4.2,
+        tracking: vehicle.speed > 0,
+      };
+    }
+  }
+
+  if (preset === "risk") {
+    if (selection?.kind === "alert") {
+      const beacon = detail.elements.find(
+        (element) => element.kind === "beacon",
+      );
+      if (beacon !== undefined) {
+        return {
+          x: beacon.x,
+          y: -0.04,
+          z: beacon.z,
+          zoom: 3.8,
+          tracking: false,
+        };
+      }
+    }
+    const selectedSegment =
+      selection?.kind === "route"
+        ? detail.transportSegments.find(
+            (segment) => segment.id === selection.id,
+          )
+        : undefined;
+    const segment =
+      selectedSegment ??
+      detail.transportSegments.find((item) => item.status === "risk");
+    if (segment !== undefined) {
+      return {
+        x: (segment.from[0] + segment.to[0]) / 2,
+        y: -0.08,
+        z: (segment.from[1] + segment.to[1]) / 2,
+        zoom: 4.2,
+        tracking: false,
+      };
+    }
+  }
+
+  return {
+    x: 0,
+    y: -0.08,
+    z: 0,
+    zoom: 3.05,
+    tracking: false,
+  };
+}
+
 function CameraRig({
   selectedHub,
+  detail,
+  preset,
+  selection,
   reducedMotion,
   paused,
 }: {
   selectedHub: SceneHub | undefined;
+  detail: FacilityLayout | undefined;
+  preset: FacilityCameraPreset;
+  selection: FacilitySceneSelection | null;
   reducedMotion: boolean;
   paused: boolean;
 }) {
-  const { camera, size, invalidate } = useThree();
+  const { camera, gl, size, invalidate } = useThree();
   const animating = useRef(true);
-  const focus = useMemo(
-    () =>
-      selectedHub === undefined
-        ? new Vector3(0, 0, 0)
-        : new Vector3(
-            selectedHub.position.x - 0.42,
-            -0.08,
-            selectedHub.position.z + 0.08,
-          ),
-    [selectedHub],
+  const elapsed = useRef(0);
+  const currentFocus = useRef(new Vector3());
+  const desiredFocus = useRef(new Vector3());
+  const desiredPosition = useRef(new Vector3(11, 18, 15));
+  const desiredZoom = useRef(1);
+
+  const updateDesiredView = useCallback(
+    (time: number) => {
+      const baseZoom = Math.min(size.width / 23, size.height / 14);
+      if (selectedHub === undefined || detail === undefined) {
+        desiredFocus.current.set(0, 0, 0);
+        desiredPosition.current.set(11, 18, 15);
+        desiredZoom.current = baseZoom;
+      } else {
+        const target = resolveFacilityCameraTarget(
+          detail,
+          preset,
+          selection,
+          time,
+        );
+        desiredFocus.current
+          .set(target.x, target.y, target.z)
+          .applyAxisAngle(sceneUp, selectedHub.rotationY)
+          .multiplyScalar(selectedHub.scale * detailFacilityScale)
+          .add(selectedHub.position);
+        const offset =
+          preset === "overview"
+            ? overviewCameraOffset
+            : preset === "follow"
+              ? followCameraOffset
+              : riskCameraOffset;
+        desiredPosition.current.copy(desiredFocus.current).add(offset);
+        desiredZoom.current = baseZoom * target.zoom;
+      }
+      if (import.meta.env.DEV) {
+        gl.domElement.dataset.cameraPreset = preset;
+        gl.domElement.dataset.cameraFocus = [
+          desiredFocus.current.x,
+          desiredFocus.current.y,
+          desiredFocus.current.z,
+        ]
+          .map((value) => value.toFixed(4))
+          .join(",");
+      }
+    },
+    [detail, gl, preset, selectedHub, selection, size.height, size.width],
   );
-  const desiredPosition = useMemo(
-    () =>
-      selectedHub === undefined
-        ? new Vector3(11, 18, 15)
-        : focus.clone().add(new Vector3(5.2, 7.8, 6.3)),
-    [focus, selectedHub],
-  );
-  const baseZoom = Math.min(size.width / 23, size.height / 14);
-  const desiredZoom = baseZoom * (selectedHub === undefined ? 1 : 3.05);
+
+  useEffect(() => {
+    elapsed.current = 0;
+  }, [detail, selectedHub]);
 
   useEffect(() => {
     if (!(camera instanceof OrthographicCamera)) {
       return;
     }
+    updateDesiredView(elapsed.current);
     animating.current = !reducedMotion;
     if (reducedMotion) {
-      camera.position.copy(desiredPosition);
-      camera.zoom = desiredZoom;
-      camera.lookAt(focus);
+      currentFocus.current.copy(desiredFocus.current);
+      camera.position.copy(desiredPosition.current);
+      camera.zoom = desiredZoom.current;
+      camera.lookAt(currentFocus.current);
       camera.updateProjectionMatrix();
-      invalidate();
     }
-  }, [camera, desiredPosition, desiredZoom, focus, invalidate, reducedMotion]);
+    invalidate();
+  }, [
+    camera,
+    invalidate,
+    reducedMotion,
+    updateDesiredView,
+  ]);
 
   useFrame((_, delta) => {
-    if (
-      paused ||
-      !animating.current ||
-      !(camera instanceof OrthographicCamera)
-    ) {
+    if (paused || !(camera instanceof OrthographicCamera)) {
+      return;
+    }
+    if (!reducedMotion && detail !== undefined) {
+      elapsed.current += Math.min(delta, 0.05);
+    }
+    const tracking = detail !== undefined && preset === "follow";
+    if (tracking) {
+      updateDesiredView(elapsed.current);
+    }
+    if (reducedMotion || (!animating.current && !tracking)) {
       return;
     }
     const alpha = 1 - Math.exp(-Math.min(delta, 0.05) * 4.6);
-    camera.position.lerp(desiredPosition, alpha);
-    camera.zoom = MathUtils.lerp(camera.zoom, desiredZoom, alpha);
-    camera.lookAt(focus);
+    camera.position.lerp(desiredPosition.current, alpha);
+    camera.zoom = MathUtils.lerp(camera.zoom, desiredZoom.current, alpha);
+    currentFocus.current.lerp(desiredFocus.current, alpha);
+    camera.lookAt(currentFocus.current);
     camera.updateProjectionMatrix();
     if (
-      camera.position.distanceToSquared(desiredPosition) < 0.0005 &&
-      Math.abs(camera.zoom - desiredZoom) < 0.01
+      !tracking &&
+      camera.position.distanceToSquared(desiredPosition.current) < 0.0005 &&
+      Math.abs(camera.zoom - desiredZoom.current) < 0.01
     ) {
-      camera.position.copy(desiredPosition);
-      camera.zoom = desiredZoom;
+      camera.position.copy(desiredPosition.current);
+      camera.zoom = desiredZoom.current;
+      currentFocus.current.copy(desiredFocus.current);
+      camera.lookAt(currentFocus.current);
       camera.updateProjectionMatrix();
       animating.current = false;
     }
