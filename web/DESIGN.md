@@ -85,6 +85,12 @@ The risk queue exposes three views: all anomalies, unassigned anomalies, and act
 runs. Selection persists across views and the summary always reports both visible and selected
 counts.
 
+At viewports at least 1560 px wide and 800 px tall, both desktop pages use the available
+viewport without vertical page scrolling. The overview keeps the network and queue above a
+compact 200 px intelligence band. The waybill workbench becomes a three-column command
+surface: map evidence, audit timeline, and approval boundary. Timeline and approval content
+scroll inside their own columns, while approval actions remain visible at the bottom.
+
 The 3D field uses an orthographic isometric camera, an abstract grid instead of a geographic
 border, instanced facility parts, merged route geometry, and instanced moving shipment
 markers. Four facility archetypes reuse warehouse, dock, yard, tower, and signal parts.
@@ -136,6 +142,10 @@ No blur or glass effect is used.
 
 ## 8. Responsive behavior
 
+At 1560 px and wider, with at least 800 px of viewport height, the CEO overview and waybill
+workbench fit their complete decision surface into one viewport. The workbench uses three
+columns for route evidence, timeline, and approval. This mode is verified at 1600 x 900 and
+1920 x 1080 and must keep the approval actions visible without scrolling the page.
 At 1000 px the CEO map and risk queue become one column. At 720 px its KPI band becomes two
 columns and its situation title moves above the indexes. At 420 px the situation title is
 32 px and the 3D stage remains at least 420 px tall. At 960 px the waybill workspace becomes

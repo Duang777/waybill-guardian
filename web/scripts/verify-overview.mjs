@@ -479,10 +479,13 @@ try {
     '[role="status"] a[aria-label^="下钻 "]',
   );
   await mapDrilldown.waitFor();
-  assert(!(await hasHorizontalOverflow(page)), "desktop overview overflowed horizontally");
+  await verifyOverviewCanvasFit(page, 1920, 1080);
   await page.screenshot({
     path: join(artifactDir, "overview-desktop-1920.png"),
-    fullPage: true,
+  });
+  await verifyOverviewCanvasFit(page, 1600, 900);
+  await page.screenshot({
+    path: join(artifactDir, "overview-desktop-1600.png"),
   });
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.waitForTimeout(800);
@@ -730,7 +733,7 @@ try {
         independent_approvals: 5,
         approvals_left_pending: 4,
         map_drilldown_waybill: drilldownWaybillID,
-        responsive_widths: [1920, 1440, 1280, 375, 320],
+        responsive_widths: [1920, 1600, 1440, 1280, 375, 320],
       },
       null,
       2,
@@ -740,6 +743,43 @@ try {
   await browser?.close();
   stopProcesses(processes);
   await rm(dataDir, { recursive: true, force: true });
+}
+
+async function verifyOverviewCanvasFit(page, width, height) {
+  await page.setViewportSize({ width, height });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(250);
+  const layout = await page.evaluate(() => {
+    const bounds = (element) => {
+      const rect = element?.getBoundingClientRect();
+      return rect === undefined
+        ? null
+        : {
+            top: Math.round(rect.top),
+            bottom: Math.round(rect.bottom),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          };
+    };
+    return {
+      viewportHeight: window.innerHeight,
+      documentHeight: document.documentElement.scrollHeight,
+      workspace: bounds(document.querySelector('[class*="_workspace_"]')),
+      brief: bounds(document.querySelector('[aria-labelledby="brief-heading"]')),
+    };
+  });
+  assert(
+    layout.documentHeight <= layout.viewportHeight + 1 &&
+      layout.workspace !== null &&
+      layout.workspace.height >= 480 &&
+      layout.brief !== null &&
+      layout.brief.bottom <= layout.viewportHeight + 1,
+    `${width}x${height} overview does not fit its presentation canvas: ${JSON.stringify(layout)}`,
+  );
+  assert(
+    !(await hasHorizontalOverflow(page)),
+    `${width}x${height} overview overflowed horizontally`,
+  );
 }
 
 async function hasHorizontalOverflow(page) {

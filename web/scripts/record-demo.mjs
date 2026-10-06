@@ -12,11 +12,14 @@ import {
   waitForHTTP,
   webDir,
 } from "./demo-runtime.mjs";
+import { recordingSize } from "./recording-size.mjs";
 
 const artifactDir = join(webDir, "artifacts");
 const outputPath = resolve(
   process.env.RECORD_OUTPUT ?? join(artifactDir, "waybill-guardian-demo.mp4"),
 );
+const resolution = recordingSize(process.env.RECORD_RESOLUTION);
+const videoSize = { width: resolution.width, height: resolution.height };
 const agentMode = process.env.AGENT_MODE?.trim().toLowerCase() || "online";
 requireOnlineModelConfig(agentMode, process.env);
 const dataDir = await mkdtemp(join(tmpdir(), "waybill-guardian-recording-"));
@@ -85,10 +88,10 @@ try {
     headless: true,
   });
   context = await browser.newContext({
-    viewport: { width: 1600, height: 900 },
+    viewport: videoSize,
     recordVideo: {
       dir: rawVideoDir,
-      size: { width: 1600, height: 900 },
+      size: videoSize,
     },
   });
   const page = await context.newPage();
@@ -230,7 +233,7 @@ try {
         output: outputPath,
         duration_seconds: Number(metadata.duration).toFixed(2),
         size_bytes: Number(metadata.size),
-        resolution: "1600x900",
+        resolution: resolution.label,
         audio: false,
       },
       null,
@@ -305,6 +308,18 @@ async function installCaption(page) {
       }
       #demo-caption[hidden] {
         display: none;
+      }
+      @media (min-width: 1800px) {
+        #demo-caption {
+          width: min(1240px, calc(100vw - 80px));
+          padding: 18px 24px 19px;
+        }
+        #demo-caption strong {
+          font-size: 26px;
+        }
+        #demo-caption span {
+          font-size: 20px;
+        }
       }
     `;
     document.head.append(style);
