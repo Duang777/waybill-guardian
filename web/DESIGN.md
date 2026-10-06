@@ -12,9 +12,10 @@ stay dense and flush. Green appears only after a write operation completes.
 
 The waybill workbench continues the same editorial treatment with black rules, a compact
 serif route title, and a dominant geographic evidence stage. Its reading order is route
-status, map evidence, the Agent task rail, then the on-demand audit drawer. Vermilion marks
-only the unresolved incident. Both the route point inspector and the selected facility
-summary use a single dark caption rail so selected evidence remains anchored to its map.
+status, the six-stage run band, spatial evidence, the full-width human decision boundary,
+then the on-demand audit drawer. Vermilion marks only the unresolved incident. The route
+point inspector is a light fact strip attached to the map; the darker caption rail remains
+exclusive to selected facilities on the nationwide 3D overview.
 
 BoardUI's public dashboard patterns informed the initial hierarchy study. The final
 implementation uses original CSS Modules code, square industrial geometry, divider-led
@@ -57,28 +58,31 @@ breakpoint and never scale with viewport width.
 - Queue views use plain text tabs with a 2 px active underline.
 - Facility selection uses a square charcoal caption rail instead of a floating white card.
 - Other operational sections remain flush and use 1 px dividers.
-- The Agent Rail uses one continuous six-stage track, a divider-led evidence list, and a
-  flush approval boundary. It does not repeat the full event log or divide progress into
-  dashboard tiles.
-- The waybill approval boundary is part of the rail, not a card inside it. Status uses one
-  icon and compact badges; separators, not shadows or tinted headers, organize the content.
+- The run stage is one continuous horizontal six-stage band above the evidence workspace.
+  It does not repeat the full event log or divide progress into dashboard tiles.
+- The evidence ledger sits beside the map and lists only facts already cited by the proposal.
+  Selecting a sourced fact focuses both its route point and audit event.
+- The waybill approval boundary is a full-width decision dock below the evidence workspace,
+  not a side card. Status uses one icon and compact badges; separators, not shadows, organize
+  the proposal, alternatives, effects, and actions.
 - The full audit history is a square bottom drawer. Its closed row still exposes inference
   mode and event count; selecting evidence opens it at the cited event. The drawer reveals
   with a short vertical translation and opacity transition instead of appearing instantly.
 - Inputs and range controls use the signal color for active state and a visible focus ring.
 - Icon-only buttons use Lucide icons, tooltips, and accessible labels.
 - The waybill route uses MapLibre with an OpenFreeMap light vector style when no AMap key is
-  configured. The local SVG fallback uses a pale coordinate field and the same separate
-  evidence rail. Evidence must never obscure the route.
+  configured. The local SVG fallback uses a pale coordinate field and the same evidence
+  ledger. Evidence must never obscure the route.
 
 ## 5. Layout principles
 
 Use a 4 px base spacing scale. The CEO overview starts with an editorial masthead beside a
 four-segment KPI index, followed by a dominant nationwide 3D network, a narrow risk queue,
 and a read-only brief. The waybill workbench starts with a compact route, shipment, and risk
-index. Below it, a two-column workspace gives the geographic map about two thirds of the
-width. The right Agent Rail holds the current plan, evidence summary, and human decision
-boundary. The map and its dark point-inspector rail form one uninterrupted evidence stage.
+index. Below it, the incident dossier stacks a run-stage band, a two-column evidence
+workspace, a full-width decision dock, and the audit drawer. The geographic map owns most of
+the evidence workspace while the ledger keeps cited facts visible. The map and its light
+point-inspector strip form one uninterrupted evidence stage.
 
 On the CEO overview, KPI segments form one flush band with dividers. They are not separate
 cards. The network and queue share one flush work surface instead of nested cards. The
@@ -92,10 +96,10 @@ counts.
 
 At viewports at least 1560 px wide and 800 px tall, both desktop pages use the available
 viewport without vertical page scrolling. The overview keeps the network and queue above a
-compact 200 px intelligence band. The waybill workbench becomes a map-first, two-column
-command surface. The Agent Rail scrolls approval detail independently while the approval
-actions remain visible. The audit drawer spans both columns and opens only for inspection or
-playback.
+compact 200 px intelligence band. The waybill workbench becomes a four-layer incident
+dossier. The decision dock uses three horizontal regions so the proposed outcome,
+alternatives, effects, and approval actions remain visible together. The audit drawer spans
+the full workbench and opens only for inspection or playback.
 
 The 3D field uses an orthographic isometric camera, an abstract grid instead of a geographic
 border, instanced facility parts, merged route geometry, and instanced moving shipment
@@ -125,8 +129,8 @@ are reserved for the waybill evidence view; the CEO network remains an abstract 
 
 Canvas and flush work surfaces differ by lightness. Operational surfaces use dividers.
 The approval boundary has no outer shadow or inset card margin; its sticky action row marks
-the decision edge. The dark point inspector uses contrast instead of elevation. No blur or
-glass effect is used.
+the decision edge on narrow screens. The light point inspector uses rules instead of
+elevation. No blur or glass effect is used.
 
 ## 7. Do and don't
 
@@ -135,7 +139,7 @@ glass effect is used.
 - Do link the selected route point to its timestamp and speed.
 - Do use coral only for an unresolved incident or approval.
 - Do keep event sequence numbers aligned and readable.
-- Do animate only phase changes, pending indicators, and audit drawer disclosure. Use the
+- Do animate only phase changes, approval arrival, and audit drawer disclosure. Use the
   shared `cubic-bezier(0.16, 1, 0.3, 1)` response curve and honor reduced motion.
 - Do keep the 3D network useful as a static frame under reduced motion.
 - Do retain the SVG network as an automatic WebGL/error fallback.
@@ -153,15 +157,16 @@ glass effect is used.
 
 At 1560 px and wider, with at least 800 px of viewport height, the CEO overview and waybill
 workbench fit their complete decision surface into one viewport. The workbench uses a
-map-first two-column layout with a 430 to 520 px Agent Rail. This mode is verified at
-1600 x 900 and 1920 x 1080 and must keep the approval actions visible without scrolling the
-page.
+horizontal six-stage run band, a map with a 300 to 360 px evidence ledger, a 220 px
+full-width decision dock, and a 52 px audit entry. This mode is verified at 1600 x 900 and
+1920 x 1080 and must keep the approval actions visible without scrolling the page.
 At 1000 px the CEO map and risk queue become one column. At 720 px its KPI band becomes two
 columns and its situation title moves above the indexes. At 420 px the situation title is
-32 px and the 3D stage remains at least 420 px tall. At 960 px the waybill workspace becomes
-one column and keeps route evidence before the Agent Rail, with the audit drawer last. The
-approval boundary remains flush with the rail at tablet and phone widths. At 640 px the route
-title becomes 30 px, and the map keeps a stable 300 px viewport above its inspector.
+32 px and the 3D stage remains at least 420 px tall. At 960 px the waybill dossier becomes
+one column and keeps the run context sticky, followed by route evidence, evidence ledger,
+decision dock, and audit drawer. The approval boundary remains flush at tablet and phone
+widths. At 640 px the route title becomes 30 px, and the map keeps a stable 330 px viewport
+above its inspector.
 The facility inspection view keeps the selected campus centered and places its detail summary
 above the bottom legend so neither layer obscures the model.
 At 640 px the workbench header wraps, route metadata becomes a two-column grid, and playback

@@ -23,7 +23,11 @@ import {
   RouteMap,
   type RoutePointFocusRequest,
 } from "./components/RouteMap";
-import { AgentRail } from "./components/AgentRail";
+import {
+  EvidenceLedger,
+  RunStageBar,
+} from "./components/IncidentDossier";
+import { ApprovalPanel } from "./components/ApprovalPanel";
 import { SummaryStrip } from "./components/SummaryStrip";
 import { AuditDrawer } from "./components/TimelinePanel";
 import {
@@ -628,50 +632,70 @@ function WaybillWorkbench({
             </div>
           )}
 
-          <div className={styles.workspace}>
-            <section className={styles.mapPanel} aria-labelledby="route-map-title">
-              <div className={styles.panelTitleRow}>
-                <div>
-                  <span className={styles.eyebrow}>Route evidence / live</span>
-                  <h2 id="route-map-title">运输轨迹证据</h2>
-                </div>
-                <span className={styles.anomalyLegend}>
-                  <span aria-hidden="true" />
-                  {anomaly === null
-                    ? selection.kind === "error"
-                      ? "异常轨迹加载失败"
-                      : selectedWaybillID === null
-                      ? "暂无异常轨迹"
-                      : selection.kind === "loading"
-                        ? "等待异常轨迹"
-                        : "未发现异常轨迹"
-                    : anomaly.stop_hours === undefined
-                      ? "检测到异常节点"
-                      : `异常停留 ${formatHours(anomaly.stop_hours)} 小时`}
-                </span>
-              </div>
-              <RouteMap
-                points={view?.tracking ?? []}
-                origin={view?.waybill.origin ?? null}
-                destination={view?.waybill.destination ?? null}
-                resourceKind={waybillResource.kind}
-                focusRequest={routePointFocus}
-              />
-            </section>
-
-            <AgentRail
+          <div className={styles.dossierWorkbench}>
+            <RunStageBar
               timeline={timeline}
-              approval={currentApproval}
-              proposal={currentProposal}
               runStatus={currentStatus}
               runID={run?.run_id ?? null}
               connected={connected}
-              view={view}
-              busy={pendingAction === "confirm" || pendingAction === "reject"}
-              onEvidenceSelect={selectEvidence}
-              onConfirm={confirm}
-              onReject={reject}
             />
+
+            <div
+              className={styles.evidenceWorkspace}
+              aria-label="空间证据工作区"
+            >
+              <section className={styles.mapPanel} aria-labelledby="route-map-title">
+                <div className={styles.panelTitleRow}>
+                  <div>
+                    <span className={styles.eyebrow}>Spatial evidence / live</span>
+                    <h2 id="route-map-title">运输轨迹证据</h2>
+                  </div>
+                  <span className={styles.anomalyLegend}>
+                    <span aria-hidden="true" />
+                    {anomaly === null
+                      ? selection.kind === "error"
+                        ? "异常轨迹加载失败"
+                        : selectedWaybillID === null
+                        ? "暂无异常轨迹"
+                        : selection.kind === "loading"
+                          ? "等待异常轨迹"
+                          : "未发现异常轨迹"
+                      : anomaly.stop_hours === undefined
+                        ? "检测到异常节点"
+                        : `异常停留 ${formatHours(anomaly.stop_hours)} 小时`}
+                  </span>
+                </div>
+                <RouteMap
+                  points={view?.tracking ?? []}
+                  origin={view?.waybill.origin ?? null}
+                  destination={view?.waybill.destination ?? null}
+                  resourceKind={waybillResource.kind}
+                  focusRequest={routePointFocus}
+                />
+              </section>
+
+              <EvidenceLedger
+                approval={currentApproval}
+                onEvidenceSelect={selectEvidence}
+              />
+            </div>
+
+            <div className={styles.decisionDock} aria-label="人工决策区">
+              <ApprovalPanel
+                approval={currentApproval}
+                proposal={currentProposal}
+                runStatus={currentStatus}
+                view={view}
+                busy={
+                  pendingAction === "confirm" || pendingAction === "reject"
+                }
+                embedded
+                showEvidence={false}
+                onEvidenceSelect={selectEvidence}
+                onConfirm={confirm}
+                onReject={reject}
+              />
+            </div>
 
             <AuditDrawer
               state={timeline}

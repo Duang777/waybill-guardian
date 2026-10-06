@@ -2,10 +2,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { approvalSchema } from "../api";
 import { initialTimelineState } from "../timeline";
-import { AgentRail } from "./AgentRail";
+import { EvidenceLedger, RunStageBar } from "./IncidentDossier";
 
-describe("AgentRail", () => {
-  it("keeps the plan, linked evidence, and approval in one task rail", () => {
+describe("incident dossier", () => {
+  it("separates the run stage from the linked evidence ledger", () => {
     const approval = approvalSchema.parse({
       id: "APR-pending",
       run_id: "run-1",
@@ -42,29 +42,28 @@ describe("AgentRail", () => {
       expires_at: "2099-10-10T01:25:00Z",
     });
 
-    const markup = renderToStaticMarkup(
-      <AgentRail
+    const stageMarkup = renderToStaticMarkup(
+      <RunStageBar
         timeline={initialTimelineState}
-        approval={approval}
-        proposal={null}
         runStatus="awaiting_approval"
         runID="run-1"
         connected
-        view={null}
-        busy={false}
+      />,
+    );
+    const evidenceMarkup = renderToStaticMarkup(
+      <EvidenceLedger
+        approval={approval}
         onEvidenceSelect={() => undefined}
-        onConfirm={() => Promise.resolve()}
-        onReject={() => Promise.resolve()}
       />,
     );
 
-    expect(markup).toContain('aria-label="Agent 处置栏"');
-    expect(markup).toContain('aria-label="Agent 处置计划"');
-    expect(markup).toContain("感知");
-    expect(markup).toContain("闭环");
-    expect(markup).toContain("等待人工审批");
-    expect(markup).toContain("证据摘要");
-    expect(markup).toContain("定位证据：异常停留，审计事件 9");
-    expect(markup).not.toContain("归因证据链");
+    expect(stageMarkup).toContain('aria-label="Agent 六阶段运行带"');
+    expect(stageMarkup).toContain("感知");
+    expect(stageMarkup).toContain("闭环");
+    expect(stageMarkup).toContain("等待人工审批");
+    expect(evidenceMarkup).toContain("证据账本");
+    expect(evidenceMarkup).toContain("定位证据：异常停留，审计事件 9");
+    expect(evidenceMarkup).toContain("EVENT #09");
+    expect(evidenceMarkup).not.toContain("归因证据链");
   });
 });

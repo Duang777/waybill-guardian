@@ -5,12 +5,7 @@ import {
   LoaderCircle,
   Radio,
 } from "lucide-react";
-import type {
-  Approval,
-  Proposal,
-  RunStatus,
-  WaybillView,
-} from "../api";
+import type { Approval, RunStatus } from "../api";
 import styles from "../app.module.css";
 import {
   timelinePhases,
@@ -19,141 +14,146 @@ import {
   type TimelinePhase,
   type TimelineState,
 } from "../timeline";
-import { ApprovalPanel } from "./ApprovalPanel";
 
-type AgentRailProps = {
+type RunStageBarProps = {
   timeline: TimelineState;
-  approval: Approval | null;
-  proposal: Proposal | null;
   runStatus: RunStatus | null;
   runID: string | null;
   connected: boolean;
-  view: WaybillView | null;
-  busy: boolean;
-  onEvidenceSelect: (selection: EvidenceSelection) => void;
-  onConfirm: () => Promise<void>;
-  onReject: (reason: string) => Promise<void>;
 };
 
-export function AgentRail({
+export function RunStageBar({
   timeline,
-  approval,
-  proposal,
   runStatus,
   runID,
   connected,
-  view,
-  busy,
-  onEvidenceSelect,
-  onConfirm,
-  onReject,
-}: AgentRailProps) {
+}: RunStageBarProps) {
   const phases = timelinePhases(visibleEvents(timeline));
   const activePhase = currentPhase(phases);
-  const evidence = approval?.evidence ?? [];
 
   return (
-    <aside className={styles.agentRail} aria-label="Agent 处置栏">
-      <section className={styles.agentTaskPanel} aria-labelledby="agent-task-title">
-        <div className={styles.agentRailHeading}>
-          <div>
-            <span className={styles.eyebrow}>Agent task / plan</span>
-            <span className={styles.agentRunID}>
-              {runID === null ? "尚未创建任务" : compactID(runID)}
-            </span>
-          </div>
+    <section
+      className={styles.runStageBar}
+      aria-labelledby="run-stage-title"
+    >
+      <div className={styles.runStageContext}>
+        <div className={styles.runStageHeading}>
+          <span className={styles.eyebrow}>Run stage / live</span>
           <span className={styles.agentConnection}>
             <Radio aria-hidden="true" size={12} />
             {connectionLabel({ connected, runID, runStatus })}
           </span>
         </div>
-
         <div
           className={styles.agentTaskLead}
           key={`${runID ?? "idle"}-${activePhase?.id ?? "waiting"}`}
         >
-          <h2 id="agent-task-title">{taskHeading(runStatus, activePhase)}</h2>
+          <h2 id="run-stage-title">{taskHeading(runStatus, activePhase)}</h2>
           <p>{taskDescription(runStatus, activePhase)}</p>
         </div>
+        <span className={styles.agentRunID}>
+          {runID === null ? "尚未创建任务" : compactID(runID)}
+        </span>
+      </div>
 
-        <ol
-          className={`${styles.agentPlan} ${planProgressClass(phases)}`}
-          aria-label="Agent 处置计划"
-        >
-          {phases.map((phase, index) => (
-            <li
-              className={`${styles.agentPlanStep} ${
-                styles[`agentPlanStep${capitalizeStatus(phase.status)}`]
-              }`}
-              aria-current={phase.status === "current" ? "step" : undefined}
-              key={phase.id}
-            >
-              <span className={styles.agentPlanIcon} aria-hidden="true">
-                {phaseIcon(phase)}
-              </span>
-              <span>{phase.label}</span>
+      <ol
+        className={`${styles.agentPlan} ${planProgressClass(phases)}`}
+        aria-label="Agent 六阶段运行带"
+      >
+        {phases.map((phase, index) => (
+          <li
+            className={`${styles.agentPlanStep} ${
+              styles[`agentPlanStep${capitalizeStatus(phase.status)}`]
+            }`}
+            aria-current={phase.status === "current" ? "step" : undefined}
+            key={phase.id}
+          >
+            <span className={styles.agentPlanIcon} aria-hidden="true">
+              {phaseIcon(phase)}
+            </span>
+            <span className={styles.agentPlanLabel}>
               <small>{(index + 1).toString().padStart(2, "0")}</small>
+              {phase.label}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+export function EvidenceLedger({
+  approval,
+  onEvidenceSelect,
+}: {
+  approval: Approval | null;
+  onEvidenceSelect: (selection: EvidenceSelection) => void;
+}) {
+  const evidence = approval?.evidence ?? [];
+
+  return (
+    <aside
+      className={styles.evidenceLedger}
+      aria-labelledby="evidence-ledger-title"
+    >
+      <div className={styles.evidenceLedgerHeading}>
+        <div>
+          <span className={styles.eyebrow}>Verified findings</span>
+          <h2 id="evidence-ledger-title">证据账本</h2>
+        </div>
+        <span className={styles.evidenceCount}>
+          {evidence.length.toString().padStart(2, "0")}
+        </span>
+      </div>
+
+      {evidence.length === 0 ? (
+        <div className={styles.evidenceLedgerEmpty}>
+          <span className={styles.evidenceLedgerRule} aria-hidden="true" />
+          <strong>等待证据固化</strong>
+          <p>Agent 核验运单、轨迹、司机与天气后，关键事实会登记在这里。</p>
+        </div>
+      ) : (
+        <ol className={styles.evidenceLedgerList}>
+          {evidence.map((item, index) => (
+            <li key={evidenceKey(item)}>
+              <span className={styles.evidenceOrdinal} aria-hidden="true">
+                {(index + 1).toString().padStart(2, "0")}
+              </span>
+              <div>
+                <span className={styles.evidenceLabel}>{item.label}</span>
+                {"source" in item ? (
+                  <button
+                    className={styles.agentEvidenceLink}
+                    type="button"
+                    aria-label={`定位证据：${item.label}，审计事件 ${item.source.source_seq}`}
+                    title={`定位到审计事件 #${item.source.source_seq}`}
+                    onClick={() =>
+                      onEvidenceSelect({
+                        sourceSeq: item.source.source_seq,
+                        fieldPath: item.source.field_path,
+                      })
+                    }
+                  >
+                    <span>{item.value}</span>
+                    <Crosshair aria-hidden="true" size={14} />
+                  </button>
+                ) : (
+                  <strong>{item.value}</strong>
+                )}
+              </div>
+              {"source" in item && (
+                <span className={styles.evidenceSource}>
+                  EVENT #{item.source.source_seq.toString().padStart(2, "0")}
+                </span>
+              )}
             </li>
           ))}
         </ol>
-      </section>
-
-      <section
-        className={styles.agentEvidencePanel}
-        aria-labelledby="agent-evidence-title"
-      >
-        <div className={styles.agentSectionHeading}>
-          <span id="agent-evidence-title">证据摘要</span>
-          <span>{evidence.length} 条</span>
-        </div>
-        {evidence.length === 0 ? (
-          <p className={styles.agentEvidenceEmpty}>
-            Agent 固化归因后，关键证据会出现在这里。
-          </p>
-        ) : (
-          <dl className={styles.agentEvidenceList}>
-            {evidence.map((item) => (
-              <div key={evidenceKey(item)}>
-                <dt>{item.label}</dt>
-                <dd>
-                  {"source" in item ? (
-                    <button
-                      className={styles.agentEvidenceLink}
-                      type="button"
-                      aria-label={`定位证据：${item.label}，审计事件 ${item.source.source_seq}`}
-                      title={`定位到审计事件 #${item.source.source_seq}`}
-                      onClick={() =>
-                        onEvidenceSelect({
-                          sourceSeq: item.source.source_seq,
-                          fieldPath: item.source.field_path,
-                        })
-                      }
-                    >
-                      <span>{item.value}</span>
-                      <Crosshair aria-hidden="true" size={13} />
-                    </button>
-                  ) : (
-                    item.value
-                  )}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        )}
-      </section>
-
-      <ApprovalPanel
-        approval={approval}
-        proposal={proposal}
-        runStatus={runStatus}
-        view={view}
-        busy={busy}
-        embedded
-        showEvidence={false}
-        onEvidenceSelect={onEvidenceSelect}
-        onConfirm={onConfirm}
-        onReject={onReject}
-      />
+      )}
+      <div className={styles.evidenceLedgerFooter}>
+        <span>证据点击后同步定位地图与审计事件</span>
+        <span>HASH VERIFIED</span>
+      </div>
     </aside>
   );
 }

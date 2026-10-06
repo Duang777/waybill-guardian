@@ -2370,7 +2370,7 @@
   }
 }
 
-/* Agent rail workbench */
+/* Incident dossier workbench */
 
 .summaryStrip {
   grid-template-columns:
@@ -2437,66 +2437,158 @@
   padding-inline: 18px;
 }
 
-.workspace {
+.dossierWorkbench {
   position: relative;
-  grid-template-columns: minmax(0, 1fr) clamp(400px, 31vw, 500px);
-  min-height: 636px;
-  padding-bottom: 52px;
+  display: grid;
+  grid-template-rows: 86px minmax(380px, 1fr) 228px 52px;
+  min-height: 746px;
   background: oklch(0.982 0.004 95);
+}
+
+.evidenceWorkspace {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 22vw, 360px);
+  border-bottom: 1px solid oklch(0.2 0.01 255);
 }
 
 .mapPanel {
   display: grid;
   min-width: 0;
+  min-height: 0;
   grid-template-rows: auto minmax(0, 1fr);
   border-right: 1px solid oklch(0.2 0.01 255);
 }
 
 .panelTitleRow {
-  min-height: 68px;
-  padding: 11px 18px;
+  min-height: 58px;
+  padding: 8px 18px;
 }
 
 .panelTitleRow h2 {
-  font-size: 24px;
+  font-size: 21px;
 }
 
 .mapStage {
-  height: 568px;
-  min-height: 568px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) 60px;
+  height: 100%;
+  min-height: 0;
 }
 
-.agentRail {
+.pointInspector {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.7fr) minmax(0, 1.8fr) auto;
+  min-width: 0;
+  align-items: center;
+  align-content: center;
+  gap: 18px;
+  padding: 7px 16px;
+  border-top: 1px solid oklch(0.78 0.01 95);
+  background: oklch(0.97 0.006 95);
+  color: oklch(0.215 0.018 255);
+}
+
+.pointInspectorLead {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.pointInspectorLead > div {
+  gap: 1px;
+}
+
+.pointInspector .eyebrow {
+  color: oklch(0.53 0.016 255);
+}
+
+.pointInspector strong {
+  overflow: hidden;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.25;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pointIndex {
+  color: oklch(0.54 0.18 28);
+  font-size: 25px;
+}
+
+.pointIndex small {
+  color: oklch(0.58 0.012 255);
+  font-size: 9px;
+}
+
+.pointInspector dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.pointInspector dl > div {
+  display: grid;
+  min-height: 34px;
+  grid-template-columns: 1fr;
+  gap: 1px;
+  padding: 2px 12px;
+  border-top: 0;
+  border-left: 1px solid oklch(0.84 0.01 95);
+}
+
+.pointInspector dt {
+  color: oklch(0.57 0.016 255);
+  font-size: 9px;
+}
+
+.pointInspector dd {
+  color: oklch(0.28 0.016 255);
+  font-size: 10px;
+  text-align: left;
+}
+
+.pointInspectorStatus {
+  padding: 0 0 0 14px;
+  border-top: 0;
+  border-left: 1px solid oklch(0.84 0.01 95);
+}
+
+.runStageBar {
   display: grid;
   min-width: 0;
-  grid-template-rows: auto minmax(112px, 148px) minmax(0, 1fr);
-  align-content: start;
+  grid-template-columns: clamp(260px, 25vw, 360px) minmax(0, 1fr);
   overflow: hidden;
-  background: oklch(0.982 0.004 95);
-}
-
-.agentTaskPanel {
-  padding: 14px 16px 13px;
   border-bottom: 1px solid oklch(0.2 0.01 255);
   background: oklch(0.985 0.003 95);
 }
 
-.agentRailHeading,
-.agentSectionHeading {
+.runStageContext {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto 1fr;
+  min-width: 0;
+  align-items: center;
+  gap: 0 12px;
+  padding: 10px 18px;
+  border-right: 1px solid oklch(0.2 0.01 255);
+}
+
+.runStageHeading {
   display: flex;
+  grid-column: 1 / -1;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
 
-.agentRailHeading > div {
-  min-width: 0;
-}
-
 .agentRunID {
   display: block;
   overflow: hidden;
-  margin-top: 2px;
+  max-width: 96px;
+  margin-top: 0;
   color: oklch(0.55 0.016 255);
   font-family: "SFMono-Regular", "JetBrains Mono", monospace;
   font-size: 9px;
@@ -2507,13 +2599,13 @@
 
 .agentConnection {
   display: inline-flex;
-  min-height: 28px;
+  min-height: 24px;
   flex: 0 0 auto;
   align-items: center;
   gap: 5px;
-  padding: 0 8px;
-  border: 1px solid oklch(0.78 0.028 183);
-  border-radius: 999px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
   color: oklch(0.39 0.08 183);
   background: transparent;
   font-size: 9px;
@@ -2521,36 +2613,38 @@
 }
 
 .agentTaskLead {
-  display: grid;
-  grid-template-columns: minmax(120px, auto) minmax(0, 1fr);
-  align-items: end;
-  gap: 10px;
-  margin: 8px 0 10px;
+  display: block;
+  min-width: 0;
+  margin: 4px 0 0;
   animation: agentTaskChange 240ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .agentTaskLead h2 {
   margin: 0;
   font-family: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1.12;
+  white-space: nowrap;
   text-wrap: balance;
 }
 
 .agentTaskLead p {
-  margin: 0;
+  overflow: hidden;
+  margin: 3px 0 0;
   color: oklch(0.49 0.018 255);
-  font-size: 10px;
-  line-height: 1.55;
-  text-wrap: pretty;
+  font-size: 9px;
+  line-height: 1.35;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .agentPlan {
   position: relative;
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
+  align-items: center;
   margin: 0;
-  padding: 2px 0 0;
+  padding: 14px 20px 10px;
   isolation: isolate;
   list-style: none;
 }
@@ -2559,7 +2653,7 @@
 .agentPlan::after {
   position: absolute;
   z-index: 0;
-  top: 14px;
+  top: 31px;
   left: 8.333%;
   height: 1px;
   content: "";
@@ -2608,23 +2702,33 @@
   z-index: 1;
   display: grid;
   min-width: 0;
-  min-height: 46px;
+  min-height: 58px;
   place-items: center;
-  align-content: start;
-  gap: 5px;
+  align-content: center;
+  gap: 7px;
   color: oklch(0.59 0.016 255);
   font-size: 10px;
   font-weight: 650;
 }
 
+.agentPlanLabel {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
 .agentPlanStep small {
-  display: none;
+  display: inline;
+  color: oklch(0.65 0.012 255);
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-size: 8px;
+  font-weight: 500;
 }
 
 .agentPlanIcon {
   display: grid;
-  width: 25px;
-  height: 25px;
+  width: 27px;
+  height: 27px;
   place-items: center;
   border: 1px solid oklch(0.76 0.012 95);
   border-radius: 50%;
@@ -2647,11 +2751,8 @@
 
 .agentPlanStepCurrent .agentPlanIcon {
   border-color: oklch(0.58 0.18 28);
-  box-shadow: 0 0 0 4px oklch(0.58 0.18 28 / 0.1);
-}
-
-.agentPlanStepCurrent .agentPlanIcon svg {
-  animation: agentPhaseSpin 1.8s linear infinite;
+  background: oklch(0.94 0.035 28);
+  box-shadow: 0 0 0 3px oklch(0.58 0.18 28 / 0.08);
 }
 
 .agentPlanStepUpcoming {
@@ -2659,63 +2760,107 @@
   background: transparent;
 }
 
-.agentEvidencePanel {
+.evidenceLedger {
+  display: grid;
+  min-width: 0;
   min-height: 0;
-  overflow-y: auto;
-  padding: 11px 16px 12px;
-  border-bottom: 1px solid oklch(0.82 0.008 95);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
   background: oklch(0.985 0.003 95);
-  scrollbar-color: oklch(0.68 0.01 230) transparent;
 }
 
-.agentSectionHeading {
-  margin-bottom: 7px;
-  color: oklch(0.49 0.018 255);
-  font-size: 10px;
-  font-weight: 700;
+.evidenceLedgerHeading {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 8px 16px;
+  border-bottom: 1px solid oklch(0.2 0.01 255);
 }
 
-.agentEvidenceEmpty {
+.evidenceLedgerHeading h2 {
+  margin: 1px 0 0;
+  font-size: 21px;
+  font-weight: 600;
+}
+
+.evidenceCount {
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-size: 27px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.evidenceLedgerEmpty {
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  padding: 20px 22px;
+}
+
+.evidenceLedgerEmpty strong {
+  font-family: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+  font-size: 19px;
+}
+
+.evidenceLedgerEmpty p {
+  max-width: 28ch;
   margin: 0;
-  color: oklch(0.55 0.016 255);
+  color: oklch(0.53 0.016 255);
   font-size: 11px;
   line-height: 1.6;
 }
 
-.agentEvidenceList {
-  display: block;
-  margin: 0;
-  border-top: 1px solid oklch(0.86 0.01 95);
+.evidenceLedgerRule {
+  width: 42px;
+  height: 2px;
+  background: oklch(0.58 0.2 28);
 }
 
-.agentEvidenceList > div {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(88px, auto);
-  min-width: 0;
-  min-height: 40px;
-  align-items: center;
-  gap: 10px;
+.evidenceLedgerList {
+  min-height: 0;
+  margin: 0;
   padding: 0;
-  border-bottom: 1px solid oklch(0.9 0.008 95);
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-color: oklch(0.68 0.01 230) transparent;
+}
+
+.evidenceLedgerList li {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  min-width: 0;
+  gap: 3px 10px;
+  padding: 12px 16px 11px;
+  border-bottom: 1px solid oklch(0.86 0.01 95);
   background: transparent;
 }
 
-.agentEvidenceList > div:last-child:nth-child(odd) {
-  grid-column: auto;
+.evidenceOrdinal {
+  grid-row: 1 / 3;
+  padding-top: 2px;
+  color: oklch(0.58 0.2 28);
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-size: 9px;
+  font-weight: 700;
 }
 
-.agentEvidenceList dt {
-  color: oklch(0.56 0.016 255);
-  font-size: 10px;
-}
-
-.agentEvidenceList dd {
+.evidenceLedgerList li > div {
+  display: grid;
   min-width: 0;
-  margin: 0;
-  overflow-wrap: anywhere;
-  font-size: 11px;
+  gap: 3px;
+}
+
+.evidenceLabel {
+  color: oklch(0.56 0.016 255);
+  font-size: 9px;
+}
+
+.evidenceLedgerList strong {
+  font-size: 12px;
   font-weight: 650;
-  text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .agentEvidenceLink {
@@ -2723,7 +2868,7 @@
   width: 100%;
   min-height: 40px;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 5px;
   padding: 0;
   border: 0;
@@ -2743,11 +2888,47 @@
   transform: scale(0.96);
 }
 
+.evidenceSource {
+  grid-column: 2;
+  color: oklch(0.63 0.012 255);
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-size: 8px;
+}
+
+.evidenceLedgerFooter {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 16px;
+  border-top: 1px solid oklch(0.2 0.01 255);
+  color: oklch(0.55 0.016 255);
+  font-size: 8px;
+}
+
+.evidenceLedgerFooter > span:last-child {
+  color: oklch(0.4 0.09 155);
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-weight: 700;
+}
+
+.decisionDock {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-bottom: 1px solid oklch(0.2 0.01 255);
+  background: oklch(0.995 0.002 95);
+}
+
 .approvalPanelEmbedded {
+  display: grid;
+  height: 100%;
   align-self: stretch;
   min-height: 0;
+  grid-template-columns: 190px minmax(0, 1fr);
   margin: 0;
-  overflow-y: auto;
+  overflow: hidden;
   border: 0;
   border-radius: 0;
   background: oklch(0.995 0.002 95);
@@ -2764,73 +2945,91 @@
 }
 
 .approvalPanelEmbedded .panelHeading {
-  position: sticky;
-  z-index: 3;
-  top: 0;
-  min-height: 54px;
-  padding: 8px 16px;
-  border-bottom-color: oklch(0.84 0.01 95);
-  background: oklch(0.995 0.002 95);
+  position: relative;
+  display: grid;
+  min-height: 0;
+  align-content: space-between;
+  justify-content: stretch;
+  padding: 16px 18px;
+  border-right: 1px solid oklch(0.2 0.01 255);
+  border-bottom: 0;
+  background: oklch(0.955 0.012 75);
+}
+
+.approvalPanelEmbedded .panelHeading > div {
+  align-self: start;
+}
+
+.approvalPanelEmbedded .panelHeading > svg,
+.approvalPanelEmbedded .panelHeading > .guardIndicator {
+  align-self: end;
+  justify-self: start;
 }
 
 .approvalPanelEmbedded .approvalIdle {
-  min-height: 210px;
-  padding: 30px 22px;
+  min-height: 0;
+  padding: 24px 32px;
+  text-align: left;
+  justify-items: start;
 }
 
 .approvalPanelEmbedded .agentSweep {
-  display: flex;
-  width: auto;
-  height: 20px;
-  align-items: center;
-  gap: 8px;
-  border: 0;
-}
-
-.approvalPanelEmbedded .agentSweep::before,
-.approvalPanelEmbedded .agentSweep::after,
-.approvalPanelEmbedded .agentSweep span {
-  position: static;
-  width: 7px;
-  height: 7px;
-  border: 0;
-  border-radius: 50%;
-  background: oklch(0.49 0.09 183);
-  transform: none;
-  animation: agentDotPulse 1.35s ease-in-out infinite;
-}
-
-.approvalPanelEmbedded .agentSweep span {
-  animation-delay: 140ms;
-}
-
-.approvalPanelEmbedded .agentSweep::after {
-  animation-delay: 280ms;
+  display: none;
 }
 
 .approvalPanelEmbedded .approvalBody {
-  padding: 15px 16px 16px;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns:
+    minmax(220px, 0.82fr)
+    minmax(260px, 1fr)
+    minmax(270px, 1.08fr);
+  grid-template-rows: auto 1fr auto;
+  overflow-y: auto;
+  padding: 14px 18px;
 }
 
 .approvalPanelEmbedded .approvalLead {
+  grid-row: 1;
+  grid-column: 1;
   gap: 7px;
+  padding-right: 18px;
 }
 
 .approvalPanelEmbedded .approvalLead h2 {
   max-width: none;
-  font-size: 25px;
+  font-size: 23px;
 }
 
 .approvalPanelEmbedded .approvalReason {
-  margin: 10px 0 12px;
-  font-size: 12px;
-  line-height: 1.6;
+  grid-row: 2;
+  grid-column: 1;
+  margin: 7px 0;
+  padding-right: 18px;
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .approvalPanelEmbedded .proposalSection,
 .approvalPanelEmbedded .effectSection,
 .approvalPanelEmbedded .evidenceSection {
-  padding-block: 10px;
+  min-width: 0;
+  padding: 0 18px;
+  border-top: 0;
+  border-left: 1px solid oklch(0.84 0.01 95);
+}
+
+.approvalPanelEmbedded .proposalSection {
+  grid-row: 1 / 4;
+  grid-column: 2;
+  overflow-y: auto;
+}
+
+.approvalPanelEmbedded .effectSection {
+  grid-row: 1 / 3;
+  grid-column: 3;
+  overflow-y: auto;
 }
 
 .approvalPanelEmbedded .effectIcon {
@@ -2840,30 +3039,30 @@
 }
 
 .approvalPanelEmbedded .approvalMeta {
-  padding-bottom: 10px;
+  grid-row: 3;
+  grid-column: 1;
+  padding: 5px 18px 0 0;
 }
 
 .approvalPanelEmbedded .approvalActions,
 .approvalPanelEmbedded .rejectForm {
-  position: sticky;
-  z-index: 4;
-  bottom: 0;
+  grid-row: 3;
+  grid-column: 3;
+  align-self: end;
+  margin-left: 18px;
   background: oklch(0.995 0.002 95);
-  box-shadow: 0 -1px 0 oklch(0.875 0.012 95);
+  box-shadow: none;
 }
 
 .approvalPanelEmbedded .approvalActions {
-  padding-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid oklch(0.875 0.012 95);
 }
 
 .auditDrawer {
-  position: absolute;
+  position: relative;
   z-index: 15;
-  right: 0;
-  bottom: 0;
-  left: 0;
   overflow: visible;
-  border-top: 1px solid oklch(0.2 0.01 255);
   background: oklch(0.985 0.003 95);
 }
 
@@ -3007,25 +3206,6 @@
   }
 }
 
-@keyframes agentPhaseSpin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes agentDotPulse {
-  0%,
-  100% {
-    transform: translateY(0);
-    opacity: 0.35;
-  }
-
-  50% {
-    transform: translateY(-3px);
-    opacity: 1;
-  }
-}
-
 @keyframes auditMobileReveal {
   from {
     transform: translateY(-6px);
@@ -3058,23 +3238,15 @@
     padding-block: 14px;
   }
 
-  .workspace {
-    grid-template-columns: minmax(0, 1fr) clamp(430px, 31vw, 520px);
-    grid-template-rows: minmax(0, 1fr);
+  .dossierWorkbench {
+    grid-template-rows: 82px minmax(0, 1fr) 220px 52px;
     height: calc(100svh - 172px);
     min-height: 0;
-    padding-bottom: 52px;
-  }
-
-  .mapPanel {
-    grid-row: 1;
-    grid-column: 1;
   }
 
   .mapStage {
     height: 100%;
     min-height: 0;
-    grid-template-columns: minmax(0, 1fr) 230px;
   }
 
   .mapEmpty {
@@ -3082,40 +3254,10 @@
     min-height: 0;
   }
 
-  .agentRail {
-    grid-row: 1;
-    grid-column: 2;
-    min-height: 0;
-  }
-
-  .approvalPanelEmbedded {
-    grid-row: auto;
-    grid-column: auto;
-    align-self: stretch;
-    min-height: 0;
-    margin: 0;
-  }
-
+  .decisionDock,
+  .approvalPanelEmbedded,
   .approvalPanelEmbedded .approvalBody {
-    display: block;
-    padding: 13px;
-  }
-
-  .approvalPanelEmbedded .approvalLead,
-  .approvalPanelEmbedded .approvalReason,
-  .approvalPanelEmbedded .proposalSection,
-  .approvalPanelEmbedded .effectSection,
-  .approvalPanelEmbedded .evidenceSection,
-  .approvalPanelEmbedded .approvalMeta,
-  .approvalPanelEmbedded .approvalActions,
-  .approvalPanelEmbedded .rejectForm {
-    grid-column: auto;
-  }
-
-  .approvalPanelEmbedded .proposalSection,
-  .approvalPanelEmbedded .effectSection {
-    padding-right: 0;
-    padding-left: 0;
+    min-height: 0;
   }
 }
 
@@ -3142,13 +3284,20 @@
     font-size: 34px;
   }
 
-  .workspace {
-    grid-template-columns: minmax(0, 1fr) minmax(360px, 400px);
+  .evidenceWorkspace {
+    grid-template-columns: minmax(0, 1fr) 300px;
   }
 
-  .agentTaskLead {
-    grid-template-columns: 1fr;
-    gap: 3px;
+  .approvalPanelEmbedded {
+    grid-template-columns: 168px minmax(0, 1fr);
+  }
+
+  .approvalPanelEmbedded .approvalBody {
+    grid-template-columns:
+      minmax(190px, 0.74fr)
+      minmax(230px, 1fr)
+      minmax(240px, 1fr);
+    padding-inline: 14px;
   }
 }
 
@@ -3178,10 +3327,44 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .workspace {
-    grid-template-columns: minmax(0, 1fr);
+  .dossierWorkbench {
+    display: block;
     min-height: 0;
-    padding-bottom: 0;
+  }
+
+  .runStageBar {
+    position: sticky;
+    z-index: 12;
+    top: 0;
+    grid-template-columns: 1fr;
+    overflow: visible;
+    box-shadow: 0 1px 0 oklch(0.2 0.01 255);
+  }
+
+  .runStageContext {
+    min-height: 72px;
+    border-right: 0;
+    border-bottom: 1px solid oklch(0.82 0.008 95);
+  }
+
+  .agentPlan {
+    min-height: 68px;
+    padding-block: 8px 7px;
+    overflow-x: auto;
+  }
+
+  .agentPlan::before,
+  .agentPlan::after {
+    top: 25px;
+  }
+
+  .agentPlanStep {
+    min-width: 58px;
+    min-height: 51px;
+  }
+
+  .evidenceWorkspace {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .mapPanel {
@@ -3189,19 +3372,76 @@
     border-bottom: 1px solid oklch(0.2 0.01 255);
   }
 
-  .agentRail {
-    grid-template-rows: auto auto auto;
+  .mapStage {
+    height: 500px;
+    min-height: 500px;
+  }
+
+  .evidenceLedger {
+    display: block;
+    min-height: 0;
+    max-height: none;
     overflow: visible;
     border-bottom: 1px solid oklch(0.2 0.01 255);
   }
 
-  .agentEvidencePanel,
-  .approvalPanelEmbedded {
+  .evidenceLedgerList {
+    overflow: visible;
+  }
+
+  .decisionDock {
     overflow: visible;
   }
 
   .approvalPanelEmbedded {
+    display: block;
+    height: auto;
     margin: 0;
+    overflow: visible;
+  }
+
+  .approvalPanelEmbedded .panelHeading {
+    display: flex;
+    min-height: 64px;
+    padding: 10px 16px;
+    border-right: 0;
+    border-bottom: 1px solid oklch(0.84 0.01 95);
+  }
+
+  .approvalPanelEmbedded .approvalBody {
+    display: block;
+    overflow: visible;
+    padding: 18px 16px;
+  }
+
+  .approvalPanelEmbedded .approvalLead,
+  .approvalPanelEmbedded .approvalReason,
+  .approvalPanelEmbedded .proposalSection,
+  .approvalPanelEmbedded .effectSection,
+  .approvalPanelEmbedded .approvalMeta,
+  .approvalPanelEmbedded .approvalActions,
+  .approvalPanelEmbedded .rejectForm {
+    padding-right: 0;
+    padding-left: 0;
+    margin-left: 0;
+  }
+
+  .approvalPanelEmbedded .proposalSection,
+  .approvalPanelEmbedded .effectSection {
+    padding-block: 14px;
+    overflow: visible;
+    border-top: 1px solid oklch(0.875 0.012 95);
+    border-left: 0;
+  }
+
+  .approvalPanelEmbedded .approvalActions,
+  .approvalPanelEmbedded .rejectForm {
+    position: sticky;
+    z-index: 10;
+    bottom: 0;
+    padding: 10px 0;
+    background: oklch(0.995 0.002 95);
+    box-shadow: 0 -1px 0 oklch(0.875 0.012 95);
   }
 
   .auditDrawer {
@@ -3270,39 +3510,93 @@
   }
 
   .panelTitleRow {
-    min-height: 70px;
+    min-height: 64px;
+    padding-inline: 12px;
   }
 
-  .agentTaskPanel {
-    padding: 12px;
+  .panelTitleRow h2,
+  .evidenceLedgerHeading h2 {
+    font-size: 19px;
   }
 
-  .agentTaskLead {
-    grid-template-columns: 1fr;
+  .runStageContext {
+    min-height: 66px;
+    padding: 8px 12px;
   }
 
   .agentTaskLead h2 {
-    font-size: 21px;
+    font-size: 18px;
+  }
+
+  .agentTaskLead p,
+  .agentRunID {
+    display: none;
   }
 
   .agentPlan {
     grid-template-columns: repeat(6, minmax(0, 1fr));
+    padding-inline: 8px;
   }
 
-  .agentPlanStep:nth-child(4) {
+  .agentPlan::before,
+  .agentPlan::after {
+    left: 8.5%;
+    width: 83%;
+  }
+
+  .agentPlanStep {
+    min-width: 48px;
+    font-size: 9px;
+  }
+
+  .agentPlanLabel {
+    gap: 3px;
+  }
+
+  .mapStage {
+    grid-template-rows: minmax(330px, 1fr) auto;
+    height: 456px;
+    min-height: 456px;
+  }
+
+  .pointInspector {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+    padding: 8px 12px;
+  }
+
+  .pointInspectorLead {
+    grid-row: 1;
+    grid-column: 1;
+  }
+
+  .pointInspector dl {
+    grid-row: 2;
+    grid-column: 1 / -1;
+  }
+
+  .pointInspector dl > div {
+    padding-inline: 8px;
+  }
+
+  .pointInspector dl > div:first-child {
+    padding-left: 0;
     border-left: 0;
   }
 
-  .agentPlanStep:nth-child(n + 4) {
-    border-top: 0;
+  .pointInspectorStatus {
+    grid-row: 1;
+    grid-column: 2;
   }
 
-  .agentEvidencePanel {
-    padding: 10px 12px 12px;
+  .evidenceLedger {
+    min-height: 240px;
   }
 
-  .agentEvidenceList {
-    display: block;
+  .evidenceLedgerHeading,
+  .evidenceLedgerList li,
+  .evidenceLedgerFooter {
+    padding-inline: 12px;
   }
 
   .approvalPanelEmbedded {
@@ -3310,7 +3604,15 @@
   }
 
   .approvalPanelEmbedded .approvalLead h2 {
-    font-size: 25px;
+    font-size: 23px;
+  }
+
+  .approvalPanelEmbedded .approvalBody {
+    padding-inline: 12px;
+  }
+
+  .approvalPanelEmbedded .approvalActions {
+    grid-template-columns: 1fr 1.2fr;
   }
 
   .auditDrawerToggle {
