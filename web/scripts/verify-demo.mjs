@@ -106,6 +106,14 @@ try {
       const sourceSeq = Number(evidenceTarget?.match(/#(\d+)$/)?.[1]);
       assert(Number.isInteger(sourceSeq), `invalid evidence target ${evidenceTarget}`);
       await evidenceLink.click();
+      const auditToggle = page.getByRole("button", {
+        name: /完整审计记录/,
+        exact: false,
+      });
+      assert(
+        (await auditToggle.getAttribute("aria-expanded")) === "true",
+        "linked evidence did not open the audit drawer",
+      );
       const drawerMotion = await page
         .locator("#audit-drawer-content")
         .evaluate((element) => getComputedStyle(element).transitionProperty);
@@ -221,10 +229,10 @@ try {
     path: join(artifactDir, "mobile-completed.png"),
   });
   await page
-    .locator('[aria-label="Agent 处置栏"]')
+    .locator('[aria-labelledby="evidence-ledger-title"]')
     .scrollIntoViewIfNeeded();
   await page.screenshot({
-    path: join(artifactDir, "mobile-agent-rail-375.png"),
+    path: join(artifactDir, "mobile-evidence-ledger-375.png"),
   });
 
   await page.setViewportSize({ width: 320, height: 800 });
@@ -235,10 +243,10 @@ try {
     `320px controls smaller than 40px: ${undersizedAt320.join(", ")}`,
   );
   await page
-    .locator('[aria-label="Agent 处置栏"]')
+    .locator('[aria-label="人工决策区"]')
     .scrollIntoViewIfNeeded();
   await page.screenshot({
-    path: join(artifactDir, "mobile-agent-rail-320.png"),
+    path: join(artifactDir, "mobile-decision-dock-320.png"),
   });
 
   await page.setViewportSize({ width: 375, height: 812 });
@@ -306,8 +314,8 @@ try {
       join(artifactDir, "workbench-pending-1920.png"),
       join(artifactDir, "desktop-pending.png"),
       join(artifactDir, "mobile-completed.png"),
-      join(artifactDir, "mobile-agent-rail-375.png"),
-      join(artifactDir, "mobile-agent-rail-320.png"),
+      join(artifactDir, "mobile-evidence-ledger-375.png"),
+      join(artifactDir, "mobile-decision-dock-320.png"),
       join(artifactDir, "mobile-alternative.png"),
       join(artifactDir, "mobile-route.png"),
     ],
@@ -342,13 +350,27 @@ async function verifyWideWorkbench(page, width, height) {
     );
     const approvalStyle =
       approval instanceof HTMLElement ? getComputedStyle(approval) : null;
-    const plan = document.querySelector('[aria-label="Agent 处置计划"]');
-    const planStyle = plan instanceof HTMLElement ? getComputedStyle(plan) : null;
+    const inspector = document.querySelector('[aria-label="轨迹点详情"]');
+    const inspectorStyle =
+      inspector instanceof HTMLElement ? getComputedStyle(inspector) : null;
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    let inspectorRGB = null;
+    if (context !== null && inspectorStyle !== null) {
+      canvas.width = 1;
+      canvas.height = 1;
+      context.fillStyle = inspectorStyle.backgroundColor;
+      context.fillRect(0, 0, 1, 1);
+      inspectorRGB = Array.from(context.getImageData(0, 0, 1, 1).data.slice(0, 3));
+    }
     return {
       viewportHeight: window.innerHeight,
       documentHeight: document.documentElement.scrollHeight,
+      stage: bounds(document.querySelector('[aria-labelledby="run-stage-title"]')),
+      evidence: bounds(document.querySelector('[aria-label="空间证据工作区"]')),
       map: bounds(document.querySelector('[aria-labelledby="route-map-title"]')),
-      rail: bounds(document.querySelector('[aria-label="Agent 处置栏"]')),
+      ledger: bounds(document.querySelector('[aria-labelledby="evidence-ledger-title"]')),
+      decision: bounds(document.querySelector('[aria-label="人工决策区"]')),
       audit: bounds(
         document.querySelector('[aria-labelledby="audit-drawer-title"]'),
       ),
@@ -359,7 +381,7 @@ async function verifyWideWorkbench(page, width, height) {
         borderWidth: approvalStyle?.borderTopWidth ?? null,
         boxShadow: approvalStyle?.boxShadow ?? null,
       },
-      planBorderWidth: planStyle?.borderTopWidth ?? null,
+      inspectorRGB,
     };
   });
   const actionBounds = await page
@@ -370,23 +392,29 @@ async function verifyWideWorkbench(page, width, height) {
     `${width}x${height} workbench scrolls to ${layout.documentHeight}px`,
   );
   assert(
+    layout.stage !== null &&
+      layout.evidence !== null &&
     layout.map !== null &&
-      layout.rail !== null &&
+      layout.ledger !== null &&
+      layout.decision !== null &&
       layout.audit !== null &&
       layout.approval !== null &&
-      layout.map.right <= layout.rail.left + 1 &&
-      layout.map.bottom <= layout.audit.top + 1 &&
-      layout.rail.bottom <= layout.audit.top + 1 &&
-      layout.map.width >= width * 0.62 &&
-      layout.rail.width >= 400 &&
-      layout.audit.width >= width - 2,
-    `${width}x${height} workbench is not a readable map and Agent rail layout: ${JSON.stringify(layout)}`,
+      layout.stage.bottom <= layout.evidence.top + 1 &&
+      layout.map.right <= layout.ledger.left + 1 &&
+      layout.evidence.bottom <= layout.decision.top + 1 &&
+      layout.decision.bottom <= layout.audit.top + 1 &&
+      layout.map.width >= Math.min(width, 1680) * 0.64 &&
+      layout.ledger.width >= 300 &&
+      layout.decision.width >= Math.min(width, 1680) - 2 &&
+      layout.audit.width >= Math.min(width, 1680) - 2,
+    `${width}x${height} workbench is not a readable incident dossier: ${JSON.stringify(layout)}`,
   );
   assert(
     layout.approvalVisual.borderWidth === "0px" &&
       layout.approvalVisual.boxShadow === "none" &&
-      layout.planBorderWidth === "0px",
-    `${width}x${height} Agent rail regressed to card styling: ${JSON.stringify(layout)}`,
+      layout.inspectorRGB !== null &&
+      layout.inspectorRGB.every((channel) => channel >= 190),
+    `${width}x${height} dossier regressed to card or dark inspector styling: ${JSON.stringify(layout)}`,
   );
   assert(
     actionBounds !== null &&
