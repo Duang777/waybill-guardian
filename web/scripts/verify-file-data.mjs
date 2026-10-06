@@ -279,7 +279,11 @@ async function undersizedButtons(page) {
     buttons
       .filter((button) => {
         const bounds = button.getBoundingClientRect();
-        return bounds.width < 40 || bounds.height < 40;
+        return (
+          bounds.width > 0 &&
+          bounds.height > 0 &&
+          (bounds.width < 40 || bounds.height < 40)
+        );
       })
       .map((button) => button.getAttribute("aria-label") ?? button.textContent?.trim() ?? "button"),
   );

@@ -68,12 +68,18 @@ export function AgentRail({
           </span>
         </div>
 
-        <div className={styles.agentTaskLead}>
+        <div
+          className={styles.agentTaskLead}
+          key={`${runID ?? "idle"}-${activePhase?.id ?? "waiting"}`}
+        >
           <h2 id="agent-task-title">{taskHeading(runStatus, activePhase)}</h2>
           <p>{taskDescription(runStatus, activePhase)}</p>
         </div>
 
-        <ol className={styles.agentPlan} aria-label="Agent 处置计划">
+        <ol
+          className={`${styles.agentPlan} ${planProgressClass(phases)}`}
+          aria-label="Agent 处置计划"
+        >
           {phases.map((phase, index) => (
             <li
               className={`${styles.agentPlanStep} ${
@@ -276,6 +282,28 @@ function capitalizeStatus(
       const exhaustive: never = status;
       return exhaustive;
     }
+  }
+}
+
+function planProgressClass(phases: readonly TimelinePhase[]): string {
+  const reached = phases.filter((phase) => phase.status !== "upcoming").length;
+  switch (reached) {
+    case 0:
+      return styles.agentPlanProgress0;
+    case 1:
+      return styles.agentPlanProgress1;
+    case 2:
+      return styles.agentPlanProgress2;
+    case 3:
+      return styles.agentPlanProgress3;
+    case 4:
+      return styles.agentPlanProgress4;
+    case 5:
+      return styles.agentPlanProgress5;
+    case 6:
+      return styles.agentPlanProgress6;
+    default:
+      return styles.agentPlanProgress0;
   }
 }
 

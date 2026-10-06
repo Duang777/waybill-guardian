@@ -57,12 +57,14 @@ breakpoint and never scale with viewport width.
 - Queue views use plain text tabs with a 2 px active underline.
 - Facility selection uses a square charcoal caption rail instead of a floating white card.
 - Other operational sections remain flush and use 1 px dividers.
-- The Agent Rail combines a six-stage task plan, linked evidence summary, and approval
-  boundary. It does not repeat the full event log.
-- The waybill approval boundary is the only elevated card. Its header uses a quiet status
-  tint, and pending approval adds a short vermilion signal mast at the upper left.
+- The Agent Rail uses one continuous six-stage track, a divider-led evidence list, and a
+  flush approval boundary. It does not repeat the full event log or divide progress into
+  dashboard tiles.
+- The waybill approval boundary is part of the rail, not a card inside it. Status uses one
+  icon and compact badges; separators, not shadows or tinted headers, organize the content.
 - The full audit history is a square bottom drawer. Its closed row still exposes inference
-  mode and event count; selecting evidence opens it at the cited event.
+  mode and event count; selecting evidence opens it at the cited event. The drawer reveals
+  with a short vertical translation and opacity transition instead of appearing instantly.
 - Inputs and range controls use the signal color for active state and a visible focus ring.
 - Icon-only buttons use Lucide icons, tooltips, and accessible labels.
 - The waybill route uses MapLibre with an OpenFreeMap light vector style when no AMap key is
@@ -122,9 +124,9 @@ are reserved for the waybill evidence view; the CEO network remains an abstract 
 ## 6. Depth and elevation
 
 Canvas and flush work surfaces differ by lightness. Operational surfaces use dividers.
-The approval card alone uses a two-layer neutral shadow so the human decision boundary
-remains distinct from evidence. The dark point inspector uses contrast instead of elevation.
-No blur or glass effect is used.
+The approval boundary has no outer shadow or inset card margin; its sticky action row marks
+the decision edge. The dark point inspector uses contrast instead of elevation. No blur or
+glass effect is used.
 
 ## 7. Do and don't
 
@@ -133,6 +135,8 @@ No blur or glass effect is used.
 - Do link the selected route point to its timestamp and speed.
 - Do use coral only for an unresolved incident or approval.
 - Do keep event sequence numbers aligned and readable.
+- Do animate only phase changes, pending indicators, and audit drawer disclosure. Use the
+  shared `cubic-bezier(0.16, 1, 0.3, 1)` response curve and honor reduced motion.
 - Do keep the 3D network useful as a static frame under reduced motion.
 - Do retain the SVG network as an automatic WebGL/error fallback.
 - Do use segmented views when a dense operational list has stable, mutually exclusive modes.
@@ -156,9 +160,8 @@ At 1000 px the CEO map and risk queue become one column. At 720 px its KPI band 
 columns and its situation title moves above the indexes. At 420 px the situation title is
 32 px and the 3D stage remains at least 420 px tall. At 960 px the waybill workspace becomes
 one column and keeps route evidence before the Agent Rail, with the audit drawer last. The
-approval card remains inset with a horizontal, light status header at tablet and phone
-widths. At 640 px the route title becomes 30 px, and the map keeps a stable 300 px viewport
-above its inspector.
+approval boundary remains flush with the rail at tablet and phone widths. At 640 px the route
+title becomes 30 px, and the map keeps a stable 300 px viewport above its inspector.
 The facility inspection view keeps the selected campus centered and places its detail summary
 above the bottom legend so neither layer obscures the model.
 At 640 px the workbench header wraps, route metadata becomes a two-column grid, and playback
@@ -169,8 +172,8 @@ horizontal scrolling.
 
 - "Create a flush operations panel on `oklch(1 0 0)` with 1 px
   `oklch(0.91 0.009 220)` dividers, 4 px radius, and no shadow."
-- "Create a pending approval card with a 4 px radius, `oklch(0.96 0.035 29)` header,
-  13 px body text, and a single `oklch(0.62 0.18 29)` primary action."
+- "Create a flush pending approval boundary with a 1 px divider, 13 px body text, no outer
+  shadow, and a single `oklch(0.62 0.18 29)` primary action."
 - "Create a compact event row with a 48 px sequence column in monospace, 13 px event title,
   12 px metadata, and a 1 px divider."
 - "Create three queue view tabs with transparent backgrounds, 40 px hit areas, 10 px labels,
