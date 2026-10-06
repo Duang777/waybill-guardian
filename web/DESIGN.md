@@ -21,6 +21,11 @@ BoardUI's public dashboard patterns informed the initial hierarchy study. The fi
 implementation uses original CSS Modules code, square industrial geometry, divider-led
 structure, and no copied BoardUI source or components.
 
+Oil UI's public skill guides the later component refinement pass. The run stage and evidence
+ledger apply its rules for one visual focus, fewer repeated lines, semantic data labels, and
+real desktop and phone checks. Oil UI does not provide the React business components used
+here; the implementation remains project-owned CSS Modules code.
+
 ## 2. Color palette and roles
 
 | Token | Value | Role |
@@ -58,10 +63,13 @@ breakpoint and never scale with viewport width.
 - Queue views use plain text tabs with a 2 px active underline.
 - Facility selection uses a square charcoal caption rail instead of a floating white card.
 - Other operational sections remain flush and use 1 px dividers.
-- The run stage is one continuous horizontal six-stage band above the evidence workspace.
-  It does not repeat the full event log or divide progress into dashboard tiles.
-- The evidence ledger sits beside the map and lists only facts already cited by the proposal.
-  Selecting a sourced fact focuses both its route point and audit event.
+- The run stage is one continuous six-cell status band above the evidence workspace.
+  Completed stages use a quiet green wash, the current stage uses the signal wash, and future
+  stages remain neutral. It does not repeat the full event log.
+- The evidence ledger groups proposal citations into attribution groups. Each fact has a
+  domain label and a formatted value, such as `连续驾驶 9 小时` or `疲劳预警 已触发`.
+  Selecting a sourced fact focuses both its route point and audit event. The current approval
+  and evidence remain visible while the run stage identifies the historical replay snapshot.
 - The waybill approval boundary is a full-width decision dock below the evidence workspace,
   not a side card. Status uses one icon and compact badges; separators, not shadows, organize
   the proposal, alternatives, effects, and actions.
@@ -167,6 +175,8 @@ one column and keeps the run context sticky, followed by route evidence, evidenc
 decision dock, and audit drawer. The approval boundary remains flush at tablet and phone
 widths. At 640 px the route title becomes 30 px, and the map keeps a stable 330 px viewport
 above its inspector.
+The six run stages become a 3 by 2 grid below 640 px so that labels remain readable without
+horizontal page scrolling.
 The facility inspection view keeps the selected campus centered and places its detail summary
 above the bottom legend so neither layer obscures the model.
 At 640 px the workbench header wraps, route metadata becomes a two-column grid, and playback
