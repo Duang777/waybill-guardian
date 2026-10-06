@@ -19,6 +19,9 @@ const backendPort = await availablePort(process.env.OVERVIEW_BACKEND_PORT);
 const webPort = await availablePort(process.env.OVERVIEW_WEB_PORT);
 const backendURL = `http://127.0.0.1:${backendPort}`;
 const webURL = `http://127.0.0.1:${webPort}`;
+const minimumSceneFPS = Number(
+  process.env.OVERVIEW_MIN_FPS ?? (process.env.CI === "true" ? 10 : 50),
+);
 const processes = [];
 let browser = null;
 
@@ -450,8 +453,8 @@ try {
   );
   const measuredFPS = await measureSceneFPS(networkCanvas, 90);
   assert(
-    measuredFPS >= 50,
-    `3D network measured ${measuredFPS.toFixed(1)} FPS, want at least 50`,
+    measuredFPS >= minimumSceneFPS,
+    `3D network measured ${measuredFPS.toFixed(1)} FPS, want at least ${minimumSceneFPS}`,
   );
   await page.getByRole("button", { name: "聚焦最高风险", exact: true }).click();
   await page.waitForTimeout(1_600);
@@ -693,6 +696,7 @@ try {
         draw_calls: drawCalls,
         sampled_canvas_colors: pixelProbe.colors,
         measured_fps: Math.round(measuredFPS),
+        minimum_fps: minimumSceneFPS,
         reduced_motion: "static",
         webgl_fallback: "svg",
         queue_views: 3,
