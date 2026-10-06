@@ -2,17 +2,18 @@
 
 ## 1. Visual theme and atmosphere
 
-The interface is a white industrial logistics table for dispatch operators. The nationwide
-network is the first-viewport signal: a bright isometric 3D field with graphite labels,
-desaturated teal infrastructure, and vermilion risk markers. Surrounding controls stay dense
-and flush so the network remains the visual center. Green appears only after a write
-operation completes.
+The interface is a paper-white editorial operations table for dispatch operators. On the
+overview, a large serif situation title and four divided numeric indexes establish the
+reading order before the nationwide network. The bright isometric 3D field remains the
+first interactive signal, with graphite labels, desaturated teal infrastructure, and
+vermilion risk markers. Surrounding controls stay dense and flush. Green appears only after
+a write operation completes.
 
-The waybill workbench uses a quieter editorial treatment: paper-white canvas, black rules,
-a large serif route title, and a full-width geographic evidence stage. Its reading order is
-route status, map evidence, audit history, then the human decision boundary. Vermilion marks
-only the unresolved incident. The point inspector is the single dark caption rail so that
-the selected evidence remains visually anchored to the map.
+The waybill workbench continues the same editorial treatment with black rules, a large serif
+route title, and a full-width geographic evidence stage. Its reading order is route status,
+map evidence, audit history, then the human decision boundary. Vermilion marks only the
+unresolved incident. Both the route point inspector and the selected facility summary use a
+single dark caption rail so the selected evidence remains visually anchored to its map.
 
 BoardUI's public dashboard patterns informed the initial hierarchy study. The final
 implementation uses original CSS Modules code, square industrial geometry, divider-led
@@ -38,17 +39,21 @@ structure, and no copied BoardUI source or components.
 
 Use `"Avenir Next", "PingFang SC", "Noto Sans SC", sans-serif` for interface text and
 `"SFMono-Regular", "JetBrains Mono", monospace` for identifiers and event metadata.
-The waybill route and approval titles use `"Songti SC", "STSong", "Noto Serif CJK SC",
-serif` at 64 px and 32 px on desktop. Operational headings use 20 to 28 px at weight 600.
-Body text uses 13 to 15 px with 1.7 line-height for Chinese. Numeric values use tabular
-figures. Letter spacing remains zero. Font sizes are fixed per breakpoint and never scale
-with viewport width.
+The overview situation title, section headings, route title, and approval title use
+`"Songti SC", "STSong", "Noto Serif CJK SC", serif`. The overview title is 44 px on desktop
+and 32 px on mobile. The route title is 64 px on desktop. Operational section headings are
+25 to 32 px at weight 600. Body text uses 13 to 15 px with 1.7 line-height for Chinese.
+Numeric values use tabular figures. Letter spacing remains zero. Font sizes are fixed per
+breakpoint and never scale with viewport width.
 
 ## 4. Component styling
 
 - Buttons use square geometry, a 40 px minimum hit area, and `scale(0.96)` press feedback.
+- The overview masthead stays paper-white. It never becomes a dark dashboard banner.
+- KPI indexes use one divided band with bottom-aligned labels and 32 px numeric values.
 - The 3D map and risk queue form one flush workspace separated by a 1 px divider.
 - Queue views use plain text tabs with a 2 px active underline.
+- Facility selection uses a square charcoal caption rail instead of a floating white card.
 - Other operational sections remain flush and use 1 px dividers.
 - The waybill approval boundary is a rule-separated column, not an elevated card.
 - Inputs and range controls use the signal color for active state and a visible focus ring.
@@ -59,12 +64,13 @@ with viewport width.
 
 ## 5. Layout principles
 
-Use a 4 px base spacing scale. The CEO overview uses a compact white header, a four-segment
-KPI strip, a dominant nationwide 3D network, a narrow risk queue, and a read-only brief. The
-waybill workbench starts with an editorial masthead: the route occupies the dominant left
-field, while shipment facts and risk bars form a narrow right index. Below it, a two-column
-workspace keeps the geographic map and audit timeline on the left and the decision boundary
-on the right. The map and its dark point-inspector rail are one 500 px evidence stage.
+Use a 4 px base spacing scale. The CEO overview starts with an editorial masthead beside a
+four-segment KPI index, followed by a dominant nationwide 3D network, a narrow risk queue,
+and a read-only brief. The waybill workbench starts with a larger route masthead. The route
+occupies the dominant left field, while shipment facts and risk bars form a narrow right
+index. Below it, a two-column workspace keeps the geographic map and audit timeline on the
+left and the decision boundary on the right. The map and its dark point-inspector rail are
+one 500 px evidence stage.
 
 On the CEO overview, KPI segments form one flush band with dividers. They are not separate
 cards. The network and queue share one flush work surface instead of nested cards. The
@@ -117,10 +123,11 @@ instead of elevation. No blur or glass effect is used.
 ## 8. Responsive behavior
 
 At 1000 px the CEO map and risk queue become one column. At 720 px its KPI band becomes two
-columns. At 960 px the waybill workspace becomes one column and keeps route evidence before
-the approval panel. Between 640 px and 960 px, the approval heading becomes a dark side rail.
-At 640 px the approval returns to one column, the route title becomes 36 px, and the map keeps
-a stable 300 px viewport above its inspector.
+columns and its situation title moves above the indexes. At 420 px the situation title is
+32 px and the 3D stage remains at least 360 px tall. At 960 px the waybill workspace becomes
+one column and keeps route evidence before the approval panel. Between 640 px and 960 px, the
+approval heading becomes a dark side rail. At 640 px the approval returns to one column, the
+route title becomes 36 px, and the map keeps a stable 300 px viewport above its inspector.
 The facility inspection view keeps the selected campus centered and places its detail summary
 above the bottom legend so neither layer obscures the model.
 At 640 px the workbench header wraps, route metadata becomes a two-column grid, and playback

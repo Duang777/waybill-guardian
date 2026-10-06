@@ -120,7 +120,7 @@
   height: 40px;
   place-items: center;
   border: 1px solid var(--line);
-  border-radius: var(--control-radius);
+  border-radius: 2px;
   color: var(--ink);
   background: transparent;
   cursor: pointer;
@@ -139,19 +139,19 @@
 
 .overviewHead {
   display: grid;
-  grid-template-columns: minmax(300px, 0.9fr) minmax(0, 3.1fr);
+  grid-template-columns: minmax(500px, 1.15fr) minmax(0, 2.85fr);
   border-bottom: 1px solid var(--line);
 }
 
 .commandBand {
   display: flex;
-  min-height: 92px;
+  min-height: 124px;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 18px;
-  padding: 14px 18px 16px;
-  color: oklch(0.97 0.003 95);
-  background: var(--ink);
+  gap: 28px;
+  padding: 20px 24px 22px;
+  color: var(--ink);
+  background: var(--paper);
 }
 
 .eyebrow {
@@ -165,7 +165,8 @@
 }
 
 .commandBand .eyebrow {
-  color: oklch(0.72 0.17 35);
+  margin-bottom: 8px;
+  color: var(--signal);
 }
 
 .commandBand h1,
@@ -176,10 +177,11 @@
 }
 
 .commandBand h1 {
-  font-family: "Avenir Next Condensed", "Avenir Next", "PingFang SC", sans-serif;
-  font-size: 25px;
-  font-weight: 700;
-  line-height: 1.05;
+  font-family: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+  font-size: 44px;
+  font-weight: 600;
+  line-height: 0.98;
+  text-wrap: balance;
 }
 
 .snapshot,
@@ -194,10 +196,10 @@
 }
 
 .commandBand .snapshot {
-  max-width: 130px;
+  max-width: 142px;
   justify-content: flex-end;
-  color: oklch(0.74 0.006 95);
-  font-size: 10px;
+  color: var(--ink-muted);
+  font-size: 11px;
   text-align: right;
 }
 
@@ -211,10 +213,10 @@
 .kpi {
   display: grid;
   min-width: 0;
-  min-height: 92px;
-  align-content: center;
-  gap: 5px;
-  padding: 12px clamp(12px, 1.3vw, 22px);
+  min-height: 124px;
+  align-content: end;
+  gap: 10px;
+  padding: 18px clamp(14px, 1.5vw, 28px) 22px;
   border-right: 1px solid var(--line);
 }
 
@@ -228,7 +230,7 @@
   justify-content: space-between;
   gap: 8px;
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .kpiLabel > span:last-child {
@@ -240,10 +242,11 @@
 .kpi strong {
   overflow-wrap: anywhere;
   color: var(--ink);
-  font-size: clamp(21px, 1.6vw, 27px);
-  font-weight: 700;
+  font-family: "Avenir Next Condensed", "Avenir Next", "PingFang SC", sans-serif;
+  font-size: 32px;
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
-  line-height: 1.05;
+  line-height: 0.96;
 }
 
 .kpi strong.kpiUnavailable {
@@ -296,8 +299,8 @@
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(360px, 400px);
-  height: calc(clamp(520px, 37vw, 680px) + 72px);
-  min-height: 592px;
+  height: calc(clamp(520px, 37vw, 680px) + 84px);
+  min-height: 604px;
   background: var(--paper);
   border-bottom: 1px solid var(--line);
 }
@@ -325,19 +328,20 @@
 .sectionHeader,
 .queueHeader {
   display: flex;
-  min-height: 72px;
+  min-height: 84px;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 12px 18px;
+  padding: 14px 20px;
   border-bottom: 1px solid var(--line);
 }
 
 .sectionHeader h2,
 .queueHeader h2 {
-  font-family: "Avenir Next Condensed", "Avenir Next", "PingFang SC", sans-serif;
-  font-size: 18px;
-  font-weight: 700;
+  font-family: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.05;
 }
 
 .mapHeader {
@@ -357,8 +361,8 @@
   grid-template-rows: auto auto;
   align-content: center;
   column-gap: 6px;
-  min-width: 78px;
-  padding: 0 16px;
+  min-width: 82px;
+  padding: 0 18px;
   border-left: 1px solid var(--line);
 }
 
@@ -372,7 +376,7 @@
 .mapFacts .operationalFact strong,
 .mapFacts .operationalSignal strong {
   color: var(--ink);
-  font-size: 16px;
+  font-size: 18px;
 }
 
 .mapFacts .operationalSignal svg,
@@ -675,8 +679,8 @@
   width: 128px;
   height: 40px;
   padding: 0 28px 0 10px;
-  border: 1px solid oklch(0.78 0.01 230);
-  border-radius: var(--control-radius);
+  border: 1px solid oklch(0.72 0.01 230);
+  border-radius: 2px;
   color: var(--ink);
   background: oklch(0.99 0.002 95 / 0.94);
   font-size: 11px;
@@ -688,8 +692,8 @@
   width: 40px;
   height: 40px;
   place-items: center;
-  border: 1px solid oklch(0.78 0.01 230);
-  border-radius: var(--control-radius);
+  border: 1px solid oklch(0.72 0.01 230);
+  border-radius: 2px;
   color: var(--ink);
   background: oklch(0.99 0.002 95 / 0.94);
   cursor: pointer;
@@ -843,20 +847,20 @@
   bottom: 14px;
   left: 16px;
   display: grid;
-  width: min(252px, calc(100% - 32px));
-  gap: 5px;
-  padding: 12px 13px 12px 24px;
-  border: 1px solid oklch(0.74 0.012 230);
-  border-radius: 2px;
-  color: var(--ink);
-  background: oklch(0.995 0.002 95 / 0.97);
+  width: min(292px, calc(100% - 32px));
+  gap: 7px;
+  padding: 15px 16px 14px 28px;
+  border: 0;
+  border-radius: 0;
+  color: oklch(0.96 0.003 95);
+  background: oklch(0.18 0.012 250 / 0.96);
   pointer-events: auto;
 }
 
 .sceneSelectionFacility {
   top: 66px;
   bottom: auto;
-  width: min(224px, calc(100% - 32px));
+  width: min(260px, calc(100% - 32px));
 }
 
 .sceneSelection::before {
@@ -871,12 +875,13 @@
 }
 
 .sceneSelection > span {
-  color: oklch(0.48 0.03 255);
+  color: oklch(0.72 0.012 95);
   font-size: 9px;
 }
 
 .sceneSelection > strong {
-  font-size: 13px;
+  color: oklch(0.98 0.002 95);
+  font-size: 15px;
 }
 
 .sceneSelection dl {
@@ -888,7 +893,7 @@
 .sceneSelection dl div {
   display: grid;
   gap: 2px;
-  border-right: 1px solid oklch(0.9 0.01 220);
+  border-right: 1px solid oklch(0.38 0.008 250);
 }
 
 .sceneSelection dl div:not(:first-child) {
@@ -900,7 +905,7 @@
 }
 
 .sceneSelection dt {
-  color: oklch(0.52 0.018 255);
+  color: oklch(0.68 0.012 95);
   font-size: 9px;
 }
 
@@ -917,14 +922,14 @@
   flex-wrap: wrap;
   gap: 4px 10px;
   margin: 2px 0 0;
-  color: oklch(0.43 0.02 255);
+  color: oklch(0.76 0.012 95);
   font-family: "SFMono-Regular", "JetBrains Mono", monospace;
   font-size: 9px;
   font-variant-numeric: tabular-nums;
 }
 
 .sceneFacilityMetaFlow {
-  color: oklch(0.38 0.08 183);
+  color: oklch(0.73 0.12 183);
   font-weight: 700;
 }
 
@@ -933,9 +938,10 @@
   min-height: 40px;
   align-items: center;
   width: fit-content;
-  color: var(--ink);
+  color: oklch(0.98 0.002 95);
   font-size: 11px;
   font-weight: 700;
+  text-underline-offset: 4px;
 }
 
 .sceneLoading {
@@ -976,7 +982,7 @@
 
 .queueControls {
   display: flex;
-  min-height: 54px;
+  min-height: 58px;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -1092,7 +1098,7 @@
 
 .queueSummary {
   display: flex;
-  min-height: 54px;
+  min-height: 58px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -1164,10 +1170,10 @@
 .queueItem {
   display: grid;
   grid-template-columns: 40px 28px minmax(0, 1fr) 40px;
-  min-height: 72px;
+  min-height: 80px;
   align-items: center;
-  gap: 7px;
-  padding: 8px 8px 8px 12px;
+  gap: 8px;
+  padding: 10px 8px 10px 12px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -1192,9 +1198,9 @@
 }
 
 .queueRank {
-  color: oklch(0.62 0.014 255);
+  color: oklch(0.56 0.014 255);
   font-family: "SFMono-Regular", "JetBrains Mono", monospace;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .queueBody {
@@ -1213,8 +1219,9 @@
 .queueTitle a {
   overflow: hidden;
   color: var(--ink);
-  font-size: 12px;
-  font-weight: 700;
+  font-family: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+  font-size: 14px;
+  font-weight: 600;
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1227,7 +1234,7 @@
 .riskScore {
   position: relative;
   display: inline-flex;
-  width: 34px;
+  width: 38px;
   height: 24px;
   flex: 0 0 auto;
   align-items: center;
@@ -1235,7 +1242,7 @@
   color: var(--signal);
   background: transparent;
   font-family: "SFMono-Regular", "JetBrains Mono", monospace;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
 }
 
@@ -1266,7 +1273,7 @@
 .statusComplete,
 .statusDanger {
   padding: 2px 5px;
-  border-radius: 3px;
+  border-radius: 2px;
   white-space: nowrap;
 }
 
@@ -1305,7 +1312,7 @@
 }
 
 .briefSection {
-  background: oklch(0.965 0.004 120);
+  background: var(--paper);
 }
 
 .briefMeta {
@@ -1338,10 +1345,10 @@
 
 .briefItem {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
-  gap: 10px;
-  min-height: 144px;
-  padding: 18px;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 14px;
+  min-height: 172px;
+  padding: 24px 20px 28px;
   border-right: 1px solid var(--line);
 }
 
@@ -1350,23 +1357,27 @@
 }
 
 .briefIndex {
-  color: oklch(0.46 0.09 183);
+  color: var(--signal);
   font-family: "SFMono-Regular", "JetBrains Mono", monospace;
   font-size: 11px;
   font-weight: 700;
 }
 
 .briefItem h3 {
-  margin: 0 0 7px;
-  font-size: 14px;
-  font-weight: 650;
+  margin: 0 0 10px;
+  font-family: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-wrap: balance;
 }
 
 .briefItem p {
   margin: 0;
   color: oklch(0.4 0.018 255);
-  font-size: 12px;
-  line-height: 1.65;
+  font-size: 13px;
+  line-height: 1.75;
+  text-wrap: pretty;
 }
 
 .citations {
@@ -1452,6 +1463,28 @@
 }
 
 @media (max-width: 1000px) {
+  .overviewHead {
+    grid-template-columns: minmax(420px, 1.2fr) minmax(0, 2.8fr);
+  }
+
+  .commandBand {
+    min-height: 112px;
+    padding-inline: 18px;
+  }
+
+  .commandBand h1 {
+    font-size: 36px;
+  }
+
+  .kpi {
+    min-height: 112px;
+    padding-inline: 14px;
+  }
+
+  .kpi strong {
+    font-size: 27px;
+  }
+
   .workspace {
     grid-template-columns: 1fr;
     height: auto;
@@ -1489,11 +1522,13 @@
   }
 
   .commandBand {
-    min-height: 78px;
+    min-height: 118px;
+    padding: 18px 18px 20px;
+    border-bottom: 1px solid var(--line);
   }
 
   .commandBand h1 {
-    font-size: 21px;
+    font-size: 34px;
   }
 
   .commandBand .snapshot {
@@ -1503,12 +1538,26 @@
   }
 
   .kpiStrip {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .kpi {
-    min-height: 78px;
-    padding: 10px 12px;
+    min-height: 84px;
+    gap: 7px;
+    padding: 12px 16px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .kpi:nth-child(2) {
+    border-right: 0;
+  }
+
+  .kpi:nth-last-child(-n + 2) {
+    border-bottom: 0;
+  }
+
+  .kpi strong {
+    font-size: 26px;
   }
 
   .networkStage {
@@ -1522,10 +1571,11 @@
   }
 
   .mapHeader {
-    min-height: 96px;
+    min-height: 116px;
     align-items: stretch;
     flex-direction: column;
-    gap: 8px;
+    gap: 12px;
+    padding-block: 14px;
   }
 
   .mapFacts {
@@ -1577,11 +1627,11 @@
   }
 
   .commandBand {
-    gap: 10px;
+    gap: 12px;
   }
 
   .commandBand h1 {
-    font-size: 20px;
+    font-size: 32px;
   }
 
   .commandBand .snapshot {
@@ -1590,12 +1640,12 @@
   }
 
   .kpi {
-    min-height: 74px;
-    padding: 9px 8px;
+    min-height: 82px;
+    padding: 12px 14px 13px;
   }
 
   .kpi strong {
-    font-size: clamp(17px, 5vw, 21px);
+    font-size: 24px;
   }
 
   .kpiLabel {
@@ -1609,8 +1659,8 @@
   }
 
   .mapHeader {
-    min-height: 92px;
-    padding: 9px 12px;
+    min-height: 112px;
+    padding: 13px 14px;
   }
 
   .mapFacts .operationalFact,
@@ -1637,6 +1687,11 @@
     padding-inline: 14px;
   }
 
+  .sectionHeader h2,
+  .queueHeader h2 {
+    font-size: 25px;
+  }
+
   .queueControls {
     padding-inline: 10px;
   }
@@ -1652,13 +1707,13 @@
   }
 
   .networkStage {
-    height: 340px;
-    min-height: 320px;
+    height: 380px;
+    min-height: 360px;
   }
 
   .networkMapFrame,
   .networkMap {
-    min-height: 320px;
+    min-height: 360px;
   }
 
   .mapLegend {
@@ -1675,7 +1730,7 @@
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 4px 10px;
     width: auto;
-    padding: 8px 10px 7px 20px;
+    padding: 10px 12px 9px 24px;
   }
 
   .sceneSelectionFacility {
@@ -1683,8 +1738,8 @@
   }
 
   .sceneSelection::before {
-    top: 13px;
-    left: 9px;
+    top: 15px;
+    left: 11px;
   }
 
   .sceneSelection > span {
@@ -1748,6 +1803,8 @@
   }
 
   .briefItem {
-    padding-inline: 14px;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 10px;
+    padding: 20px 14px 24px;
   }
 }
