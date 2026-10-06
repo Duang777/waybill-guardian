@@ -38,7 +38,7 @@
 
 默认 `PLATFORM=mock` 只加载内置运单 `YD2026101001`，数据在 [`internal/tools/testdata/demo.json`](internal/tools/testdata/demo.json)。`PLATFORM=file` 在启动时加载一份 JSON 或 CSV v1，支持可选的公路港、车辆和线路网络。页面可以选择文件中的运单并启动处置。文件模式下的写操作仍走内存中的 fixture 写入运行时，短信不会真正发出。
 
-首页是全国公路港经营总览，显示网络、KPI、异常队列和带统计引用的经营简报，并支持一次启动 5 个独立 run。点击运单进入单运单工作台，每个 run 仍保留独立审批和 SSE 时间线。当前界面还不是黑橙指挥中心，那是 [issue 77](https://github.com/Duang777/waybill-guardian/issues/77)。
+首页是全国公路港经营总览，显示网络、KPI、异常队列和带统计引用的经营简报，并支持一次启动 5 个独立 run。全国视图是用于演示网络关系的抽象港网，不是测绘底图，也不绘制行政边界。点击运单进入单运单工作台，每个 run 仍保留独立审批和 SSE 时间线。当前界面还不是黑橙指挥中心，那是 [issue 77](https://github.com/Duang777/waybill-guardian/issues/77)。
 
 <p align="center">
   <img alt="桌面宽度下，内置样例停在人工审批。运单选择器是杭州到成都的 YD2026101001，按钮是重新处置。方案是改派到川行快运，并通知货主和司机。地图是本地轨迹。展示分是 ETA 83、路况 75、天气 0。" src="docs/assets/console-approval.png" width="840">

@@ -105,15 +105,6 @@
   box-shadow: 0 0 0 3px oklch(0.57 0.14 151 / 0.1);
 }
 
-.dataBadge {
-  padding: 3px 6px;
-  border: 1px solid var(--line);
-  border-radius: 2px;
-  color: var(--ink-muted);
-  background: oklch(0.98 0.003 120);
-  font-size: 10px;
-}
-
 .iconButton {
   display: grid;
   width: 40px;
@@ -243,7 +234,7 @@
   overflow-wrap: anywhere;
   color: var(--ink);
   font-family: "Avenir Next Condensed", "Avenir Next", "PingFang SC", sans-serif;
-  font-size: 32px;
+  font-size: 42px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
   line-height: 0.96;
@@ -258,49 +249,11 @@
   display: none;
 }
 
-.operationalStrip {
-  display: flex;
-  min-height: 46px;
-  align-items: center;
-  gap: 0;
-  padding: 0 22px;
-  border-bottom: 1px solid oklch(0.91 0.009 220);
-  background: oklch(0.975 0.01 183);
-}
-
-.operationalFact,
-.operationalSignal {
-  display: grid;
-  grid-template-columns: 18px auto auto;
-  align-items: center;
-  gap: 7px;
-  min-width: 170px;
-  padding-right: 28px;
-  color: oklch(0.48 0.018 255);
-  font-size: 12px;
-}
-
-.operationalFact svg {
-  color: oklch(0.47 0.085 183);
-}
-
-.operationalSignal svg,
-.operationalSignal strong {
-  color: oklch(0.57 0.15 38);
-}
-
-.operationalFact strong,
-.operationalSignal strong {
-  color: oklch(0.24 0.02 255);
-  font-size: 17px;
-  font-variant-numeric: tabular-nums;
-}
-
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(360px, 400px);
-  height: calc(clamp(520px, 37vw, 680px) + 84px);
-  min-height: 604px;
+  height: clamp(520px, 37vw, 680px);
+  min-height: 520px;
   background: var(--paper);
   border-bottom: 1px solid var(--line);
 }
@@ -342,46 +295,6 @@
   font-size: 26px;
   font-weight: 600;
   line-height: 1.05;
-}
-
-.mapHeader {
-  padding-block: 10px;
-}
-
-.mapFacts {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(70px, auto));
-  align-self: stretch;
-}
-
-.mapFacts .operationalFact,
-.mapFacts .operationalSignal {
-  display: grid;
-  grid-template-columns: 16px auto;
-  grid-template-rows: auto auto;
-  align-content: center;
-  column-gap: 6px;
-  min-width: 82px;
-  padding: 0 18px;
-  border-left: 1px solid var(--line);
-}
-
-.mapFacts .operationalFact span,
-.mapFacts .operationalSignal span {
-  grid-column: 2;
-  color: var(--ink-muted);
-  font-size: 9px;
-}
-
-.mapFacts .operationalFact strong,
-.mapFacts .operationalSignal strong {
-  color: var(--ink);
-  font-size: 18px;
-}
-
-.mapFacts .operationalSignal svg,
-.mapFacts .operationalSignal strong {
-  color: var(--signal);
 }
 
 .networkStage {
@@ -666,29 +579,120 @@
   background: oklch(0.62 0.18 29);
 }
 
-.sceneIdentity,
+.sceneHud,
 .sceneControls,
 .sceneLegend,
 .sceneSelection,
+.sceneCaption,
 .sceneRegions {
   position: absolute;
   z-index: 2;
   pointer-events: none;
 }
 
-.sceneIdentity {
-  top: 18px;
-  left: 20px;
+.sceneHud {
+  top: 14px;
+  left: 14px;
   display: grid;
-  gap: 3px;
-  color: oklch(0.42 0.012 250);
+  width: 360px;
+  max-width: calc(100% - 430px);
+  border: 1px solid oklch(0.76 0.012 230);
+  border-radius: 4px;
+  color: var(--ink);
+  background: oklch(0.995 0.002 95 / 0.95);
+}
+
+.sceneHudHeading {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 9px;
+}
+
+.sceneBreadcrumb {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-muted);
+  font-size: 10px;
+}
+
+.sceneBreadcrumb h2 {
+  overflow: hidden;
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sceneHudBadges {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.sceneSelectedPill,
+.sceneDataBadge {
+  padding: 3px 6px;
+  border: 1px solid oklch(0.76 0.012 230);
+  border-radius: 999px;
+  color: var(--ink-muted);
+  background: oklch(0.975 0.004 120);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.sceneSelectedPill {
+  max-width: 104px;
+  overflow: hidden;
+  color: var(--ink);
   font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  text-overflow: ellipsis;
+}
+
+.sceneMetrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+  border-top: 1px solid oklch(0.84 0.008 230);
+}
+
+.sceneMetrics > div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  padding: 7px 9px 8px;
+  border-right: 1px solid oklch(0.84 0.008 230);
+}
+
+.sceneMetrics > div:last-child {
+  border-right: 0;
+}
+
+.sceneMetrics dt {
+  color: var(--ink-muted);
   font-size: 9px;
 }
 
-.sceneIdentity strong {
+.sceneMetrics dd {
+  margin: 0;
   color: var(--ink);
-  font-size: 14px;
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.sceneMetrics .sceneMetricSignal dd {
+  color: var(--signal);
 }
 
 .sceneControls {
@@ -826,6 +830,21 @@
   font-size: 10px;
 }
 
+.sceneCaption {
+  bottom: 14px;
+  left: 14px;
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid oklch(0.78 0.01 230);
+  border-radius: 2px;
+  color: var(--ink-muted);
+  background: oklch(0.99 0.002 95 / 0.94);
+  font-size: 9px;
+}
+
 .sceneLegendFacility {
   top: 66px;
   bottom: auto;
@@ -901,7 +920,7 @@
 }
 
 .sceneSelection {
-  bottom: 14px;
+  bottom: 54px;
   left: 16px;
   display: grid;
   width: min(292px, calc(100% - 32px));
@@ -915,8 +934,7 @@
 }
 
 .sceneSelectionFacility {
-  top: 66px;
-  bottom: auto;
+  bottom: 54px;
   width: min(260px, calc(100% - 32px));
 }
 
@@ -1560,7 +1578,7 @@
   }
 
   .kpi strong {
-    font-size: 27px;
+    font-size: 32px;
   }
 
   .workspace {
@@ -1578,12 +1596,6 @@
     flex: initial;
   }
 
-  .operationalFact,
-  .operationalSignal {
-    min-width: 0;
-    flex: 1;
-    padding-right: 14px;
-  }
 }
 
 @media (max-width: 720px) {
@@ -1639,36 +1651,26 @@
   }
 
   .networkStage {
-    height: 420px;
-    min-height: 360px;
+    height: 460px;
+    min-height: 420px;
   }
 
   .networkMapFrame,
   .networkMap {
-    min-height: 360px;
+    min-height: 420px;
   }
 
-  .mapHeader {
-    min-height: 116px;
-    align-items: stretch;
-    flex-direction: column;
-    gap: 12px;
-    padding-block: 14px;
+  .sceneHud {
+    top: 8px;
+    right: 8px;
+    left: 8px;
+    width: auto;
+    max-width: none;
   }
 
-  .mapFacts {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .mapFacts .operationalFact,
-  .mapFacts .operationalSignal {
-    grid-template-columns: auto 1fr;
-    min-width: 0;
-    padding: 0 9px;
-  }
-
-  .mapFacts .operationalFact:first-child {
-    border-left: 0;
+  .sceneControls {
+    top: 108px;
+    right: 8px;
   }
 
   .briefMeta {
@@ -1736,30 +1738,6 @@
     display: none;
   }
 
-  .mapHeader {
-    min-height: 112px;
-    padding: 13px 14px;
-  }
-
-  .mapFacts .operationalFact,
-  .mapFacts .operationalSignal {
-    grid-template-columns: auto 1fr;
-    column-gap: 4px;
-    padding: 0 6px;
-  }
-
-  .mapFacts .operationalFact svg,
-  .mapFacts .operationalSignal svg {
-    display: none;
-  }
-
-  .mapFacts .operationalFact strong,
-  .mapFacts .operationalSignal strong,
-  .mapFacts .operationalFact span,
-  .mapFacts .operationalSignal span {
-    grid-column: auto;
-  }
-
   .sectionHeader,
   .queueHeader {
     padding-inline: 14px;
@@ -1785,13 +1763,13 @@
   }
 
   .networkStage {
-    height: 380px;
-    min-height: 360px;
+    height: 440px;
+    min-height: 420px;
   }
 
   .networkMapFrame,
   .networkMap {
-    min-height: 360px;
+    min-height: 420px;
   }
 
   .mapLegend {
@@ -1860,12 +1838,38 @@
     display: none;
   }
 
-  .sceneIdentity,
+  .sceneCaption,
   .sceneRegions {
     display: none;
   }
 
+  .sceneHudHeading {
+    min-height: 40px;
+    padding: 6px 8px;
+  }
+
+  .sceneBreadcrumb > span:first-child {
+    display: none;
+  }
+
+  .sceneBreadcrumb > svg {
+    display: none;
+  }
+
+  .sceneSelectedPill {
+    max-width: 92px;
+  }
+
+  .sceneMetrics > div {
+    padding: 6px 7px 7px;
+  }
+
+  .sceneMetrics dd {
+    font-size: 16px;
+  }
+
   .sceneControls {
+    top: 108px;
     left: 8px;
     right: 8px;
     display: grid;

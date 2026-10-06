@@ -1,5 +1,6 @@
 import {
   ArrowLeft,
+  ChevronRight,
   Crosshair,
   Map as MapIcon,
   Navigation,
@@ -21,6 +22,7 @@ import {
 import type {
   AnomalyOverview,
   HubOverview,
+  Overview,
   RouteOverview,
   WaybillID,
 } from "../api";
@@ -44,6 +46,8 @@ type HubNetworkProps = {
   hubs: readonly HubOverview[];
   routes: readonly RouteOverview[];
   anomalies: readonly AnomalyOverview[];
+  dataMode: Overview["data_mode"];
+  totals: Overview["totals"];
 };
 
 type SceneFailureBoundaryProps = {
@@ -55,7 +59,13 @@ type SceneFailureBoundaryState = {
   failed: boolean;
 };
 
-export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
+export function HubNetwork({
+  hubs,
+  routes,
+  anomalies,
+  dataMode,
+  totals,
+}: HubNetworkProps) {
   const webGLAvailable = useMemo(supportsWebGL, []);
   const reducedMotion = useReducedMotion();
   const pageVisible = usePageVisibility();
@@ -262,18 +272,51 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
         </SceneFailureBoundary>
       )}
 
+      <div className={styles.sceneHud} data-scene-hud>
+        <div className={styles.sceneHudHeading}>
+          <div className={styles.sceneBreadcrumb}>
+            <span>全国港网</span>
+            <ChevronRight aria-hidden="true" size={12} />
+            <h2 id="map-heading">
+              {selectedHub === undefined ? "实时态势" : selectedHub.name}
+            </h2>
+          </div>
+          <div className={styles.sceneHudBadges}>
+            {selectedHub !== undefined && (
+              <span
+                className={styles.sceneSelectedPill}
+                data-scene-selection-pill
+              >
+                {selectedAnomaly?.waybill_id ?? selectedHub.hub_id}
+              </span>
+            )}
+            <span className={styles.sceneDataBadge}>
+              {dataModeLabel(dataMode)}
+            </span>
+          </div>
+        </div>
+        <dl className={styles.sceneMetrics} aria-label="网络运行摘要">
+          <div>
+            <dt>公路港</dt>
+            <dd>{hubs.length}</dd>
+          </div>
+          <div>
+            <dt>在途</dt>
+            <dd>{totals.in_flight}</dd>
+          </div>
+          <div className={styles.sceneMetricSignal}>
+            <dt>异常</dt>
+            <dd>{totals.anomalies}</dd>
+          </div>
+          <div>
+            <dt>处置中</dt>
+            <dd>{totals.handling}</dd>
+          </div>
+        </dl>
+      </div>
+
       {!useFallback && (
         <>
-          <div className={styles.sceneIdentity}>
-            <span>
-              {selectedHub === undefined
-                ? "WG / LIVE NETWORK"
-                : "WG / FACILITY VIEW"}
-            </span>
-            <strong>
-              {selectedHub === undefined ? `${hubs.length} HUBS` : "园区详情"}
-            </strong>
-          </div>
           {selectedHub === undefined && (
             <div className={styles.sceneRegions} aria-hidden="true">
               <span>西北</span>
@@ -309,7 +352,13 @@ export function HubNetwork({ hubs, routes, anomalies }: HubNetworkProps) {
         </>
       )}
 
-      <div className={styles.sceneControls}>
+      <div className={styles.sceneCaption} aria-label="地图说明">
+        <span>抽象港网</span>
+        <span aria-hidden="true">·</span>
+        <span>非测绘底图</span>
+      </div>
+
+      <div className={styles.sceneControls} data-scene-controls>
         {selectedHub !== undefined && (
           <div
             className={styles.sceneCameraPresets}
@@ -647,6 +696,21 @@ function runStatusLabel(status: AnomalyOverview["run_status"]): string {
       return "待处置";
     default: {
       const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
+}
+
+function dataModeLabel(mode: Overview["data_mode"]): string {
+  switch (mode) {
+    case "simulated":
+      return "仿真数据";
+    case "fixture":
+      return "内置样例";
+    case "external":
+      return "业务数据";
+    default: {
+      const exhaustive: never = mode;
       return exhaustive;
     }
   }

@@ -100,6 +100,17 @@ try {
     (await page.locator('section[aria-label="24 小时经营指标"] article').count()) === 4,
     "overview did not render four primary KPIs",
   );
+  const kpiFontSizes = await page
+    .locator('section[aria-label="24 小时经营指标"] article strong')
+    .evaluateAll((elements) =>
+      elements.map((element) => Number.parseFloat(getComputedStyle(element).fontSize)),
+    );
+  assert(
+    kpiFontSizes.every((size) => size >= 40),
+    `1920px KPI values were smaller than 40px: ${kpiFontSizes.join(", ")}`,
+  );
+  await page.locator("[data-scene-hud]").getByText("全国港网", { exact: true }).waitFor();
+  await page.getByLabel("地图说明").getByText("非测绘底图", { exact: true }).waitFor();
   await page.getByText("规则模板", { exact: true }).waitFor();
   const networkMap = page.locator('[data-network-renderer="webgl"]');
   await networkMap.locator("canvas").waitFor();
@@ -184,6 +195,12 @@ try {
     .locator('[role="status"]')
     .getByText(firstHub.name, { exact: true })
     .waitFor();
+  const selectionPill = networkMap.locator("[data-scene-selection-pill]");
+  await selectionPill.waitFor();
+  assert(
+    (await selectionPill.textContent())?.trim() !== "",
+    "selected hub did not render a selection pill",
+  );
   const detailStats = {
     hubs: Number(await networkMap.getAttribute("data-scene-hubs")),
     routes: Number(await networkMap.getAttribute("data-scene-routes")),
@@ -622,6 +639,10 @@ try {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.waitForTimeout(1_000);
   assert(!(await hasHorizontalOverflow(page)), "375px overview overflowed horizontally");
+  assert(
+    !(await elementsOverlap(page, "[data-scene-hud]", "[data-scene-controls]")),
+    "375px scene HUD overlapped the camera controls",
+  );
   await page.screenshot({
     path: join(artifactDir, "overview-mobile-375.png"),
     fullPage: true,
@@ -629,6 +650,10 @@ try {
   await page.setViewportSize({ width: 320, height: 812 });
   await page.waitForTimeout(1_000);
   assert(!(await hasHorizontalOverflow(page)), "320px overview overflowed horizontally");
+  assert(
+    !(await elementsOverlap(page, "[data-scene-hud]", "[data-scene-controls]")),
+    "320px scene HUD overlapped the camera controls",
+  );
   const undersized = await undersizedControls(page);
   assert(
     undersized.length === 0,
@@ -1054,6 +1079,27 @@ async function verifyWebGLFallback(webURL) {
   } finally {
     await fallbackBrowser.close();
   }
+}
+
+async function elementsOverlap(page, firstSelector, secondSelector) {
+  return page.evaluate(
+    ({ firstSelector: first, secondSelector: second }) => {
+      const firstElement = document.querySelector(first);
+      const secondElement = document.querySelector(second);
+      if (firstElement === null || secondElement === null) {
+        return true;
+      }
+      const firstBounds = firstElement.getBoundingClientRect();
+      const secondBounds = secondElement.getBoundingClientRect();
+      return !(
+        firstBounds.right <= secondBounds.left ||
+        secondBounds.right <= firstBounds.left ||
+        firstBounds.bottom <= secondBounds.top ||
+        secondBounds.bottom <= firstBounds.top
+      );
+    },
+    { firstSelector, secondSelector },
+  );
 }
 
 async function undersizedControls(page) {
