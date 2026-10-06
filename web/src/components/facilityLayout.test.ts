@@ -162,6 +162,27 @@ describe("buildFacilityLayouts", () => {
         physicalSegmentKey(segment.from, segment.to),
       );
       expect(new Set(keys).size).toBe(keys.length);
+      const segmentIDs = layout.transportSegments.map((segment) => segment.id);
+      expect(new Set(segmentIDs).size).toBe(segmentIDs.length);
+      expect(
+        layout.transportSegments.every((segment) => segment.id.length > 0),
+      ).toBe(true);
+      expect(
+        layout.transportSegments.every(
+          (segment) => segment.routeKinds.length > 0,
+        ),
+      ).toBe(true);
+    }
+
+    const rebuilt = buildFacilityLayouts(hubs, routes);
+    for (const hub of hubs) {
+      expect(
+        rebuilt.get(hub.hub_id)?.transportSegments.map((segment) => segment.id),
+      ).toEqual(
+        layouts
+          .get(hub.hub_id)
+          ?.transportSegments.map((segment) => segment.id),
+      );
     }
 
     const splitLayout = layouts.get("SPLIT");
@@ -185,6 +206,10 @@ describe("buildFacilityLayouts", () => {
         physicalSegmentKey(segment.from, segment.to) === sharedKey,
     );
     expect(sharedSegment?.status).toBe("risk");
+    expect(sharedSegment?.routeKinds).toEqual([
+      "gate-to-dock",
+      "dock-to-yard",
+    ]);
   });
 
   it("derives vehicle states and route risk from operating data", () => {
