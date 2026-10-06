@@ -72,15 +72,22 @@ export function AuditDrawer({
           <span className={styles.eventCount}>
             {state.events.length.toString().padStart(2, "0")} events
           </span>
-          {open ? (
-            <ChevronDown aria-hidden="true" size={17} />
-          ) : (
-            <ChevronUp aria-hidden="true" size={17} />
-          )}
+          <ChevronUp
+            className={`${styles.auditDrawerChevron} ${
+              open ? styles.auditDrawerChevronOpen : ""
+            }`}
+            aria-hidden="true"
+            size={17}
+          />
         </span>
       </button>
-      {open && (
-        <div className={styles.auditDrawerContent} id="audit-drawer-content">
+      <div
+        className={styles.auditDrawerViewport}
+        id="audit-drawer-content"
+        aria-hidden={!open}
+        inert={!open}
+      >
+        <div className={styles.auditDrawerContent}>
           <div className={styles.playbackBand}>
             <div className={styles.playbackLabel}>
               <Route aria-hidden="true" size={15} />
@@ -90,7 +97,7 @@ export function AuditDrawer({
           </div>
           <TimelinePanel state={state} showHeader={false} />
         </div>
-      )}
+      </div>
     </section>
   );
 }

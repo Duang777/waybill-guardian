@@ -106,6 +106,13 @@ try {
       const sourceSeq = Number(evidenceTarget?.match(/#(\d+)$/)?.[1]);
       assert(Number.isInteger(sourceSeq), `invalid evidence target ${evidenceTarget}`);
       await evidenceLink.click();
+      const drawerMotion = await page
+        .locator("#audit-drawer-content")
+        .evaluate((element) => getComputedStyle(element).transitionProperty);
+      assert(
+        drawerMotion.includes("transform") && drawerMotion.includes("opacity"),
+        `audit drawer has no transform/opacity transition: ${drawerMotion}`,
+      );
       const focusedEvent = page.locator(
         `[data-event-seqs="${sourceSeq}"], [data-event-seqs$=",${sourceSeq}"]`,
       );
@@ -330,6 +337,13 @@ async function verifyWideWorkbench(page, width, height) {
             height: Math.round(rect.height),
           };
     };
+    const approval = document.querySelector(
+      'section[aria-labelledby="approval-title"]',
+    );
+    const approvalStyle =
+      approval instanceof HTMLElement ? getComputedStyle(approval) : null;
+    const plan = document.querySelector('[aria-label="Agent 处置计划"]');
+    const planStyle = plan instanceof HTMLElement ? getComputedStyle(plan) : null;
     return {
       viewportHeight: window.innerHeight,
       documentHeight: document.documentElement.scrollHeight,
@@ -341,6 +355,11 @@ async function verifyWideWorkbench(page, width, height) {
       approval: bounds(document.querySelector(
         'section[aria-labelledby="approval-title"]',
       )),
+      approvalVisual: {
+        borderWidth: approvalStyle?.borderTopWidth ?? null,
+        boxShadow: approvalStyle?.boxShadow ?? null,
+      },
+      planBorderWidth: planStyle?.borderTopWidth ?? null,
     };
   });
   const actionBounds = await page
@@ -362,6 +381,12 @@ async function verifyWideWorkbench(page, width, height) {
       layout.rail.width >= 400 &&
       layout.audit.width >= width - 2,
     `${width}x${height} workbench is not a readable map and Agent rail layout: ${JSON.stringify(layout)}`,
+  );
+  assert(
+    layout.approvalVisual.borderWidth === "0px" &&
+      layout.approvalVisual.boxShadow === "none" &&
+      layout.planBorderWidth === "0px",
+    `${width}x${height} Agent rail regressed to card styling: ${JSON.stringify(layout)}`,
   );
   assert(
     actionBounds !== null &&
@@ -412,7 +437,11 @@ async function undersizedButtons(page) {
     buttons
       .filter((button) => {
         const bounds = button.getBoundingClientRect();
-        return bounds.width < 40 || bounds.height < 40;
+        return (
+          bounds.width > 0 &&
+          bounds.height > 0 &&
+          (bounds.width < 40 || bounds.height < 40)
+        );
       })
       .map((button) => button.getAttribute("aria-label") ?? button.textContent?.trim() ?? "button"),
   );

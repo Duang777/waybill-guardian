@@ -2469,14 +2469,14 @@
 .agentRail {
   display: grid;
   min-width: 0;
-  grid-template-rows: auto minmax(96px, 132px) minmax(0, 1fr);
+  grid-template-rows: auto minmax(112px, 148px) minmax(0, 1fr);
   align-content: start;
   overflow: hidden;
-  background: oklch(0.957 0.006 95);
+  background: oklch(0.982 0.004 95);
 }
 
 .agentTaskPanel {
-  padding: 13px 14px 12px;
+  padding: 14px 16px 13px;
   border-bottom: 1px solid oklch(0.2 0.01 255);
   background: oklch(0.985 0.003 95);
 }
@@ -2511,9 +2511,11 @@
   flex: 0 0 auto;
   align-items: center;
   gap: 5px;
-  padding: 0 7px;
+  padding: 0 8px;
+  border: 1px solid oklch(0.78 0.028 183);
+  border-radius: 999px;
   color: oklch(0.39 0.08 183);
-  background: oklch(0.93 0.024 183);
+  background: transparent;
   font-size: 9px;
   font-weight: 700;
 }
@@ -2524,6 +2526,7 @@
   align-items: end;
   gap: 10px;
   margin: 8px 0 10px;
+  animation: agentTaskChange 240ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .agentTaskLead h2 {
@@ -2543,67 +2546,125 @@
 }
 
 .agentPlan {
+  position: relative;
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   margin: 0;
-  padding: 0;
-  border: 1px solid oklch(0.84 0.01 95);
+  padding: 2px 0 0;
+  isolation: isolate;
   list-style: none;
+}
+
+.agentPlan::before,
+.agentPlan::after {
+  position: absolute;
+  z-index: 0;
+  top: 14px;
+  left: 8.333%;
+  height: 1px;
+  content: "";
+}
+
+.agentPlan::before {
+  width: 83.334%;
+  background: oklch(0.82 0.01 95);
+}
+
+.agentPlan::after {
+  width: 83.334%;
+  background: oklch(0.5 0.1 155);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 360ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.agentPlanProgress0::after,
+.agentPlanProgress1::after {
+  transform: scaleX(0);
+}
+
+.agentPlanProgress2::after {
+  transform: scaleX(0.2);
+}
+
+.agentPlanProgress3::after {
+  transform: scaleX(0.4);
+}
+
+.agentPlanProgress4::after {
+  transform: scaleX(0.6);
+}
+
+.agentPlanProgress5::after {
+  transform: scaleX(0.8);
+}
+
+.agentPlanProgress6::after {
+  transform: scaleX(1);
 }
 
 .agentPlanStep {
   position: relative;
+  z-index: 1;
   display: grid;
   min-width: 0;
-  min-height: 42px;
+  min-height: 46px;
   place-items: center;
-  align-content: center;
-  gap: 2px;
+  align-content: start;
+  gap: 5px;
   color: oklch(0.59 0.016 255);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 650;
 }
 
-.agentPlanStep + .agentPlanStep {
-  border-left: 1px solid oklch(0.84 0.01 95);
-}
-
 .agentPlanStep small {
-  position: absolute;
-  top: 3px;
-  right: 4px;
-  color: oklch(0.65 0.012 255);
-  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
-  font-size: 7px;
-  font-variant-numeric: tabular-nums;
+  display: none;
 }
 
 .agentPlanIcon {
   display: grid;
+  width: 25px;
+  height: 25px;
   place-items: center;
+  border: 1px solid oklch(0.76 0.012 95);
+  border-radius: 50%;
+  background: oklch(0.985 0.003 95);
 }
 
 .agentPlanStepComplete {
   color: oklch(0.42 0.08 155);
-  background: oklch(0.965 0.015 155);
+  background: transparent;
+}
+
+.agentPlanStepComplete .agentPlanIcon {
+  border-color: oklch(0.56 0.08 155);
 }
 
 .agentPlanStepCurrent {
   color: oklch(0.45 0.13 28);
-  background: oklch(0.965 0.025 29);
+  background: transparent;
+}
+
+.agentPlanStepCurrent .agentPlanIcon {
+  border-color: oklch(0.58 0.18 28);
+  box-shadow: 0 0 0 4px oklch(0.58 0.18 28 / 0.1);
+}
+
+.agentPlanStepCurrent .agentPlanIcon svg {
+  animation: agentPhaseSpin 1.8s linear infinite;
 }
 
 .agentPlanStepUpcoming {
   color: oklch(0.64 0.012 255);
-  background: oklch(0.978 0.004 95);
+  background: transparent;
 }
 
 .agentEvidencePanel {
   min-height: 0;
   overflow-y: auto;
-  padding: 10px 14px 12px;
+  padding: 11px 16px 12px;
   border-bottom: 1px solid oklch(0.82 0.008 95);
-  background: oklch(0.972 0.005 95);
+  background: oklch(0.985 0.003 95);
   scrollbar-color: oklch(0.68 0.01 230) transparent;
 }
 
@@ -2622,34 +2683,39 @@
 }
 
 .agentEvidenceList {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
+  display: block;
   margin: 0;
-  background: oklch(0.86 0.01 95);
+  border-top: 1px solid oklch(0.86 0.01 95);
 }
 
 .agentEvidenceList > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(88px, auto);
   min-width: 0;
-  padding: 6px 8px;
-  background: oklch(0.987 0.003 95);
+  min-height: 40px;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border-bottom: 1px solid oklch(0.9 0.008 95);
+  background: transparent;
 }
 
 .agentEvidenceList > div:last-child:nth-child(odd) {
-  grid-column: 1 / -1;
+  grid-column: auto;
 }
 
 .agentEvidenceList dt {
   color: oklch(0.56 0.016 255);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .agentEvidenceList dd {
   min-width: 0;
-  margin: 2px 0 0;
+  margin: 0;
   overflow-wrap: anywhere;
   font-size: 11px;
   font-weight: 650;
+  text-align: right;
 }
 
 .agentEvidenceLink {
@@ -2657,7 +2723,7 @@
   width: 100%;
   min-height: 40px;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 5px;
   padding: 0;
   border: 0;
@@ -2680,17 +2746,31 @@
 .approvalPanelEmbedded {
   align-self: stretch;
   min-height: 0;
-  margin: 10px;
+  margin: 0;
   overflow-y: auto;
+  border: 0;
+  border-radius: 0;
+  background: oklch(0.995 0.002 95);
+  box-shadow: none;
   scrollbar-color: oklch(0.68 0.01 230) transparent;
+}
+
+.approvalPanelEmbedded.approvalPanelPending {
+  animation: approvalReveal 280ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.approvalPanelEmbedded.approvalPanelPending::before {
+  display: none;
 }
 
 .approvalPanelEmbedded .panelHeading {
   position: sticky;
   z-index: 3;
   top: 0;
-  min-height: 58px;
-  padding: 9px 14px;
+  min-height: 54px;
+  padding: 8px 16px;
+  border-bottom-color: oklch(0.84 0.01 95);
+  background: oklch(0.995 0.002 95);
 }
 
 .approvalPanelEmbedded .approvalIdle {
@@ -2698,8 +2778,38 @@
   padding: 30px 22px;
 }
 
+.approvalPanelEmbedded .agentSweep {
+  display: flex;
+  width: auto;
+  height: 20px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+}
+
+.approvalPanelEmbedded .agentSweep::before,
+.approvalPanelEmbedded .agentSweep::after,
+.approvalPanelEmbedded .agentSweep span {
+  position: static;
+  width: 7px;
+  height: 7px;
+  border: 0;
+  border-radius: 50%;
+  background: oklch(0.49 0.09 183);
+  transform: none;
+  animation: agentDotPulse 1.35s ease-in-out infinite;
+}
+
+.approvalPanelEmbedded .agentSweep span {
+  animation-delay: 140ms;
+}
+
+.approvalPanelEmbedded .agentSweep::after {
+  animation-delay: 280ms;
+}
+
 .approvalPanelEmbedded .approvalBody {
-  padding: 14px;
+  padding: 15px 16px 16px;
 }
 
 .approvalPanelEmbedded .approvalLead {
@@ -2721,6 +2831,12 @@
 .approvalPanelEmbedded .effectSection,
 .approvalPanelEmbedded .evidenceSection {
   padding-block: 10px;
+}
+
+.approvalPanelEmbedded .effectIcon {
+  border: 1px solid oklch(0.82 0.018 255);
+  border-radius: 50%;
+  background: transparent;
 }
 
 .approvalPanelEmbedded .approvalMeta {
@@ -2746,13 +2862,13 @@
   right: 0;
   bottom: 0;
   left: 0;
-  overflow: hidden;
+  overflow: visible;
   border-top: 1px solid oklch(0.2 0.01 255);
   background: oklch(0.985 0.003 95);
 }
 
 .auditDrawerOpen {
-  box-shadow: 0 -10px 30px oklch(0.18 0.012 255 / 0.12);
+  box-shadow: 0 -14px 34px oklch(0.18 0.012 255 / 0.1);
 }
 
 .auditDrawerToggle {
@@ -2808,10 +2924,43 @@
   gap: 9px;
 }
 
-.auditDrawerContent {
-  max-height: min(430px, calc(100vh - 240px));
-  overflow-y: auto;
+.auditDrawerChevron {
+  transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.auditDrawerChevronOpen {
+  transform: rotate(180deg);
+}
+
+.auditDrawerViewport {
+  position: absolute;
+  right: 0;
+  bottom: 52px;
+  left: 0;
+  height: min(430px, calc(100vh - 240px));
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(12px);
+  transition:
+    transform 260ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    visibility 0s linear 260ms;
+  visibility: hidden;
+}
+
+.auditDrawerOpen .auditDrawerViewport {
   border-top: 1px solid oklch(0.82 0.008 95);
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  transition-delay: 0s;
+  visibility: visible;
+}
+
+.auditDrawerContent {
+  height: 100%;
+  overflow-y: auto;
   background: oklch(0.982 0.004 95);
   overscroll-behavior: contain;
   scrollbar-color: oklch(0.68 0.01 230) transparent;
@@ -2832,6 +2981,61 @@
 
 .timelinePanelInDrawer .timelineFlow {
   border-top: 0;
+}
+
+@keyframes agentTaskChange {
+  from {
+    transform: translateY(5px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes approvalReveal {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes agentPhaseSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes agentDotPulse {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+
+  50% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+
+@keyframes auditMobileReveal {
+  from {
+    transform: translateY(-6px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 @media (min-width: 1560px) and (min-height: 800px) {
@@ -2889,7 +3093,7 @@
     grid-column: auto;
     align-self: stretch;
     min-height: 0;
-    margin: 8px;
+    margin: 0;
   }
 
   .approvalPanelEmbedded .approvalBody {
@@ -2997,17 +3201,35 @@
   }
 
   .approvalPanelEmbedded {
-    margin: 12px;
+    margin: 0;
   }
 
   .auditDrawer {
     position: static;
     grid-column: 1;
+    overflow: hidden;
   }
 
   .auditDrawerContent {
-    max-height: none;
+    height: auto;
     overflow: visible;
+  }
+
+  .auditDrawerViewport {
+    position: static;
+    display: none;
+    height: auto;
+    max-height: none;
+    transform: none;
+    transition: none;
+    opacity: 1;
+    pointer-events: auto;
+    visibility: visible;
+  }
+
+  .auditDrawerOpen .auditDrawerViewport {
+    display: block;
+    animation: auditMobileReveal 220ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .auditDrawerContent .playbackBand {
@@ -3064,7 +3286,7 @@
   }
 
   .agentPlan {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 
   .agentPlanStep:nth-child(4) {
@@ -3072,7 +3294,7 @@
   }
 
   .agentPlanStep:nth-child(n + 4) {
-    border-top: 1px solid oklch(0.84 0.01 95);
+    border-top: 0;
   }
 
   .agentEvidencePanel {
@@ -3080,11 +3302,11 @@
   }
 
   .agentEvidenceList {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: block;
   }
 
   .approvalPanelEmbedded {
-    margin: 10px;
+    margin: 0;
   }
 
   .approvalPanelEmbedded .approvalLead h2 {
