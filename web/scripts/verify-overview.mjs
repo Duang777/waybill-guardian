@@ -1039,7 +1039,7 @@ async function verifyWebGLFallback(webURL) {
     const firstVehicle = facilityMap
       .locator('[data-facility-object^="vehicle:"]')
       .first();
-    await firstVehicle.click();
+    await firstVehicle.press("Enter");
     await page.waitForFunction(() => {
       const stage = document.querySelector('[data-network-renderer="svg"]');
       return (

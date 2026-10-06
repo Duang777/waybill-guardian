@@ -28,6 +28,7 @@ import {
   RunStageBar,
 } from "./components/IncidentDossier";
 import { ApprovalPanel } from "./components/ApprovalPanel";
+import { TextureButton, TextureLink } from "./components/cult";
 import { SummaryStrip } from "./components/SummaryStrip";
 import { AuditDrawer } from "./components/TimelinePanel";
 import {
@@ -532,14 +533,16 @@ function WaybillWorkbench({
       <div className={styles.appShell}>
         <header className={styles.topbar}>
           <div className={styles.brand}>
-            <a
+            <TextureLink
               className={styles.backButton}
               href="/"
+              variant="icon"
+              size="icon"
               aria-label="返回全国经营总览"
               title="返回总览"
             >
               <ArrowLeft aria-hidden="true" size={17} />
-            </a>
+            </TextureLink>
             <span className={styles.brandMark} aria-hidden="true">
               WG
             </span>
@@ -577,9 +580,10 @@ function WaybillWorkbench({
               {run === null ? "NOT STARTED" : compactID(run.run_id)}
             </span>
           </div>
-          <button
+          <TextureButton
             className={styles.triggerButton}
             type="button"
+            variant="primary"
             disabled={
               pendingAction !== null ||
               recoveryError !== null ||
@@ -599,7 +603,7 @@ function WaybillWorkbench({
               : run === null
                 ? "启动处置"
                 : "重新处置"}
-          </button>
+          </TextureButton>
         </header>
 
         <main id="main-content" className={styles.main}>
@@ -615,25 +619,27 @@ function WaybillWorkbench({
               <span>{displayedError}</span>
               <div className={styles.errorActions}>
                 {resourceError !== null && message === null && (
-                  <button
-                    className={styles.retryButton}
+                  <TextureButton
                     type="button"
+                    variant="secondary"
+                    size="sm"
                     onClick={() => void retryResource()}
                   >
                     <RotateCw aria-hidden="true" size={15} />
                     重试
-                  </button>
+                  </TextureButton>
                 )}
                 {message !== null && (
-                  <button
-                    className={styles.dismissButton}
+                  <TextureButton
                     type="button"
+                    variant="icon"
+                    size="icon"
                     aria-label="关闭错误提示"
                     title="关闭"
                     onClick={() => setMessage(null)}
                   >
                     <X aria-hidden="true" size={16} />
-                  </button>
+                  </TextureButton>
                 )}
               </div>
             </div>

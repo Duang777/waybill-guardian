@@ -14,6 +14,7 @@ import {
   type TimelinePhase,
   type TimelineState,
 } from "../timeline";
+import { HaloBadge, RollingNumber } from "./cult";
 
 type RunStageBarProps = {
   timeline: TimelineState;
@@ -42,10 +43,13 @@ export function RunStageBar({
           <span className={styles.eyebrow}>
             {replaying ? "Run stage / replay" : "Run stage / live"}
           </span>
-          <span className={styles.agentConnection}>
+          <HaloBadge
+            tone={replaying ? "neutral" : connected ? "success" : "warning"}
+            live={!replaying && connected}
+          >
             <Radio aria-hidden="true" size={12} />
             {connectionLabel({ connected, runID, runStatus, replaying })}
-          </span>
+          </HaloBadge>
         </div>
         <div
           className={styles.agentTaskLead}
@@ -115,7 +119,13 @@ export function EvidenceLedger({
           <h2 id="evidence-ledger-title">证据账本</h2>
         </div>
         <span className={styles.evidenceCount}>
-          <strong>{groups.length.toString().padStart(2, "0")}</strong>
+          <strong>
+            <RollingNumber
+              value={groups.length}
+              format={twoDigits}
+              label={`${groups.length} 条证据结论`}
+            />
+          </strong>
           <small>条结论 · {evidence.length.toString().padStart(2, "0")} 条引用</small>
         </span>
       </div>
@@ -135,9 +145,9 @@ export function EvidenceLedger({
                   {(index + 1).toString().padStart(2, "0")}
                 </span>
                 <h3>{evidenceGroupTitle(group)}</h3>
-                <span className={styles.evidenceSource}>
+                <HaloBadge tone="neutral" tabularNums>
                   {groupSourceLabel(group)}
-                </span>
+                </HaloBadge>
               </div>
               <ul className={styles.evidenceFactList}>
                 {group.items.map((item) => (
@@ -173,6 +183,10 @@ export function EvidenceLedger({
       )}
     </aside>
   );
+}
+
+function twoDigits(value: number): string {
+  return value.toString().padStart(2, "0");
 }
 
 type EvidenceItem = Approval["evidence"][number];
