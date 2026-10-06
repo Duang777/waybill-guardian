@@ -368,15 +368,54 @@ func buildRouteCoordinates(
 	directDistance := math.Hypot(scaledLongitudeDelta, latitudeDelta)
 	normalLongitude := -latitudeDelta / directDistance
 	normalLatitude := scaledLongitudeDelta / directDistance
-	direction := 1.0
-	if routeIndex%2 != 0 {
-		direction = -1
-	}
 	amplitude := math.Min(
 		1.2,
 		directDistance*(0.065+float64(routeIndex%5)*0.006),
 	)
 
+	preferredDirection := 1.0
+	if routeIndex%2 != 0 {
+		preferredDirection = -1
+	}
+	preferred := buildRouteCandidate(
+		origin,
+		destination,
+		longitudeScale,
+		scaledLongitudeDelta,
+		latitudeDelta,
+		normalLongitude,
+		normalLatitude,
+		amplitude,
+		preferredDirection,
+	)
+	alternate := buildRouteCandidate(
+		origin,
+		destination,
+		longitudeScale,
+		scaledLongitudeDelta,
+		latitudeDelta,
+		normalLongitude,
+		normalLatitude,
+		amplitude,
+		-preferredDirection,
+	)
+	if routeCandidateScore(alternate) < routeCandidateScore(preferred) {
+		return alternate
+	}
+	return preferred
+}
+
+func buildRouteCandidate(
+	origin hubRecord,
+	destination hubRecord,
+	longitudeScale float64,
+	scaledLongitudeDelta float64,
+	latitudeDelta float64,
+	normalLongitude float64,
+	normalLatitude float64,
+	amplitude float64,
+	direction float64,
+) []routeCoordinate {
 	coordinates := make([]routeCoordinate, 0, trackingPointCount)
 	for index := range trackingPointCount {
 		if index == 0 {
@@ -410,6 +449,24 @@ func buildRouteCoordinates(
 		})
 	}
 	return coordinates
+}
+
+func routeCandidateScore(coordinates []routeCoordinate) float64 {
+	score := 0.0
+	for _, coordinate := range coordinates[1 : len(coordinates)-1] {
+		nearestHubDistance := math.Inf(1)
+		for _, hub := range hubSeeds {
+			distance := haversineKM(
+				coordinate.Longitude,
+				coordinate.Latitude,
+				hub.Longitude,
+				hub.Latitude,
+			)
+			nearestHubDistance = math.Min(nearestHubDistance, distance)
+		}
+		score += nearestHubDistance
+	}
+	return score
 }
 
 func trackingPointLabel(

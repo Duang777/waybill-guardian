@@ -136,6 +136,33 @@ func TestGenerateBuildsDetailedNonLinearTrackingRoutes(t *testing.T) {
 	}
 }
 
+func TestBuildRouteCoordinatesFollowsPopulatedInlandCorridor(t *testing.T) {
+	origin := hubRecord{
+		Name:      "沈阳公路港",
+		City:      "沈阳",
+		Longitude: 123.4315,
+		Latitude:  41.8057,
+	}
+	destination := hubRecord{
+		Name:      "南昌公路港",
+		City:      "南昌",
+		Longitude: 115.8582,
+		Latitude:  28.6829,
+	}
+
+	coordinates := buildRouteCoordinates(origin, destination, 6)
+	midpoint := coordinates[len(coordinates)/2]
+	directMidpointLongitude := (origin.Longitude + destination.Longitude) / 2
+
+	if midpoint.Longitude >= directMidpointLongitude {
+		t.Fatalf(
+			"route midpoint longitude = %f, want west of direct midpoint %f",
+			midpoint.Longitude,
+			directMidpointLongitude,
+		)
+	}
+}
+
 func trackingIsLinear(points []trackingRecord) bool {
 	start := points[0]
 	end := points[len(points)-1]

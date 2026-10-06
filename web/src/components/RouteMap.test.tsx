@@ -1,7 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { TrackPoint } from "../api";
-import { buildSmoothRoutePath, RouteMap } from "./RouteMap";
+import {
+  buildRouteLineFeature,
+  buildRoutePointCollection,
+  buildSmoothRoutePath,
+  RouteMap,
+} from "./RouteMap";
 
 vi.mock("../amap", () => ({
   hasAMapKey: () => false,
@@ -68,8 +73,33 @@ describe("RouteMap", () => {
     expect(markup).not.toContain("<polyline");
     expect(markup).toContain("N 35.2000°");
     expect(markup).toContain("E 119.3000°");
+    expect(markup).toContain("正在加载矢量路网");
     expect(markup).not.toContain("N 31.23°");
     expect(markup).not.toContain("E 121.47°");
+  });
+});
+
+describe("vector route data", () => {
+  it("preserves longitude-latitude order in the route line", () => {
+    const feature = buildRouteLineFeature(points);
+
+    expect(feature.geometry.coordinates).toEqual(
+      points.map((point) => [point.longitude, point.latitude]),
+    );
+  });
+
+  it("marks one selected point without losing anomaly metadata", () => {
+    const collection = buildRoutePointCollection(points, 1);
+
+    expect(
+      collection.features.filter((feature) => feature.properties.selected),
+    ).toHaveLength(1);
+    expect(collection.features[1]?.properties).toEqual({
+      index: 1,
+      anomaly: false,
+      selected: true,
+    });
+    expect(collection.features[2]?.properties.anomaly).toBe(true);
   });
 });
 

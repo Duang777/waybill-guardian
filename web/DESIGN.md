@@ -8,6 +8,12 @@ desaturated teal infrastructure, and vermilion risk markers. Surrounding control
 and flush so the network remains the visual center. Green appears only after a write
 operation completes.
 
+The waybill workbench uses a quieter editorial treatment: paper-white canvas, black rules,
+a large serif route title, and a full-width geographic evidence stage. Its reading order is
+route status, map evidence, audit history, then the human decision boundary. Vermilion marks
+only the unresolved incident. The point inspector is the single dark caption rail so that
+the selected evidence remains visually anchored to the map.
+
 BoardUI's public dashboard patterns informed the initial hierarchy study. The final
 implementation uses original CSS Modules code, square industrial geometry, divider-led
 structure, and no copied BoardUI source or components.
@@ -32,27 +38,33 @@ structure, and no copied BoardUI source or components.
 
 Use `"Avenir Next", "PingFang SC", "Noto Sans SC", sans-serif` for interface text and
 `"SFMono-Regular", "JetBrains Mono", monospace` for identifiers and event metadata.
-Headings use 20 to 28 px at weight 600. Body text uses 13 to 15 px with 1.7 line-height for
-Chinese. Numeric values use tabular figures. Letter spacing remains zero.
+The waybill route and approval titles use `"Songti SC", "STSong", "Noto Serif CJK SC",
+serif` at 64 px and 32 px on desktop. Operational headings use 20 to 28 px at weight 600.
+Body text uses 13 to 15 px with 1.7 line-height for Chinese. Numeric values use tabular
+figures. Letter spacing remains zero. Font sizes are fixed per breakpoint and never scale
+with viewport width.
 
 ## 4. Component styling
 
-- Buttons use a 4 px radius, a 40 px minimum hit area, and `scale(0.96)` press feedback.
+- Buttons use square geometry, a 40 px minimum hit area, and `scale(0.96)` press feedback.
 - The 3D map and risk queue form one flush workspace separated by a 1 px divider.
 - Queue views use plain text tabs with a 2 px active underline.
 - Other operational sections remain flush and use 1 px dividers.
-- The approval object is the only elevated card because it is the human decision boundary.
+- The waybill approval boundary is a rule-separated column, not an elevated card.
 - Inputs and range controls use the signal color for active state and a visible focus ring.
 - Icon-only buttons use Lucide icons, tooltips, and accessible labels.
-- The local route fallback uses a pale coordinate field, a restrained route corridor, and a
-  separate evidence rail. Evidence must never obscure the route.
+- The waybill route uses MapLibre with an OpenFreeMap light vector style when no AMap key is
+  configured. The local SVG fallback uses a pale coordinate field and the same separate
+  evidence rail. Evidence must never obscure the route.
 
 ## 5. Layout principles
 
 Use a 4 px base spacing scale. The CEO overview uses a compact white header, a four-segment
 KPI strip, a dominant nationwide 3D network, a narrow risk queue, and a read-only brief. The
-waybill workbench uses one status strip and a two-column workspace. Its left column holds the
-map and timeline, and its right column holds the decision boundary.
+waybill workbench starts with an editorial masthead: the route occupies the dominant left
+field, while shipment facts and risk bars form a narrow right index. Below it, a two-column
+workspace keeps the geographic map and audit timeline on the left and the decision boundary
+on the right. The map and its dark point-inspector rail are one 500 px evidence stage.
 
 On the CEO overview, KPI segments form one flush band with dividers. They are not separate
 cards. The network and queue share one flush work surface instead of nested cards. The
@@ -75,13 +87,14 @@ split-yard, and gateway. Capacity, route distance, location, throughput, in-flig
 risk determine the campus proportions, warehouse arrangement, docks, storage slots, entrance,
 and alert tower. The same hub must keep a stable geometry signature, while different hubs must
 not share one.
-Do not use a dark skybox, bloom, glass panels, map tiles, or decorative gradients.
+Do not use a dark skybox, bloom, glass panels, or decorative gradients. Geographic map tiles
+are reserved for the waybill evidence view; the CEO network remains an abstract 3D field.
 
 ## 6. Depth and elevation
 
-Canvas, flush work surface, and raised approval layers differ by lightness. Operational
-surfaces use dividers without decorative shadows. The approval card uses
-`0 12px 32px oklch(0.22 0.02 255 / 0.10)`. No blur or glass effect is used.
+Canvas and flush work surfaces differ by lightness. Operational surfaces and the approval
+boundary use dividers without decorative shadows. The dark point inspector uses contrast
+instead of elevation. No blur or glass effect is used.
 
 ## 7. Do and don't
 
@@ -96,6 +109,7 @@ surfaces use dividers without decorative shadows. The approval card uses
 - Don't turn the KPI strip or intelligence brief into rounded dashboard cards.
 - Don't use a marketing hero or decorative illustration.
 - Don't use a dark header or orange/brown page palette on the overview.
+- Don't reduce the waybill route masthead to a generic dashboard status card.
 - Use the KPI band only on the CEO overview. Do not add a generic KPI tile grid to the
   waybill workbench.
 - Don't animate layout properties.
@@ -104,7 +118,9 @@ surfaces use dividers without decorative shadows. The approval card uses
 
 At 1000 px the CEO map and risk queue become one column. At 720 px its KPI band becomes two
 columns. At 960 px the waybill workspace becomes one column and keeps route evidence before
-the approval panel.
+the approval panel. Between 640 px and 960 px, the approval heading becomes a dark side rail.
+At 640 px the approval returns to one column, the route title becomes 36 px, and the map keeps
+a stable 300 px viewport above its inspector.
 The facility inspection view keeps the selected campus centered and places its detail summary
 above the bottom legend so neither layer obscures the model.
 At 640 px the workbench header wraps, route metadata becomes a two-column grid, and playback

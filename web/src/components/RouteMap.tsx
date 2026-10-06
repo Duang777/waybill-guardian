@@ -1,9 +1,28 @@
 import { Compass, MapPin } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type {
+  Feature,
+  FeatureCollection,
+  LineString,
+  Point,
+} from "geojson";
+import type {
+  ErrorEvent as MapLibreErrorEvent,
+  Map as MapLibreMap,
+  MapLayerMouseEvent,
+} from "maplibre-gl";
 import { hasAMapKey, loadAMap } from "../amap";
 import type { TrackPoint } from "../api";
 import styles from "../app.module.css";
 import type { WaybillResource } from "../waybill-resource";
+
+const vectorMapStyleURL = "https://tiles.openfreemap.org/styles/positron";
+const vectorMapTimeoutMS = 10_000;
+const routeSourceID = "waybill-route";
+const completedRouteSourceID = "waybill-route-completed";
+const remainingRouteSourceID = "waybill-route-remaining";
+const routePointSourceID = "waybill-route-points";
+const routePointLayerID = "waybill-route-points-layer";
 
 type RouteMapProps = {
   points: readonly TrackPoint[];
@@ -12,10 +31,24 @@ type RouteMapProps = {
   resourceKind: WaybillResource["kind"];
 };
 
+type MapProvider = "amap" | "vector";
+
 type MapMode =
-  | { kind: "loading" }
+  | { kind: "loading"; provider: MapProvider }
   | { kind: "amap" }
-  | { kind: "fallback"; reason: string };
+  | { kind: "vector" }
+  | { kind: "fallback"; provider: MapProvider; reason: string };
+
+type MapController =
+  | {
+      kind: "amap";
+      destroy: () => void;
+    }
+  | {
+      kind: "vector";
+      destroy: () => void;
+      select: (index: number) => void;
+    };
 
 type ProjectedPoint = TrackPoint & {
   x: number;
@@ -41,6 +74,7 @@ export function RouteMap({
   resourceKind,
 }: RouteMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
+  const mapController = useRef<MapController | null>(null);
   const preferredIndex = preferredPointIndex(points);
   const [selection, setSelection] = useState<PointSelection>(() => ({
     points,
@@ -52,73 +86,73 @@ export function RouteMap({
       : preferredIndex;
   const [mode, setMode] = useState<MapMode>(
     hasAMapKey()
-      ? { kind: "loading" }
-      : { kind: "fallback", reason: "未配置高德 key，已切换本地轨迹视图" },
+      ? { kind: "loading", provider: "amap" }
+      : { kind: "loading", provider: "vector" },
   );
   const selected = points[selectedIndex] ?? null;
   const projected = useMemo(() => projectPoints(points), [points]);
 
   useEffect(() => {
-    if (!hasAMapKey() || mapElement.current === null || points.length === 0) {
+    const element = mapElement.current;
+    if (element === null || points.length === 0) {
       return;
     }
+    const provider: MapProvider = hasAMapKey() ? "amap" : "vector";
     let disposed = false;
-    let map: AMap.Map | null = null;
-    setMode({ kind: "loading" });
-    void loadAMap()
-      .then(() => {
-        if (disposed || mapElement.current === null) {
+    let controller: MapController | null = null;
+    mapController.current = null;
+    setMode({ kind: "loading", provider });
+
+    const initialize =
+      provider === "amap"
+        ? initializeAMap({
+            element,
+            points,
+            onSelect: (index) => setSelection({ points, index }),
+          })
+        : initializeVectorMap({
+            element,
+            points,
+            selectedIndex,
+            onSelect: (index) => setSelection({ points, index }),
+          });
+    void initialize
+      .then((nextController) => {
+        if (disposed) {
+          nextController.destroy();
           return;
         }
-        map = new AMap.Map(mapElement.current, {
-          viewMode: "2D",
-          zoom: 5,
-          center: [points[0].longitude, points[0].latitude],
-          mapStyle: "amap://styles/whitesmoke",
-        });
-        const path = points.map(coordinate);
-        const route = new AMap.Polyline({
-          path,
-          strokeColor: "#31383d",
-          strokeWeight: 5,
-          strokeOpacity: 0.88,
-          lineJoin: "round",
-          lineCap: "round",
-          showDir: true,
-        });
-        const markers = points.map((point, index) => {
-          const marker = new AMap.CircleMarker({
-            center: [point.longitude, point.latitude],
-            radius: point.anomaly ? 10 : 6,
-            strokeColor: point.anomaly ? "#ae6814" : "#ffffff",
-            strokeWeight: point.anomaly ? 4 : 2,
-            fillColor: point.anomaly ? "#dc8b24" : "#31383d",
-            fillOpacity: 1,
-            zIndex: point.anomaly ? 30 : 20,
-          });
-          marker.on("click", () => setSelection({ points, index }));
-          return marker;
-        });
-        map.add([route, ...markers]);
-        map.setFitView([route, ...markers], false, [56, 56, 56, 56], 12);
-        setMode({ kind: "amap" });
+        controller = nextController;
+        mapController.current = nextController;
+        setMode({ kind: nextController.kind });
       })
       .catch((error: unknown) => {
         if (!disposed) {
           setMode({
             kind: "fallback",
+            provider,
             reason:
               error instanceof Error
-                ? `高德地图加载失败：${error.message}`
-                : "高德地图加载失败，已切换本地轨迹视图",
+                ? `${mapProviderLabel(provider)}加载失败：${error.message}`
+                : `${mapProviderLabel(provider)}加载失败，已切换本地轨迹视图`,
           });
         }
       });
     return () => {
       disposed = true;
-      map?.destroy();
+      controller?.destroy();
+      if (mapController.current === controller) {
+        mapController.current = null;
+      }
     };
   }, [points]);
+
+  useEffect(() => {
+    const controller = mapController.current;
+    if (controller?.kind === "vector") {
+      controller.select(selectedIndex);
+    }
+  }, [mode.kind, selectedIndex]);
 
   if (points.length === 0) {
     return (
@@ -129,15 +163,17 @@ export function RouteMap({
     );
   }
 
+  const interactiveMapVisible = mode.kind === "amap" || mode.kind === "vector";
+
   return (
     <div className={styles.mapStage}>
       <div className={styles.mapViewport}>
         <div
           ref={mapElement}
-          className={`${styles.amapCanvas} ${mode.kind === "amap" ? styles.mapVisible : ""}`}
-          aria-hidden={mode.kind !== "amap"}
+          className={`${styles.mapCanvas} ${interactiveMapVisible ? styles.mapVisible : ""}`}
+          aria-hidden={!interactiveMapVisible}
         />
-        {mode.kind !== "amap" && (
+        {!interactiveMapVisible && (
           <FallbackMap
             points={projected}
             origin={origin}
@@ -147,12 +183,18 @@ export function RouteMap({
           />
         )}
         {mode.kind === "loading" && (
-          <div className={styles.mapLoading}>正在连接高德地图</div>
+          <div className={styles.mapLoading}>{mapLoadingLabel(mode.provider)}</div>
+        )}
+        {mode.kind === "vector" && (
+          <div className={styles.mapNotice}>
+            <Compass aria-hidden="true" size={14} />
+            <span>矢量路网</span>
+          </div>
         )}
         {mode.kind === "fallback" && (
           <div className={styles.mapNotice} title={mode.reason}>
             <Compass aria-hidden="true" size={14} />
-            <span>本地轨迹视图</span>
+            <span>本地测绘模式</span>
           </div>
         )}
         {selected !== null && (
@@ -205,6 +247,350 @@ export function RouteMap({
       )}
     </div>
   );
+}
+
+type InitializeMapOptions = {
+  element: HTMLDivElement;
+  points: readonly TrackPoint[];
+  onSelect: (index: number) => void;
+};
+
+type InitializeVectorMapOptions = InitializeMapOptions & {
+  selectedIndex: number;
+};
+
+type RoutePointProperties = {
+  index: number;
+  anomaly: boolean;
+  selected: boolean;
+};
+
+async function initializeAMap({
+  element,
+  points,
+  onSelect,
+}: InitializeMapOptions): Promise<MapController> {
+  const firstPoint = points[0];
+  if (firstPoint === undefined) {
+    throw new Error("轨迹点为空");
+  }
+  await loadAMap();
+  const map = new AMap.Map(element, {
+    viewMode: "2D",
+    zoom: 5,
+    center: coordinate(firstPoint),
+    mapStyle: "amap://styles/whitesmoke",
+  });
+  const route = new AMap.Polyline({
+    path: points.map(coordinate),
+    strokeColor: "#31383d",
+    strokeWeight: 5,
+    strokeOpacity: 0.88,
+    lineJoin: "round",
+    lineCap: "round",
+    showDir: true,
+  });
+  const markers = points.map((point, index) => {
+    const marker = new AMap.CircleMarker({
+      center: coordinate(point),
+      radius: point.anomaly ? 10 : 6,
+      strokeColor: point.anomaly ? "#ae6814" : "#ffffff",
+      strokeWeight: point.anomaly ? 4 : 2,
+      fillColor: point.anomaly ? "#dc8b24" : "#31383d",
+      fillOpacity: 1,
+      zIndex: point.anomaly ? 30 : 20,
+    });
+    marker.on("click", () => onSelect(index));
+    return marker;
+  });
+  map.add([route, ...markers]);
+  map.setFitView([route, ...markers], false, [56, 56, 56, 56], 12);
+  return {
+    kind: "amap",
+    destroy: () => map.destroy(),
+  };
+}
+
+async function initializeVectorMap({
+  element,
+  points,
+  selectedIndex,
+  onSelect,
+}: InitializeVectorMapOptions): Promise<MapController> {
+  const firstPoint = points[0];
+  if (firstPoint === undefined) {
+    throw new Error("轨迹点为空");
+  }
+  const maplibre = await import("maplibre-gl");
+  const map = new maplibre.Map({
+    container: element,
+    style: vectorMapStyleURL,
+    center: coordinate(firstPoint),
+    zoom: 4,
+    attributionControl: false,
+    dragRotate: false,
+    maplibreLogo: false,
+    pitchWithRotate: false,
+  });
+
+  try {
+    map.addControl(
+      new maplibre.AttributionControl({
+        compact: element.clientWidth < 520,
+        customAttribution:
+          '<a href="https://openfreemap.org/" target="_blank" rel="noopener">OpenFreeMap</a> · ' +
+          '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap</a>',
+      }),
+      "bottom-left",
+    );
+    map.addControl(
+      new maplibre.NavigationControl({
+        showCompass: false,
+        showZoom: true,
+      }),
+      "top-right",
+    );
+    await waitForMapEvent(map, "load");
+
+    map.addSource(routeSourceID, {
+      type: "geojson",
+      data: buildRouteLineFeature(points),
+    });
+    map.addLayer({
+      id: "waybill-route-casing",
+      type: "line",
+      source: routeSourceID,
+      layout: {
+        "line-cap": "round",
+        "line-join": "round",
+      },
+      paint: {
+        "line-color": "#d2d9d6",
+        "line-opacity": 0.92,
+        "line-width": 9,
+      },
+    });
+    map.addLayer({
+      id: "waybill-route-base",
+      type: "line",
+      source: routeSourceID,
+      layout: {
+        "line-cap": "round",
+        "line-join": "round",
+      },
+      paint: {
+        "line-color": "#66757a",
+        "line-opacity": 0.9,
+        "line-width": 3,
+      },
+    });
+
+    const progressIndex = routeProgressIndex(points);
+    const completedPoints = points.slice(0, progressIndex + 1);
+    if (completedPoints.length >= 2) {
+      map.addSource(completedRouteSourceID, {
+        type: "geojson",
+        data: buildRouteLineFeature(completedPoints),
+      });
+      map.addLayer({
+        id: "waybill-route-completed",
+        type: "line",
+        source: completedRouteSourceID,
+        layout: {
+          "line-cap": "round",
+          "line-join": "round",
+        },
+        paint: {
+          "line-color": "#147c76",
+          "line-opacity": 1,
+          "line-width": 4,
+        },
+      });
+    }
+    const remainingPoints = points.slice(progressIndex);
+    if (remainingPoints.length >= 2) {
+      map.addSource(remainingRouteSourceID, {
+        type: "geojson",
+        data: buildRouteLineFeature(remainingPoints),
+      });
+      map.addLayer({
+        id: "waybill-route-remaining",
+        type: "line",
+        source: remainingRouteSourceID,
+        layout: {
+          "line-cap": "round",
+          "line-join": "round",
+        },
+        paint: {
+          "line-color": "#69777a",
+          "line-dasharray": [1.5, 2],
+          "line-opacity": 0.9,
+          "line-width": 3,
+        },
+      });
+    }
+
+    map.addSource(routePointSourceID, {
+      type: "geojson",
+      data: buildRoutePointCollection(points, selectedIndex),
+    });
+    map.addLayer({
+      id: "waybill-route-selected-point",
+      type: "circle",
+      source: routePointSourceID,
+      filter: ["==", ["get", "selected"], true],
+      paint: {
+        "circle-color": [
+          "case",
+          ["get", "anomaly"],
+          "#bd4634",
+          "#147c76",
+        ],
+        "circle-opacity": 0.16,
+        "circle-radius": 15,
+      },
+    });
+    map.addLayer({
+      id: routePointLayerID,
+      type: "circle",
+      source: routePointSourceID,
+      paint: {
+        "circle-color": [
+          "case",
+          ["get", "anomaly"],
+          "#bd4634",
+          "#28373d",
+        ],
+        "circle-radius": ["case", ["get", "anomaly"], 8, 5],
+        "circle-stroke-color": "#ffffff",
+        "circle-stroke-width": ["case", ["get", "anomaly"], 3, 2],
+      },
+    });
+
+    const pointSource = map.getSource(routePointSourceID);
+    if (!(pointSource instanceof maplibre.GeoJSONSource)) {
+      throw new Error("轨迹点图层初始化失败");
+    }
+    const handlePointClick = (event: MapLayerMouseEvent) => {
+      const index = event.features?.[0]?.properties?.index;
+      if (
+        typeof index === "number" &&
+        Number.isInteger(index) &&
+        index >= 0 &&
+        index < points.length
+      ) {
+        onSelect(index);
+      }
+    };
+    map.on("click", routePointLayerID, handlePointClick);
+    map.on("mouseenter", routePointLayerID, () => {
+      map.getCanvas().style.cursor = "pointer";
+    });
+    map.on("mouseleave", routePointLayerID, () => {
+      map.getCanvas().style.cursor = "";
+    });
+
+    const bounds = new maplibre.LngLatBounds(
+      coordinate(firstPoint),
+      coordinate(firstPoint),
+    );
+    for (const point of points.slice(1)) {
+      bounds.extend(coordinate(point));
+    }
+    const compact = element.clientWidth < 520;
+    map.fitBounds(bounds, {
+      padding: compact
+        ? { top: 52, right: 28, bottom: 38, left: 28 }
+        : { top: 48, right: 54, bottom: 42, left: 54 },
+      maxZoom: 7.2,
+      duration: 0,
+    });
+
+    return {
+      kind: "vector",
+      select: (index) => {
+        void pointSource.setData(buildRoutePointCollection(points, index));
+      },
+      destroy: () => map.remove(),
+    };
+  } catch (error) {
+    map.remove();
+    throw error;
+  }
+}
+
+function waitForMapEvent(
+  map: MapLibreMap,
+  eventName: "load",
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("连接底图服务超时"));
+    }, vectorMapTimeoutMS);
+    const handleReady = () => {
+      cleanup();
+      resolve();
+    };
+    const handleError = (event: MapLibreErrorEvent) => {
+      cleanup();
+      reject(new Error(event.error.message));
+    };
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      map.off(eventName, handleReady);
+      map.off("error", handleError);
+    };
+    map.on(eventName, handleReady);
+    map.on("error", handleError);
+  });
+}
+
+export function buildRouteLineFeature(
+  points: readonly TrackPoint[],
+): Feature<LineString> {
+  return {
+    type: "Feature",
+    properties: {},
+    geometry: {
+      type: "LineString",
+      coordinates: points.map(coordinate),
+    },
+  };
+}
+
+export function buildRoutePointCollection(
+  points: readonly TrackPoint[],
+  selectedIndex: number,
+): FeatureCollection<Point, RoutePointProperties> {
+  return {
+    type: "FeatureCollection",
+    features: points.map((point, index) => ({
+      type: "Feature",
+      properties: {
+        index,
+        anomaly: point.anomaly,
+        selected: index === selectedIndex,
+      },
+      geometry: {
+        type: "Point",
+        coordinates: coordinate(point),
+      },
+    })),
+  };
+}
+
+function routeProgressIndex(points: readonly TrackPoint[]): number {
+  const anomaly = points.findIndex((point) => point.anomaly);
+  return anomaly >= 0 ? anomaly : Math.max(0, points.length - 1);
+}
+
+function mapProviderLabel(provider: MapProvider): string {
+  return provider === "amap" ? "高德地图" : "矢量路网";
+}
+
+function mapLoadingLabel(provider: MapProvider): string {
+  return provider === "amap" ? "正在连接高德地图" : "正在加载矢量路网";
 }
 
 function emptyMapLabel(kind: WaybillResource["kind"]): string {
