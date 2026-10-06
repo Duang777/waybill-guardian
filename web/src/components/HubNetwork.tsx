@@ -39,6 +39,12 @@ import {
   type FacilityTransportRouteKind,
   type FacilityVehicleState,
 } from "./facilityLayout";
+import {
+  HaloBadge,
+  HaloSegmented,
+  RollingNumber,
+  TextureButton,
+} from "./cult";
 
 const HubNetworkScene = lazy(() => import("./HubNetworkScene"));
 
@@ -283,34 +289,44 @@ export function HubNetwork({
           </div>
           <div className={styles.sceneHudBadges}>
             {selectedHub !== undefined && (
-              <span
+              <HaloBadge
                 className={styles.sceneSelectedPill}
+                tone="info"
+                tabularNums
                 data-scene-selection-pill
               >
                 {selectedAnomaly?.waybill_id ?? selectedHub.hub_id}
-              </span>
+              </HaloBadge>
             )}
-            <span className={styles.sceneDataBadge}>
+            <HaloBadge tone="neutral">
               {dataModeLabel(dataMode)}
-            </span>
+            </HaloBadge>
           </div>
         </div>
         <dl className={styles.sceneMetrics} aria-label="网络运行摘要">
           <div>
             <dt>公路港</dt>
-            <dd>{hubs.length}</dd>
+            <dd>
+              <RollingNumber value={hubs.length} label={`${hubs.length} 个公路港`} />
+            </dd>
           </div>
           <div>
             <dt>在途</dt>
-            <dd>{totals.in_flight}</dd>
+            <dd>
+              <RollingNumber value={totals.in_flight} label={`在途 ${totals.in_flight}`} />
+            </dd>
           </div>
           <div className={styles.sceneMetricSignal}>
             <dt>异常</dt>
-            <dd>{totals.anomalies}</dd>
+            <dd>
+              <RollingNumber value={totals.anomalies} label={`异常 ${totals.anomalies}`} />
+            </dd>
           </div>
           <div>
             <dt>处置中</dt>
-            <dd>{totals.handling}</dd>
+            <dd>
+              <RollingNumber value={totals.handling} label={`处置中 ${totals.handling}`} />
+            </dd>
           </div>
         </dl>
       </div>
@@ -360,45 +376,44 @@ export function HubNetwork({
 
       <div className={styles.sceneControls} data-scene-controls>
         {selectedHub !== undefined && (
-          <div
+          <HaloSegmented
             className={styles.sceneCameraPresets}
-            role="group"
-            aria-label="镜头预设"
-          >
-            <button
-              type="button"
-              className={
-                cameraPreset === "overview" ? styles.scenePresetActive : ""
-              }
-              aria-pressed={cameraPreset === "overview"}
-              onClick={() => selectCameraPreset("overview")}
-            >
-              <MapIcon aria-hidden="true" size={14} />
-              <span>总览</span>
-            </button>
-            <button
-              type="button"
-              className={
-                cameraPreset === "follow" ? styles.scenePresetActive : ""
-              }
-              aria-pressed={cameraPreset === "follow"}
-              onClick={() => selectCameraPreset("follow")}
-            >
-              <Navigation aria-hidden="true" size={14} />
-              <span>跟随</span>
-            </button>
-            <button
-              type="button"
-              className={
-                cameraPreset === "risk" ? styles.scenePresetActive : ""
-              }
-              aria-pressed={cameraPreset === "risk"}
-              onClick={() => selectCameraPreset("risk")}
-            >
-              <Siren aria-hidden="true" size={14} />
-              <span>异常</span>
-            </button>
-          </div>
+            ariaLabel="镜头预设"
+            items={[
+              {
+                value: "overview",
+                label: (
+                  <>
+                    <MapIcon aria-hidden="true" size={14} />
+                    <span>总览</span>
+                  </>
+                ),
+              },
+              {
+                value: "follow",
+                label: (
+                  <>
+                    <Navigation aria-hidden="true" size={14} />
+                    <span>跟随</span>
+                  </>
+                ),
+              },
+              {
+                value: "risk",
+                label: (
+                  <>
+                    <Siren aria-hidden="true" size={14} />
+                    <span>异常</span>
+                  </>
+                ),
+              },
+            ] satisfies readonly {
+              value: FacilityCameraPreset;
+              label: ReactNode;
+            }[]}
+            value={cameraPreset}
+            onValueChange={selectCameraPreset}
+          />
         )}
         <select
           value={selectedHubID ?? ""}
@@ -416,17 +431,23 @@ export function HubNetwork({
             </option>
           ))}
         </select>
-        <button
+        <TextureButton
+          className={styles.sceneToolButton}
           type="button"
+          variant="icon"
+          size="icon"
           onClick={focusTopRisk}
           disabled={topRiskHub === undefined}
           aria-label="聚焦最高风险"
           title="聚焦最高风险"
         >
           <Crosshair aria-hidden="true" size={17} />
-        </button>
-        <button
+        </TextureButton>
+        <TextureButton
+          className={styles.sceneToolButton}
           type="button"
+          variant="icon"
+          size="icon"
           onClick={resetView}
           disabled={selectedHubID === null}
           aria-label={
@@ -439,7 +460,7 @@ export function HubNetwork({
           ) : (
             <ArrowLeft aria-hidden="true" size={17} />
           )}
-        </button>
+        </TextureButton>
       </div>
       {selectedHub !== undefined && (
         <div

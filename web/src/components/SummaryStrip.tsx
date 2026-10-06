@@ -2,6 +2,12 @@ import { Clock3, CloudSun, Route, ShieldCheck, Truck } from "lucide-react";
 import type { RunStatus } from "../api";
 import styles from "../app.module.css";
 import type { WaybillResource } from "../waybill-resource";
+import {
+  HaloBadge,
+  HaloProgress,
+  type HaloBadgeTone,
+  type HaloProgressTone,
+} from "./cult";
 
 type SummaryStripProps = {
   resource: WaybillResource;
@@ -77,14 +83,10 @@ export function SummaryStrip({
             <ShieldCheck aria-hidden="true" size={14} />
             Agent
           </dt>
-          <dd className={styles.connectionValue}>
-            <span
-              className={`${styles.connectionDot} ${
-                connected ? styles.connectionDotOnline : ""
-              }`}
-              aria-hidden="true"
-            />
-            {status === null ? "待启动" : statusLabels[status]}
+          <dd>
+            <HaloBadge tone={agentStatusTone(status)} live={connected}>
+              {status === null ? "待启动" : statusLabels[status]}
+            </HaloBadge>
           </dd>
         </div>
       </dl>
@@ -118,36 +120,40 @@ function routeLabel(resource: WaybillResource): string {
 type RiskBarProps = {
   label: string;
   value: number;
-  tone: "high" | "medium" | "low";
+  tone: HaloProgressTone;
 };
 
 function RiskBar({ label, value, tone }: RiskBarProps) {
   return (
-    <div className={styles.riskItem}>
-      <div className={styles.riskLabel}>
-        <span>{label}</span>
-        <strong>{value}</strong>
-      </div>
-      <div className={styles.riskTrack} aria-label={`${label}风险 ${value} 分`}>
-        <span
-          className={`${styles.riskFill} ${styles[`riskFill${capitalize(tone)}`]}`}
-          style={{ width: `${value}%` }}
-        />
-      </div>
-    </div>
+    <HaloProgress
+      value={value}
+      label={label}
+      showValue
+      tone={tone}
+      ariaLabel={`${label}风险 ${value} 分`}
+    />
   );
 }
 
-function capitalize(value: RiskBarProps["tone"]): "High" | "Medium" | "Low" {
-  switch (value) {
-    case "high":
-      return "High";
-    case "medium":
-      return "Medium";
-    case "low":
-      return "Low";
+function agentStatusTone(status: RunStatus | null): HaloBadgeTone {
+  switch (status) {
+    case "completed":
+      return "success";
+    case "started":
+    case "investigating":
+    case "executing":
+      return "info";
+    case "awaiting_approval":
+    case "review_required":
+    case "manual_review":
+      return "warning";
+    case "rejected":
+    case "failed":
+      return "danger";
+    case null:
+      return "neutral";
     default: {
-      const exhaustive: never = value;
+      const exhaustive: never = status;
       return exhaustive;
     }
   }

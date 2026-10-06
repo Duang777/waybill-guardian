@@ -35,6 +35,7 @@ provider fallback middleware，但当前实现没有配置 fallback。
 | `@amap/amap-jsapi-loader` | `1.0.1` | MIT | 按需加载高德 JS API |
 | `maplibre-gl` | `6.12.0` | BSD-3-Clause | 在未配置高德 key 时渲染可交互的矢量地图、轨迹和点位 |
 | `lucide-react` | `1.50.0` | ISC | 界面图标 |
+| `motion` | `14.0.0` | MIT | Cult UI 适配组件的数字、进度和布局过渡 |
 | `zod` | `4.6.5` | MIT | 浏览器端 API 边界校验 |
 
 ## Web 构建和测试依赖
@@ -53,6 +54,16 @@ provider fallback middleware，但当前实现没有配置 fallback。
 | `typescript` | `7.0.2` | Apache-2.0 |
 
 `web/package-lock.json` 固定直接依赖和传递依赖。各 npm 包自带许可证文件。
+
+## 改编组件
+
+`web/src/components/cult/` 中的组件改编自
+[nolly-studio/cult-ui](https://github.com/nolly-studio/cult-ui) 的公开 registry：
+`texture-button`、`halo-badge`、`halo-progress`、`halo-segmented`、
+`rolling-number` 和 `timer`。本仓库保留组件结构和交互思想，移除了 Tailwind、CVA、
+Radix UI 与 Base UI 耦合，并用 CSS Modules 适配本项目视觉规范。Cult UI 采用 MIT
+许可证，Copyright (c) 2023 Jordan-Gilliam；许可证原文保存在
+[`web/src/components/cult/LICENSE`](./web/src/components/cult/LICENSE)。
 
 ## 外部服务
 

@@ -15,6 +15,12 @@ import {
 import { useEffect, useRef, useState, type Dispatch } from "react";
 import styles from "../app.module.css";
 import {
+  HaloBadge,
+  RollingNumber,
+  TextureButton,
+  type HaloBadgeTone,
+} from "./cult";
+import {
   inferenceMode,
   playbackCursor,
   timelinePhases,
@@ -66,11 +72,19 @@ export function AuditDrawer({
           </span>
         </span>
         <span className={styles.auditDrawerMeta}>
-          <span className={`${styles.inferenceBadge} ${modeClassName(mode)}`}>
+          <HaloBadge
+            tone={modeTone(mode)}
+            live={mode.kind === "online"}
+          >
             {modeLabel(mode)}
-          </span>
+          </HaloBadge>
           <span className={styles.eventCount}>
-            {state.events.length.toString().padStart(2, "0")} 条事件
+            <RollingNumber
+              value={state.events.length}
+              format={formatEventCount}
+              label={`${state.events.length} 条审计事件`}
+            />{" "}
+            条事件
           </span>
           <ChevronUp
             className={`${styles.auditDrawerChevron} ${
@@ -122,11 +136,19 @@ export function TimelinePanel({
             <h2 id="timeline-title">Agent 审计时间线</h2>
           </div>
           <div className={styles.timelineMeta}>
-            <span className={`${styles.inferenceBadge} ${modeClassName(mode)}`}>
+            <HaloBadge
+              tone={modeTone(mode)}
+              live={mode.kind === "online"}
+            >
               {modeLabel(mode)}
-            </span>
+            </HaloBadge>
             <span className={styles.eventCount}>
-              {state.events.length.toString().padStart(2, "0")} 条事件
+              <RollingNumber
+                value={state.events.length}
+                format={formatEventCount}
+                label={`${state.events.length} 条审计事件`}
+              />{" "}
+              条事件
             </span>
           </div>
         </div>
@@ -152,16 +174,17 @@ export function PlaybackControls({
   const isLive = state.playback.kind === "live";
   return (
     <div className={styles.playbackControls}>
-      <button
-        className={styles.iconButton}
+      <TextureButton
         type="button"
+        variant="icon"
+        size="icon"
         aria-label={isPlaying ? "暂停回放" : "播放回放"}
         title={isPlaying ? "暂停回放" : "播放回放"}
         disabled={state.events.length === 0}
         onClick={() => dispatch({ type: "toggle_playback" })}
       >
         {isPlaying ? <Pause aria-hidden="true" size={16} /> : <Play aria-hidden="true" size={16} />}
-      </button>
+      </TextureButton>
       <input
         className={styles.playbackRange}
         type="range"
@@ -177,16 +200,16 @@ export function PlaybackControls({
       <span className={styles.playbackPosition}>
         {cursor}/{state.events.length}
       </span>
-      <button
-        className={`${styles.liveButton} ${isLive ? styles.liveButtonActive : ""}`}
+      <TextureButton
         type="button"
+        variant={isLive ? "secondary" : "minimal"}
         disabled={isLive}
         aria-label={isLive ? "当前为实时状态" : "退出回放并返回实时状态"}
         onClick={() => dispatch({ type: "go_live" })}
       >
         <Radio aria-hidden="true" size={14} />
         {isLive ? "实时" : "退出回放"}
-      </button>
+      </TextureButton>
     </div>
   );
 }
@@ -447,19 +470,23 @@ function formatSequence(sequences: readonly number[]): string {
   return first === last ? start : `${start}-${end}`;
 }
 
-function modeClassName(mode: InferenceMode): string {
+function modeTone(mode: InferenceMode): HaloBadgeTone {
   switch (mode.kind) {
     case "online":
-      return styles.inferenceBadgeOnline;
+      return "success";
     case "offline":
-      return styles.inferenceBadgeOffline;
+      return "warning";
     case "legacy":
-      return styles.inferenceBadgeLegacy;
+      return "neutral";
     default: {
       const exhaustive: never = mode;
       return exhaustive;
     }
   }
+}
+
+function formatEventCount(value: number): string {
+  return value.toString().padStart(2, "0");
 }
 
 function modeLabel(mode: InferenceMode): string {

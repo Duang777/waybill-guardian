@@ -13,6 +13,14 @@ import { useEffect, useRef, useState } from "react";
 import type { Approval, Proposal, RunStatus, WaybillView } from "../api";
 import styles from "../app.module.css";
 import type { EvidenceSelection } from "../timeline";
+import {
+  HaloBadge,
+  TextureButton,
+  TimerDisplay,
+  TimerIcon,
+  TimerRoot,
+  type HaloBadgeTone,
+} from "./cult";
 
 type ApprovalPanelProps = {
   approval: Approval | null;
@@ -125,13 +133,13 @@ export function ApprovalPanel({
           </div>
           <div className={styles.approvalBadges}>
             {proposal !== null && (
-              <span className={styles.confidenceBadge}>
+              <HaloBadge tone="info" tabularNums>
                 置信度 {formatConfidence(proposal.confidence_bps)}
-              </span>
+              </HaloBadge>
             )}
-            <span className={`${styles.approvalStatus} ${styles[`approvalStatus${approval.status}`]}`}>
+            <HaloBadge tone={approvalStatusTone(approval.status)}>
               {approvalStatusLabel(approval.status)}
-            </span>
+            </HaloBadge>
           </div>
         </div>
 
@@ -148,11 +156,17 @@ export function ApprovalPanel({
                 <div key={alternative.carrier_id}>
                   <div className={styles.alternativeHeading}>
                     <strong>{carrierDisplayName(alternative.carrier_id, view)}</strong>
-                    <span className={styles.alternativeRole}>
+                    <HaloBadge
+                      tone={
+                        alternative.carrier_id === selectedCarrierID
+                          ? "info"
+                          : "neutral"
+                      }
+                    >
                       {alternative.carrier_id === selectedCarrierID
                         ? "首选"
                         : "备选"}
-                    </span>
+                    </HaloBadge>
                   </div>
                   <span className={styles.alternativeReason}>
                     {alternative.reason}
@@ -262,24 +276,24 @@ export function ApprovalPanel({
 
         {isPending && !rejecting && (
           <div className={styles.approvalActions}>
-            <button
-              className={styles.secondaryButton}
+            <TextureButton
               type="button"
+              variant="secondary"
               disabled={busy}
               onClick={() => setRejecting(true)}
             >
               <X aria-hidden="true" size={16} />
               驳回方案
-            </button>
-            <button
-              className={styles.primaryButton}
+            </TextureButton>
+            <TextureButton
               type="button"
+              variant="primary"
               disabled={busy}
               onClick={() => void onConfirm()}
             >
               <Check aria-hidden="true" size={17} />
               {busy ? "正在执行" : "确认并执行"}
-            </button>
+            </TextureButton>
           </div>
         )}
 
@@ -301,21 +315,23 @@ export function ApprovalPanel({
               onChange={(event) => setReason(event.target.value)}
             />
             <div className={styles.rejectActions}>
-              <button
-                className={styles.textButton}
+              <TextureButton
                 type="button"
+                variant="minimal"
+                size="sm"
                 disabled={busy}
                 onClick={() => setRejecting(false)}
               >
                 取消
-              </button>
-              <button
-                className={styles.dangerButton}
+              </TextureButton>
+              <TextureButton
                 type="submit"
+                variant="destructive"
+                size="sm"
                 disabled={busy || reason.trim().length === 0}
               >
                 确认驳回
-              </button>
+              </TextureButton>
             </div>
           </form>
         )}
@@ -363,15 +379,12 @@ function ApprovalDeadline({ expiresAt }: { expiresAt: string }) {
     return () => window.clearInterval(timer);
   }, []);
 
+  const remaining = remainingTimeLabel(Date.parse(expiresAt) - now);
   return (
-    <span
-      aria-atomic="true"
-      aria-live="polite"
-      title={`有效至 ${formatTime(expiresAt)}`}
-    >
-      <Clock3 aria-hidden="true" size={13} />
-      {remainingTimeLabel(Date.parse(expiresAt) - now)}
-    </span>
+    <TimerRoot title={`有效至 ${formatTime(expiresAt)}`}>
+      <TimerIcon />
+      <TimerDisplay time={remaining} label={`审批${remaining}`} />
+    </TimerRoot>
   );
 }
 
@@ -538,6 +551,27 @@ function approvalStatusLabel(status: Approval["status"]): string {
       return "已驳回";
     case "expired":
       return "已过期";
+    default: {
+      const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
+}
+
+function approvalStatusTone(status: Approval["status"]): HaloBadgeTone {
+  switch (status) {
+    case "pending":
+    case "reconciliation_required":
+      return "warning";
+    case "confirmed":
+      return "info";
+    case "executed":
+      return "success";
+    case "partially_failed":
+    case "failed":
+    case "rejected":
+    case "expired":
+      return "danger";
     default: {
       const exhaustive: never = status;
       return exhaustive;

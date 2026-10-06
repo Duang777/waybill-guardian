@@ -23,6 +23,14 @@ import {
   type RunStatus,
   type WaybillID,
 } from "./api";
+import {
+  HaloBadge,
+  HaloSegmented,
+  RollingNumber,
+  TextureButton,
+  TextureLink,
+  type HaloBadgeTone,
+} from "./components/cult";
 import { HubNetwork } from "./components/HubNetwork";
 import styles from "./overview.module.css";
 
@@ -272,20 +280,20 @@ export function OverviewPage() {
               <small>全国异常运力指挥</small>
             </span>
           </a>
-          <div className={styles.headerContext}>
-            <span className={styles.liveDot} aria-hidden="true" />
-            <span>全国网络</span>
-          </div>
-          <button
-            className={styles.iconButton}
+          <HaloBadge className={styles.headerNetworkStatus} tone="success" live>
+            全国网络
+          </HaloBadge>
+          <TextureButton
             type="button"
+            variant="icon"
+            size="icon"
             aria-label="刷新经营总览"
             title="刷新"
             disabled={resource.kind === "loading"}
             onClick={() => void load()}
           >
             <RefreshCw aria-hidden="true" size={17} />
-          </button>
+          </TextureButton>
         </header>
 
         <main id="overview-main">
@@ -319,10 +327,14 @@ export function OverviewPage() {
                 <strong>经营数据暂不可用</strong>
                 <span>{resource.message}</span>
               </div>
-              <button type="button" onClick={() => void load()}>
+              <TextureButton
+                type="button"
+                variant="secondary"
+                onClick={() => void load()}
+              >
                 <RefreshCw aria-hidden="true" size={16} />
                 重试
-              </button>
+              </TextureButton>
             </section>
           )}
           {resource.kind === "ready" && (
@@ -347,28 +359,28 @@ export function OverviewPage() {
                     <span className={styles.sectionMeta}>{anomalies.length} 项</span>
                   </div>
                   <div className={styles.queueControls}>
-                    <fieldset className={styles.queueSegments}>
-                      <legend className={styles.srOnly}>筛选异常处置队列</legend>
-                      {queueViews.map((view) => (
-                        <label className={styles.queueSegment} key={view.value}>
-                          <input
-                            type="radio"
-                            name="risk-queue-view"
-                            value={view.value}
-                            aria-label={view.label}
-                            checked={queueView === view.value}
-                            onChange={() => setQueueView(view.value)}
-                          />
-                          <span>
+                    <HaloSegmented
+                      className={styles.queueSegments}
+                      ariaLabel="筛选异常处置队列"
+                      semantics="radio"
+                      items={queueViews.map((view) => ({
+                        value: view.value,
+                        label: (
+                          <>
                             {view.label}
-                            <small aria-hidden="true">{queueCounts[view.value]}</small>
-                          </span>
-                        </label>
-                      ))}
-                    </fieldset>
-                    <button
+                            <small aria-hidden="true">
+                              <RollingNumber value={queueCounts[view.value]} />
+                            </small>
+                          </>
+                        ),
+                      }))}
+                      value={queueView}
+                      onValueChange={setQueueView}
+                    />
+                    <TextureButton
                       className={styles.selectButton}
                       type="button"
+                      variant="minimal"
                       disabled={
                         !visibleQueueEntries.some(
                           (entry) => !isActive(entry.status),
@@ -378,16 +390,17 @@ export function OverviewPage() {
                     >
                       <CheckCheck aria-hidden="true" size={15} />
                       选择前 5
-                    </button>
+                    </TextureButton>
                   </div>
                   <div className={styles.queueSummary}>
                     <span>
                       显示 {visibleQueueEntries.length} / {anomalies.length}
                       {selected.size > 0 ? ` · 已选 ${selected.size}` : ""}
                     </span>
-                    <button
+                    <TextureButton
                       className={styles.batchButton}
                       type="button"
+                      variant="primary"
                       disabled={selected.size === 0 || batch.kind === "starting"}
                       onClick={() => void startSelected()}
                     >
@@ -395,7 +408,7 @@ export function OverviewPage() {
                       {batch.kind === "starting"
                         ? "正在启动"
                         : `交给 Agent${selected.size > 0 ? ` · ${selected.size}` : ""}`}
-                    </button>
+                    </TextureButton>
                   </div>
                   {batch.kind === "result" && (
                     <div
@@ -433,24 +446,31 @@ export function OverviewPage() {
                               <a href={`/waybills/${encodeURIComponent(item.waybill_id)}`}>
                                 {item.origin} → {item.destination}
                               </a>
-                              <span className={styles.riskScore}>{item.risk_score}</span>
+                              <span className={styles.riskScore}>
+                                <RollingNumber
+                                  value={item.risk_score}
+                                  label={`风险分 ${item.risk_score}`}
+                                />
+                              </span>
                             </div>
                             <div className={styles.queueMeta}>
                               <span>{item.waybill_id}</span>
                               <span>{anomalyLabel(item.type)}</span>
-                              <span className={statusClass(status, styles)}>
+                              <HaloBadge tone={statusTone(status)}>
                                 {runStatusLabel(status)}
-                              </span>
+                              </HaloBadge>
                             </div>
                           </div>
-                          <a
+                          <TextureLink
                             className={styles.drilldown}
                             href={`/waybills/${encodeURIComponent(item.waybill_id)}`}
+                            variant="icon"
+                            size="icon"
                             aria-label={`查看运单 ${item.waybill_id}`}
                             title="查看运单"
                           >
                             <ChevronRight aria-hidden="true" size={17} />
-                          </a>
+                          </TextureLink>
                         </article>
                       ))
                     )}
@@ -465,12 +485,16 @@ export function OverviewPage() {
                     <h2 id="brief-heading">经营简报</h2>
                   </div>
                   <div className={styles.briefMeta}>
-                    <span className={styles.readOnly}>
+                    <HaloBadge tone="success">
                       <ShieldCheck aria-hidden="true" size={15} />
                       只读聚合
-                    </span>
-                    <span
-                      className={styles.briefSource}
+                    </HaloBadge>
+                    <HaloBadge
+                      tone={
+                        resource.overview.brief.mode === "model_read_only"
+                          ? "info"
+                          : "neutral"
+                      }
                       title={briefFallbackDetail(resource.overview.brief)}
                     >
                       {resource.overview.brief.mode === "model_read_only" ? (
@@ -479,7 +503,7 @@ export function OverviewPage() {
                         <FileText aria-hidden="true" size={15} />
                       )}
                       {briefSourceLabel(resource.overview.brief)}
-                    </span>
+                    </HaloBadge>
                   </div>
                 </div>
                 <div className={styles.briefGrid}>
@@ -518,7 +542,16 @@ function KPI({ metric }: { metric: KPIMetric }) {
         <span>24H</span>
       </div>
       <strong className={metric.value === null ? styles.kpiUnavailable : undefined}>
-        {metric.value === null ? "待接入" : formatMetric(metric)}
+        {metric.value === null ? (
+          "待接入"
+        ) : (
+          <RollingNumber
+            value={metric.value}
+            precision={1}
+            format={(value) => formatMetricValue(value, metric.unit)}
+            label={`${metric.label} ${formatMetricValue(metric.value, metric.unit)}`}
+          />
+        )}
       </strong>
       <span className={styles.kpiFoot}>{detail}</span>
     </article>
@@ -656,12 +689,9 @@ function runStatusLabel(status: RunStatus | undefined): string {
   }
 }
 
-function statusClass(
-  status: RunStatus | undefined,
-  classNames: typeof styles,
-): string {
+function statusTone(status: RunStatus | undefined): HaloBadgeTone {
   if (status === "completed") {
-    return classNames.statusComplete;
+    return "success";
   }
   if (
     status === "started" ||
@@ -669,16 +699,16 @@ function statusClass(
     status === "awaiting_approval" ||
     status === "executing"
   ) {
-    return classNames.statusActive;
+    return "warning";
   }
   if (
     status === "failed" ||
     status === "review_required" ||
     status === "manual_review"
   ) {
-    return classNames.statusDanger;
+    return "danger";
   }
-  return classNames.statusIdle;
+  return "neutral";
 }
 
 function anomalyLabel(value: string): string {
@@ -692,20 +722,17 @@ function anomalyLabel(value: string): string {
   return labels[value] ?? value;
 }
 
-function formatMetric(metric: KPIMetric): string {
-  if (metric.value === null) {
-    return "待接入";
-  }
-  if (metric.unit === "元") {
+function formatMetricValue(value: number, unit: string): string {
+  if (unit === "元") {
     return new Intl.NumberFormat("zh-CN", {
       style: "currency",
       currency: "CNY",
       maximumFractionDigits: 0,
-    }).format(metric.value);
+    }).format(value);
   }
   return `${new Intl.NumberFormat("zh-CN", {
     maximumFractionDigits: 1,
-  }).format(metric.value)}${metric.unit}`;
+  }).format(value)}${unit}`;
 }
 
 function formatDate(value: string): string {
