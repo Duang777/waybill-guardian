@@ -20,6 +20,8 @@ type ApprovalPanelProps = {
   runStatus: RunStatus | null;
   view: WaybillView | null;
   busy: boolean;
+  embedded?: boolean;
+  showEvidence?: boolean;
   onEvidenceSelect: (selection: EvidenceSelection) => void;
   onConfirm: () => Promise<void>;
   onReject: (reason: string) => Promise<void>;
@@ -31,6 +33,8 @@ export function ApprovalPanel({
   runStatus,
   view,
   busy,
+  embedded = false,
+  showEvidence = true,
   onEvidenceSelect,
   onConfirm,
   onReject,
@@ -49,20 +53,30 @@ export function ApprovalPanel({
 
   if (runStatus === "review_required") {
     return (
-      <aside className={styles.approvalPanel} aria-labelledby="approval-title">
+      <section
+        className={`${styles.approvalPanel} ${
+          embedded ? styles.approvalPanelEmbedded : ""
+        }`}
+        aria-labelledby="approval-title"
+      >
         <PanelHeading status="review_required" />
         <div className={styles.approvalIdle}>
           <TriangleAlert aria-hidden="true" size={22} />
           <strong id="approval-title">提案需要人工复核</strong>
           <p>模型输出未通过证据校验，本次运行没有生成可执行审批。</p>
         </div>
-      </aside>
+      </section>
     );
   }
 
   if (approval === null) {
     return (
-      <aside className={styles.approvalPanel} aria-labelledby="approval-title">
+      <section
+        className={`${styles.approvalPanel} ${
+          embedded ? styles.approvalPanelEmbedded : ""
+        }`}
+        aria-labelledby="approval-title"
+      >
         <PanelHeading status="idle" />
         <div className={styles.approvalIdle}>
           <div className={styles.agentSweep} aria-hidden="true">
@@ -71,7 +85,7 @@ export function ApprovalPanel({
           <strong id="approval-title">等待 Agent 提交方案</strong>
           <p>Agent 完成运单、轨迹、司机与天气核验后，写操作会在这里等待确认。</p>
         </div>
-      </aside>
+      </section>
     );
   }
 
@@ -94,10 +108,10 @@ export function ApprovalPanel({
   };
 
   return (
-    <aside
+    <section
       className={`${styles.approvalPanel} ${
         isPending ? styles.approvalPanelPending : ""
-      }`}
+      } ${embedded ? styles.approvalPanelEmbedded : ""}`}
       aria-labelledby="approval-title"
     >
       <PanelHeading status={approval.status} />
@@ -186,49 +200,53 @@ export function ApprovalPanel({
           </div>
         </section>
 
-        <section className={styles.evidenceSection} aria-labelledby="evidence-title">
-          <div className={styles.sectionLabel}>
-            <span id="evidence-title">归因证据链</span>
-            <span>{approval.evidence.length} 条</span>
-          </div>
-          <dl className={styles.evidenceList}>
-            {approval.evidence.map((evidence) => (
-              <div
-                key={`${evidence.label}-${
-                  "source" in evidence
-                    ? `${evidence.source.source_seq}-${evidence.source.field_path}`
-                    : evidence.value
-                }`}
-              >
-                <dt>{evidence.label}</dt>
-                <dd>
-                  {"source" in evidence ? (
-                    <button
-                      className={styles.evidenceLink}
-                      type="button"
-                      aria-label={`定位证据：${evidence.label}，审计事件 ${evidence.source.source_seq}`}
-                      title={`定位到审计事件 #${evidence.source.source_seq}`}
-                      onClick={() =>
-                        onEvidenceSelect({
-                          sourceSeq: evidence.source.source_seq,
-                          fieldPath: evidence.source.field_path,
-                        })
-                      }
-                    >
-                      <span>{evidence.value}</span>
-                      <Crosshair aria-hidden="true" size={13} />
-                    </button>
-                  ) : (
-                    evidence.value
+        {showEvidence && (
+          <section className={styles.evidenceSection} aria-labelledby="evidence-title">
+            <div className={styles.sectionLabel}>
+              <span id="evidence-title">归因证据链</span>
+              <span>{approval.evidence.length} 条</span>
+            </div>
+            <dl className={styles.evidenceList}>
+              {approval.evidence.map((evidence) => (
+                <div
+                  key={`${evidence.label}-${
+                    "source" in evidence
+                      ? `${evidence.source.source_seq}-${evidence.source.field_path}`
+                      : evidence.value
+                  }`}
+                >
+                  <dt>{evidence.label}</dt>
+                  <dd>
+                    {"source" in evidence ? (
+                      <button
+                        className={styles.evidenceLink}
+                        type="button"
+                        aria-label={`定位证据：${evidence.label}，审计事件 ${evidence.source.source_seq}`}
+                        title={`定位到审计事件 #${evidence.source.source_seq}`}
+                        onClick={() =>
+                          onEvidenceSelect({
+                            sourceSeq: evidence.source.source_seq,
+                            fieldPath: evidence.source.field_path,
+                          })
+                        }
+                      >
+                        <span>{evidence.value}</span>
+                        <Crosshair aria-hidden="true" size={13} />
+                      </button>
+                    ) : (
+                      evidence.value
+                    )}
+                  </dd>
+                  {"source" in evidence && (
+                    <span className={styles.evidencePath}>
+                      {evidence.source.field_path}
+                    </span>
                   )}
-                </dd>
-                {"source" in evidence && (
-                  <span className={styles.evidencePath}>{evidence.source.field_path}</span>
-                )}
-              </div>
-            ))}
-          </dl>
-        </section>
+                </div>
+              ))}
+            </dl>
+          </section>
+        )}
 
         <div className={styles.approvalMeta}>
           <span className={styles.mono}>{approval.id}</span>
@@ -302,7 +320,7 @@ export function ApprovalPanel({
           </form>
         )}
       </div>
-    </aside>
+    </section>
   );
 }
 

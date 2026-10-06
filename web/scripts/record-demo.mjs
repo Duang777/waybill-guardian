@@ -109,7 +109,7 @@ try {
   await scene(
     page,
     "一屏完成运营决策",
-    "运单、风险、异常轨迹、审计时间线和人工决策集中展示。",
+    "地图保持主视野，当前任务、证据和人工决策集中在右侧，完整审计按需展开。",
     3_500,
   );
 
@@ -155,6 +155,9 @@ try {
     "审计事件可回放",
     "事件包含连续序号和哈希链；SSE 断线后按最后事件序号补齐。",
   );
+  await page
+    .getByRole("button", { name: /完整审计记录/, exact: false })
+    .click();
   await page.getByRole("button", { name: "播放回放", exact: true }).click();
   await hold(page, 5_000);
   await page.getByRole("button", { name: "实时", exact: true }).click();

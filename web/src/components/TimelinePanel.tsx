@@ -2,12 +2,14 @@ import {
   Bot,
   Check,
   ChevronDown,
+  ChevronUp,
   CircleDot,
   Cpu,
   History,
   Pause,
   Play,
   Radio,
+  Route,
   UserRound,
 } from "lucide-react";
 import { useEffect, useRef, useState, type Dispatch } from "react";
@@ -27,26 +29,101 @@ import {
 
 type TimelinePanelProps = {
   state: TimelineState;
+  showHeader?: boolean;
 };
 
-export function TimelinePanel({ state }: TimelinePanelProps) {
+export function AuditDrawer({
+  state,
+  dispatch,
+  open,
+  onOpenChange,
+}: {
+  state: TimelineState;
+  dispatch: Dispatch<TimelineAction>;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const mode = inferenceMode(state.events);
   return (
-    <section className={styles.timelinePanel} aria-labelledby="timeline-title">
-      <div className={styles.timelineHeader}>
-        <div>
-          <span className={styles.eyebrow}>Append-only audit</span>
-          <h2 id="timeline-title">Agent 审计时间线</h2>
-        </div>
-        <div className={styles.timelineMeta}>
+    <section
+      className={`${styles.auditDrawer} ${
+        open ? styles.auditDrawerOpen : ""
+      }`}
+      aria-labelledby="audit-drawer-title"
+    >
+      <button
+        className={styles.auditDrawerToggle}
+        type="button"
+        aria-expanded={open}
+        aria-controls="audit-drawer-content"
+        onClick={() => onOpenChange(!open)}
+      >
+        <span className={styles.auditDrawerTitle}>
+          <History aria-hidden="true" size={16} />
+          <span>
+            <strong id="audit-drawer-title">完整审计记录</strong>
+            <small>按事件序列校验与回放</small>
+          </span>
+        </span>
+        <span className={styles.auditDrawerMeta}>
           <span className={`${styles.inferenceBadge} ${modeClassName(mode)}`}>
             {modeLabel(mode)}
           </span>
           <span className={styles.eventCount}>
             {state.events.length.toString().padStart(2, "0")} events
           </span>
+          {open ? (
+            <ChevronDown aria-hidden="true" size={17} />
+          ) : (
+            <ChevronUp aria-hidden="true" size={17} />
+          )}
+        </span>
+      </button>
+      {open && (
+        <div className={styles.auditDrawerContent} id="audit-drawer-content">
+          <div className={styles.playbackBand}>
+            <div className={styles.playbackLabel}>
+              <Route aria-hidden="true" size={15} />
+              <span>轨迹回放</span>
+            </div>
+            <PlaybackControls state={state} dispatch={dispatch} />
+          </div>
+          <TimelinePanel state={state} showHeader={false} />
         </div>
-      </div>
+      )}
+    </section>
+  );
+}
+
+export function TimelinePanel({
+  state,
+  showHeader = true,
+}: TimelinePanelProps) {
+  const mode = inferenceMode(state.events);
+  return (
+    <section
+      className={`${styles.timelinePanel} ${
+        showHeader ? "" : styles.timelinePanelInDrawer
+      }`}
+      aria-labelledby={showHeader ? "timeline-title" : undefined}
+      aria-label={showHeader ? undefined : "Agent 审计事件"}
+    >
+      {showHeader && (
+        <div className={styles.timelineHeader}>
+          <div>
+            <span className={styles.eyebrow}>Append-only audit</span>
+            <h2 id="timeline-title">Agent 审计时间线</h2>
+          </div>
+          <div className={styles.timelineMeta}>
+            <span className={`${styles.inferenceBadge} ${modeClassName(mode)}`}>
+              {modeLabel(mode)}
+            </span>
+            <span className={styles.eventCount}>
+              {state.events.length.toString().padStart(2, "0")} events
+            </span>
+          </div>
+        </div>
+      )}
       <TimelineFeed state={state} />
     </section>
   );

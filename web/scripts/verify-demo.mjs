@@ -186,7 +186,7 @@ try {
 
   await page.setViewportSize({ width: 720, height: 900 });
   const tabletApprovalLayout = await page
-    .locator('aside[aria-labelledby="approval-title"]')
+    .locator('section[aria-labelledby="approval-title"]')
     .evaluate((panel) => {
       const heading = panel.firstElementChild?.getBoundingClientRect();
       const bounds = panel.getBoundingClientRect();
@@ -213,6 +213,29 @@ try {
   await page.screenshot({
     path: join(artifactDir, "mobile-completed.png"),
   });
+  await page
+    .locator('[aria-label="Agent 处置栏"]')
+    .scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: join(artifactDir, "mobile-agent-rail-375.png"),
+  });
+
+  await page.setViewportSize({ width: 320, height: 800 });
+  assert(!(await hasHorizontalOverflow(page)), "320px layout has horizontal overflow");
+  const undersizedAt320 = await undersizedButtons(page);
+  assert(
+    undersizedAt320.length === 0,
+    `320px controls smaller than 40px: ${undersizedAt320.join(", ")}`,
+  );
+  await page
+    .locator('[aria-label="Agent 处置栏"]')
+    .scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: join(artifactDir, "mobile-agent-rail-320.png"),
+  });
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.evaluate(() => window.scrollTo(0, 0));
 
   await page.getByRole("button", { name: "重新处置", exact: true }).click();
   await page.getByText("改派至川行快运", { exact: true }).waitFor();
@@ -276,6 +299,8 @@ try {
       join(artifactDir, "workbench-pending-1920.png"),
       join(artifactDir, "desktop-pending.png"),
       join(artifactDir, "mobile-completed.png"),
+      join(artifactDir, "mobile-agent-rail-375.png"),
+      join(artifactDir, "mobile-agent-rail-320.png"),
       join(artifactDir, "mobile-alternative.png"),
       join(artifactDir, "mobile-route.png"),
     ],
@@ -309,10 +334,13 @@ async function verifyWideWorkbench(page, width, height) {
       viewportHeight: window.innerHeight,
       documentHeight: document.documentElement.scrollHeight,
       map: bounds(document.querySelector('[aria-labelledby="route-map-title"]')),
-      timeline: bounds(document.querySelector("#timeline-title")?.closest("section")),
-      approval: bounds(
-        document.querySelector('aside[aria-labelledby="approval-title"]'),
+      rail: bounds(document.querySelector('[aria-label="Agent 处置栏"]')),
+      audit: bounds(
+        document.querySelector('[aria-labelledby="audit-drawer-title"]'),
       ),
+      approval: bounds(document.querySelector(
+        'section[aria-labelledby="approval-title"]',
+      )),
     };
   });
   const actionBounds = await page
@@ -324,14 +352,16 @@ async function verifyWideWorkbench(page, width, height) {
   );
   assert(
     layout.map !== null &&
-      layout.timeline !== null &&
+      layout.rail !== null &&
+      layout.audit !== null &&
       layout.approval !== null &&
-      layout.map.right <= layout.timeline.left + 1 &&
-      layout.timeline.right <= layout.approval.left &&
-      layout.map.width >= 600 &&
-      layout.timeline.width >= 320 &&
-      layout.approval.width >= 450,
-    `${width}x${height} workbench is not a readable three-column layout: ${JSON.stringify(layout)}`,
+      layout.map.right <= layout.rail.left + 1 &&
+      layout.map.bottom <= layout.audit.top + 1 &&
+      layout.rail.bottom <= layout.audit.top + 1 &&
+      layout.map.width >= width * 0.62 &&
+      layout.rail.width >= 400 &&
+      layout.audit.width >= width - 2,
+    `${width}x${height} workbench is not a readable map and Agent rail layout: ${JSON.stringify(layout)}`,
   );
   assert(
     actionBounds !== null &&
@@ -362,6 +392,13 @@ async function auditEventCount(page) {
 }
 
 async function expandPhase(page, phaseID) {
+  const drawer = page.getByRole("button", {
+    name: /完整审计记录/,
+    exact: false,
+  });
+  if ((await drawer.getAttribute("aria-expanded")) !== "true") {
+    await drawer.click();
+  }
   const toggle = page.locator(
     `button[aria-controls="timeline-phase-${phaseID}"]`,
   );
