@@ -10,11 +10,11 @@ vermilion risk markers. Its attached HUD contains the network breadcrumb, data m
 operational totals, selection identity, and abstract-map disclosure. Surrounding controls
 stay dense and flush. Green appears only after a write operation completes.
 
-The waybill workbench continues the same editorial treatment with black rules, a large serif
-route title, and a full-width geographic evidence stage. Its reading order is route status,
-map evidence, audit history, then the human decision boundary. Vermilion marks only the
-unresolved incident. Both the route point inspector and the selected facility summary use a
-single dark caption rail so the selected evidence remains visually anchored to its map.
+The waybill workbench continues the same editorial treatment with black rules, a compact
+serif route title, and a dominant geographic evidence stage. Its reading order is route
+status, map evidence, the Agent task rail, then the on-demand audit drawer. Vermilion marks
+only the unresolved incident. Both the route point inspector and the selected facility
+summary use a single dark caption rail so selected evidence remains anchored to its map.
 
 BoardUI's public dashboard patterns informed the initial hierarchy study. The final
 implementation uses original CSS Modules code, square industrial geometry, divider-led
@@ -42,7 +42,7 @@ Use `"Avenir Next", "PingFang SC", "Noto Sans SC", sans-serif` for interface tex
 `"SFMono-Regular", "JetBrains Mono", monospace` for identifiers and event metadata.
 The overview situation title, section headings, route title, and approval title use
 `"Songti SC", "STSong", "Noto Serif CJK SC", serif`. The overview title is 44 px on desktop
-and 32 px on mobile. The route title is 64 px on desktop. Operational section headings are
+and 32 px on mobile. The compact route title is 38 px on desktop. Operational section headings are
 25 to 32 px at weight 600. Body text uses 13 to 15 px with 1.7 line-height for Chinese.
 Numeric values use tabular figures. Letter spacing remains zero. Font sizes are fixed per
 breakpoint and never scale with viewport width.
@@ -57,8 +57,12 @@ breakpoint and never scale with viewport width.
 - Queue views use plain text tabs with a 2 px active underline.
 - Facility selection uses a square charcoal caption rail instead of a floating white card.
 - Other operational sections remain flush and use 1 px dividers.
+- The Agent Rail combines a six-stage task plan, linked evidence summary, and approval
+  boundary. It does not repeat the full event log.
 - The waybill approval boundary is the only elevated card. Its header uses a quiet status
   tint, and pending approval adds a short vermilion signal mast at the upper left.
+- The full audit history is a square bottom drawer. Its closed row still exposes inference
+  mode and event count; selecting evidence opens it at the cited event.
 - Inputs and range controls use the signal color for active state and a visible focus ring.
 - Icon-only buttons use Lucide icons, tooltips, and accessible labels.
 - The waybill route uses MapLibre with an OpenFreeMap light vector style when no AMap key is
@@ -69,11 +73,10 @@ breakpoint and never scale with viewport width.
 
 Use a 4 px base spacing scale. The CEO overview starts with an editorial masthead beside a
 four-segment KPI index, followed by a dominant nationwide 3D network, a narrow risk queue,
-and a read-only brief. The waybill workbench starts with a larger route masthead. The route
-occupies the dominant left field, while shipment facts and risk bars form a narrow right
-index. Below it, a two-column workspace keeps the geographic map and audit timeline on the
-left and the decision boundary on the right. The map and its dark point-inspector rail are
-one 500 px evidence stage.
+and a read-only brief. The waybill workbench starts with a compact route, shipment, and risk
+index. Below it, a two-column workspace gives the geographic map about two thirds of the
+width. The right Agent Rail holds the current plan, evidence summary, and human decision
+boundary. The map and its dark point-inspector rail form one uninterrupted evidence stage.
 
 On the CEO overview, KPI segments form one flush band with dividers. They are not separate
 cards. The network and queue share one flush work surface instead of nested cards. The
@@ -87,9 +90,10 @@ counts.
 
 At viewports at least 1560 px wide and 800 px tall, both desktop pages use the available
 viewport without vertical page scrolling. The overview keeps the network and queue above a
-compact 200 px intelligence band. The waybill workbench becomes a three-column command
-surface: map evidence, audit timeline, and approval boundary. Timeline and approval content
-scroll inside their own columns, while approval actions remain visible at the bottom.
+compact 200 px intelligence band. The waybill workbench becomes a map-first, two-column
+command surface. The Agent Rail scrolls approval detail independently while the approval
+actions remain visible. The audit drawer spans both columns and opens only for inspection or
+playback.
 
 The 3D field uses an orthographic isometric camera, an abstract grid instead of a geographic
 border, instanced facility parts, merged route geometry, and instanced moving shipment
@@ -125,6 +129,7 @@ No blur or glass effect is used.
 ## 7. Do and don't
 
 - Do keep evidence and proposed effects visible without opening another surface.
+- Do keep the complete event log collapsed until the operator asks for it.
 - Do link the selected route point to its timestamp and speed.
 - Do use coral only for an unresolved incident or approval.
 - Do keep event sequence numbers aligned and readable.
@@ -143,15 +148,17 @@ No blur or glass effect is used.
 ## 8. Responsive behavior
 
 At 1560 px and wider, with at least 800 px of viewport height, the CEO overview and waybill
-workbench fit their complete decision surface into one viewport. The workbench uses three
-columns for route evidence, timeline, and approval. This mode is verified at 1600 x 900 and
-1920 x 1080 and must keep the approval actions visible without scrolling the page.
+workbench fit their complete decision surface into one viewport. The workbench uses a
+map-first two-column layout with a 430 to 520 px Agent Rail. This mode is verified at
+1600 x 900 and 1920 x 1080 and must keep the approval actions visible without scrolling the
+page.
 At 1000 px the CEO map and risk queue become one column. At 720 px its KPI band becomes two
 columns and its situation title moves above the indexes. At 420 px the situation title is
 32 px and the 3D stage remains at least 420 px tall. At 960 px the waybill workspace becomes
-one column and keeps route evidence before the approval panel. The approval card remains
-inset with a horizontal, light status header at tablet and phone widths. At 640 px the route
-title becomes 36 px, and the map keeps a stable 300 px viewport above its inspector.
+one column and keeps route evidence before the Agent Rail, with the audit drawer last. The
+approval card remains inset with a horizontal, light status header at tablet and phone
+widths. At 640 px the route title becomes 30 px, and the map keeps a stable 300 px viewport
+above its inspector.
 The facility inspection view keeps the selected campus centered and places its detail summary
 above the bottom legend so neither layer obscures the model.
 At 640 px the workbench header wraps, route metadata becomes a two-column grid, and playback

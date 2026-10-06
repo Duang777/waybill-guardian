@@ -1,4 +1,4 @@
-import { AlertOctagon, ArrowLeft, Play, RotateCw, Route, X } from "lucide-react";
+import { AlertOctagon, ArrowLeft, Play, RotateCw, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import styles from "./app.module.css";
 import {
@@ -19,13 +19,13 @@ import {
   type WaybillView,
   waybillIdSchema,
 } from "./api";
-import { ApprovalPanel } from "./components/ApprovalPanel";
 import {
   RouteMap,
   type RoutePointFocusRequest,
 } from "./components/RouteMap";
+import { AgentRail } from "./components/AgentRail";
 import { SummaryStrip } from "./components/SummaryStrip";
-import { PlaybackControls, TimelinePanel } from "./components/TimelinePanel";
+import { AuditDrawer } from "./components/TimelinePanel";
 import {
   decideRecovery,
   type RecoverySource,
@@ -92,6 +92,7 @@ function WaybillWorkbench({
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const [routePointFocus, setRoutePointFocus] =
     useState<RoutePointFocusRequest | null>(null);
+  const [auditOpen, setAuditOpen] = useState(false);
   const selectionGeneration = useRef(0);
   const selectionRequest = useRef<AbortController | null>(null);
   const catalogRequest = useRef<AbortController | null>(null);
@@ -110,6 +111,7 @@ function WaybillWorkbench({
     setConnected(false);
     setTimelineAfter(null);
     setRoutePointFocus(null);
+    setAuditOpen(false);
     dispatch({ type: "reset" });
     return { generation, controller };
   }, []);
@@ -381,6 +383,7 @@ function WaybillWorkbench({
     if (target === null) {
       return;
     }
+    setAuditOpen(true);
     dispatch({ type: "focus_event", seq: target.seq });
     if (target.kind === "route_point") {
       setRoutePointFocus({
@@ -626,57 +629,55 @@ function WaybillWorkbench({
           )}
 
           <div className={styles.workspace}>
-            <div className={styles.primaryColumn}>
-              <section className={styles.mapPanel} aria-labelledby="route-map-title">
-                <div className={styles.panelTitleRow}>
-                  <div>
-                    <span className={styles.eyebrow}>Route evidence / live</span>
-                    <h2 id="route-map-title">运输轨迹证据</h2>
-                  </div>
-                  <span className={styles.anomalyLegend}>
-                    <span aria-hidden="true" />
-                    {anomaly === null
-                      ? selection.kind === "error"
-                        ? "异常轨迹加载失败"
-                        : selectedWaybillID === null
-                        ? "暂无异常轨迹"
-                        : selection.kind === "loading"
-                          ? "等待异常轨迹"
-                          : "未发现异常轨迹"
-                      : anomaly.stop_hours === undefined
-                        ? "检测到异常节点"
-                        : `异常停留 ${formatHours(anomaly.stop_hours)} 小时`}
-                  </span>
+            <section className={styles.mapPanel} aria-labelledby="route-map-title">
+              <div className={styles.panelTitleRow}>
+                <div>
+                  <span className={styles.eyebrow}>Route evidence / live</span>
+                  <h2 id="route-map-title">运输轨迹证据</h2>
                 </div>
-                <RouteMap
-                  points={view?.tracking ?? []}
-                  origin={view?.waybill.origin ?? null}
-                  destination={view?.waybill.destination ?? null}
-                  resourceKind={waybillResource.kind}
-                  focusRequest={routePointFocus}
-                />
-              </section>
-
-              <div className={styles.playbackBand}>
-                <div className={styles.playbackLabel}>
-                  <Route aria-hidden="true" size={15} />
-                  <span>轨迹回放</span>
-                </div>
-                <PlaybackControls state={timeline} dispatch={dispatch} />
+                <span className={styles.anomalyLegend}>
+                  <span aria-hidden="true" />
+                  {anomaly === null
+                    ? selection.kind === "error"
+                      ? "异常轨迹加载失败"
+                      : selectedWaybillID === null
+                      ? "暂无异常轨迹"
+                      : selection.kind === "loading"
+                        ? "等待异常轨迹"
+                        : "未发现异常轨迹"
+                    : anomaly.stop_hours === undefined
+                      ? "检测到异常节点"
+                      : `异常停留 ${formatHours(anomaly.stop_hours)} 小时`}
+                </span>
               </div>
+              <RouteMap
+                points={view?.tracking ?? []}
+                origin={view?.waybill.origin ?? null}
+                destination={view?.waybill.destination ?? null}
+                resourceKind={waybillResource.kind}
+                focusRequest={routePointFocus}
+              />
+            </section>
 
-              <TimelinePanel state={timeline} />
-            </div>
-
-            <ApprovalPanel
+            <AgentRail
+              timeline={timeline}
               approval={currentApproval}
               proposal={currentProposal}
               runStatus={currentStatus}
+              runID={run?.run_id ?? null}
+              connected={connected}
               view={view}
               busy={pendingAction === "confirm" || pendingAction === "reject"}
               onEvidenceSelect={selectEvidence}
               onConfirm={confirm}
               onReject={reject}
+            />
+
+            <AuditDrawer
+              state={timeline}
+              dispatch={dispatch}
+              open={auditOpen}
+              onOpenChange={setAuditOpen}
             />
           </div>
         </main>
