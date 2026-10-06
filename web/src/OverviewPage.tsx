@@ -3,14 +3,11 @@ import {
   Bot,
   CheckCheck,
   ChevronRight,
-  CircleGauge,
   Clock3,
   FileText,
   RefreshCw,
-  Route,
   ShieldCheck,
 } from "lucide-react";
-import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   APIError,
@@ -278,11 +275,6 @@ export function OverviewPage() {
           <div className={styles.headerContext}>
             <span className={styles.liveDot} aria-hidden="true" />
             <span>全国网络</span>
-            {resource.kind === "ready" && (
-              <span className={styles.dataBadge}>
-                {resource.overview.data_mode === "simulated" ? "仿真数据" : "业务数据"}
-              </span>
-            )}
           </div>
           <button
             className={styles.iconButton}
@@ -300,7 +292,7 @@ export function OverviewPage() {
           <div className={styles.overviewHead}>
             <section className={styles.commandBand} aria-labelledby="overview-title">
               <div>
-                <span className={styles.eyebrow}>National operations / 24h</span>
+                <span className={styles.eyebrow}>全国经营 / 24 小时</span>
                 <h1 id="overview-title">全国公路港异常态势</h1>
               </div>
               {resource.kind === "ready" && (
@@ -337,46 +329,19 @@ export function OverviewPage() {
             <>
               <div className={styles.workspace}>
                 <section className={styles.mapPanel} aria-labelledby="map-heading">
-                  <div className={`${styles.sectionHeader} ${styles.mapHeader}`}>
-                    <div>
-                      <span className={styles.eyebrow}>Network pulse</span>
-                      <h2 id="map-heading">公路港网络态势</h2>
-                    </div>
-                    <div className={styles.mapFacts} aria-label="网络运行摘要">
-                      <OperationalFact
-                        icon={<Route aria-hidden="true" size={15} />}
-                        value={resource.overview.hubs.length}
-                        label="公路港"
-                      />
-                      <OperationalFact
-                        icon={<CircleGauge aria-hidden="true" size={15} />}
-                        value={resource.overview.totals.in_flight}
-                        label="在途"
-                      />
-                      <OperationalFact
-                        icon={<AlertTriangle aria-hidden="true" size={15} />}
-                        value={resource.overview.totals.anomalies}
-                        label="异常"
-                        signal
-                      />
-                      <OperationalFact
-                        icon={<Bot aria-hidden="true" size={15} />}
-                        value={resource.overview.totals.handling}
-                        label="处置中"
-                      />
-                    </div>
-                  </div>
                   <HubNetwork
                     hubs={resource.overview.hubs}
                     routes={resource.overview.routes}
                     anomalies={resource.overview.anomalies}
+                    dataMode={resource.overview.data_mode}
+                    totals={resource.overview.totals}
                   />
                 </section>
 
                 <section className={styles.queuePanel} aria-labelledby="queue-heading">
                   <div className={styles.queueHeader}>
                     <div>
-                      <span className={styles.eyebrow}>Risk queue</span>
+                      <span className={styles.eyebrow}>风险队列</span>
                       <h2 id="queue-heading">异常处置队列</h2>
                     </div>
                     <span className={styles.sectionMeta}>{anomalies.length} 项</span>
@@ -496,7 +461,7 @@ export function OverviewPage() {
               <section className={styles.briefSection} aria-labelledby="brief-heading">
                 <div className={styles.sectionHeader}>
                   <div>
-                    <span className={styles.eyebrow}>Read-only intelligence</span>
+                    <span className={styles.eyebrow}>只读经营洞察</span>
                     <h2 id="brief-heading">经营简报</h2>
                   </div>
                   <div className={styles.briefMeta}>
@@ -608,26 +573,6 @@ function briefFallbackDetail(brief: Overview["brief"]): string {
     default:
       return "规则模板";
   }
-}
-
-function OperationalFact({
-  icon,
-  value,
-  label,
-  signal = false,
-}: {
-  icon: ReactNode;
-  value: number;
-  label: string;
-  signal?: boolean;
-}) {
-  return (
-    <div className={signal ? styles.operationalSignal : styles.operationalFact}>
-      {icon}
-      <strong>{value}</strong>
-      <span>{label}</span>
-    </div>
-  );
 }
 
 function LoadingOverview() {

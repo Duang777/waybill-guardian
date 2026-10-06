@@ -535,7 +535,7 @@ function WaybillWorkbench({
             </div>
           </div>
           <label className={styles.waybillPicker}>
-            <span>WAYBILL</span>
+            <span>运单</span>
             <select
               value={selectedWaybillID ?? ""}
               disabled={
@@ -558,7 +558,7 @@ function WaybillWorkbench({
             </select>
           </label>
           <div className={styles.runContext}>
-            <span className={styles.runLabel}>ACTIVE RUN</span>
+            <span className={styles.runLabel}>当前任务</span>
             <span className={styles.mono}>
               {run === null ? "NOT STARTED" : compactID(run.run_id)}
             </span>
