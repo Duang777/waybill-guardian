@@ -20,7 +20,10 @@ import {
   waybillIdSchema,
 } from "./api";
 import { ApprovalPanel } from "./components/ApprovalPanel";
-import { RouteMap } from "./components/RouteMap";
+import {
+  RouteMap,
+  type RoutePointFocusRequest,
+} from "./components/RouteMap";
 import { SummaryStrip } from "./components/SummaryStrip";
 import { PlaybackControls, TimelinePanel } from "./components/TimelinePanel";
 import {
@@ -28,12 +31,14 @@ import {
   type RecoverySource,
 } from "./recovery";
 import {
+  evidenceFocusTarget,
   initialTimelineState,
   latestApproval,
   proposalForApproval,
   runStatus,
   timelineReducer,
   visibleEvents,
+  type EvidenceSelection,
 } from "./timeline";
 import type { WaybillResource } from "./waybill-resource";
 import { OverviewPage } from "./OverviewPage";
@@ -85,6 +90,8 @@ function WaybillWorkbench({
   const [pendingAction, setPendingAction] = useState<PendingAction>("bootstrap");
   const [message, setMessage] = useState<string | null>(null);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [routePointFocus, setRoutePointFocus] =
+    useState<RoutePointFocusRequest | null>(null);
   const selectionGeneration = useRef(0);
   const selectionRequest = useRef<AbortController | null>(null);
   const catalogRequest = useRef<AbortController | null>(null);
@@ -102,6 +109,7 @@ function WaybillWorkbench({
     selectionRequest.current = controller;
     setConnected(false);
     setTimelineAfter(null);
+    setRoutePointFocus(null);
     dispatch({ type: "reset" });
     return { generation, controller };
   }, []);
@@ -363,6 +371,24 @@ function WaybillWorkbench({
         ? catalog.message
         : null);
   const displayedError = message ?? resourceError;
+
+  const selectEvidence = (selection: EvidenceSelection) => {
+    const target = evidenceFocusTarget(
+      timeline.events,
+      view?.tracking ?? [],
+      selection,
+    );
+    if (target === null) {
+      return;
+    }
+    dispatch({ type: "focus_event", seq: target.seq });
+    if (target.kind === "route_point") {
+      setRoutePointFocus({
+        sourceSeq: target.seq,
+        pointIndex: target.pointIndex,
+      });
+    }
+  };
 
   const startSelectedRun = async () => {
     if (selection.kind !== "ready") {
@@ -627,6 +653,7 @@ function WaybillWorkbench({
                   origin={view?.waybill.origin ?? null}
                   destination={view?.waybill.destination ?? null}
                   resourceKind={waybillResource.kind}
+                  focusRequest={routePointFocus}
                 />
               </section>
 
@@ -647,9 +674,7 @@ function WaybillWorkbench({
               runStatus={currentStatus}
               view={view}
               busy={pendingAction === "confirm" || pendingAction === "reject"}
-              onEvidenceSelect={(sourceSeq) =>
-                dispatch({ type: "focus_event", seq: sourceSeq })
-              }
+              onEvidenceSelect={selectEvidence}
               onConfirm={confirm}
               onReject={reject}
             />
