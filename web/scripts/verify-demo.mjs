@@ -193,7 +193,9 @@ try {
       };
     });
   assert(
-    tabletApprovalLayout.headingWidth === tabletApprovalLayout.panelWidth &&
+    Math.abs(
+      tabletApprovalLayout.headingWidth - tabletApprovalLayout.panelWidth,
+    ) <= 2 &&
       tabletApprovalLayout.headingHeight <= 84,
     `tablet approval heading is stretched: ${JSON.stringify(tabletApprovalLayout)}`,
   );

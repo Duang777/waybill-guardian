@@ -6,8 +6,9 @@ The interface is a paper-white editorial operations table for dispatch operators
 overview, a large serif situation title and four divided numeric indexes establish the
 reading order before the nationwide network. The bright isometric 3D field remains the
 first interactive signal, with graphite labels, desaturated teal infrastructure, and
-vermilion risk markers. Surrounding controls stay dense and flush. Green appears only after
-a write operation completes.
+vermilion risk markers. Its attached HUD contains the network breadcrumb, data mode,
+operational totals, selection identity, and abstract-map disclosure. Surrounding controls
+stay dense and flush. Green appears only after a write operation completes.
 
 The waybill workbench continues the same editorial treatment with black rules, a large serif
 route title, and a full-width geographic evidence stage. Its reading order is route status,
@@ -50,12 +51,14 @@ breakpoint and never scale with viewport width.
 
 - Buttons use square geometry, a 40 px minimum hit area, and `scale(0.96)` press feedback.
 - The overview masthead stays paper-white. It never becomes a dark dashboard banner.
-- KPI indexes use one divided band with bottom-aligned labels and 32 px numeric values.
+- KPI indexes use one divided band with bottom-aligned labels and 42 px numeric values.
 - The 3D map and risk queue form one flush workspace separated by a 1 px divider.
+- The 3D HUD uses one bordered status block for breadcrumb, data mode, and network totals.
 - Queue views use plain text tabs with a 2 px active underline.
 - Facility selection uses a square charcoal caption rail instead of a floating white card.
 - Other operational sections remain flush and use 1 px dividers.
-- The waybill approval boundary is a rule-separated column, not an elevated card.
+- The waybill approval boundary is the only elevated card. Its header uses a quiet status
+  tint, and pending approval adds a short vermilion signal mast at the upper left.
 - Inputs and range controls use the signal color for active state and a visible focus ring.
 - Icon-only buttons use Lucide icons, tooltips, and accessible labels.
 - The waybill route uses MapLibre with an OpenFreeMap light vector style when no AMap key is
@@ -108,9 +111,10 @@ are reserved for the waybill evidence view; the CEO network remains an abstract 
 
 ## 6. Depth and elevation
 
-Canvas and flush work surfaces differ by lightness. Operational surfaces and the approval
-boundary use dividers without decorative shadows. The dark point inspector uses contrast
-instead of elevation. No blur or glass effect is used.
+Canvas and flush work surfaces differ by lightness. Operational surfaces use dividers.
+The approval card alone uses a two-layer neutral shadow so the human decision boundary
+remains distinct from evidence. The dark point inspector uses contrast instead of elevation.
+No blur or glass effect is used.
 
 ## 7. Do and don't
 
@@ -134,10 +138,10 @@ instead of elevation. No blur or glass effect is used.
 
 At 1000 px the CEO map and risk queue become one column. At 720 px its KPI band becomes two
 columns and its situation title moves above the indexes. At 420 px the situation title is
-32 px and the 3D stage remains at least 360 px tall. At 960 px the waybill workspace becomes
-one column and keeps route evidence before the approval panel. Between 640 px and 960 px, the
-approval heading becomes a dark side rail. At 640 px the approval returns to one column, the
-route title becomes 36 px, and the map keeps a stable 300 px viewport above its inspector.
+32 px and the 3D stage remains at least 420 px tall. At 960 px the waybill workspace becomes
+one column and keeps route evidence before the approval panel. The approval card remains
+inset with a horizontal, light status header at tablet and phone widths. At 640 px the route
+title becomes 36 px, and the map keeps a stable 300 px viewport above its inspector.
 The facility inspection view keeps the selected campus centered and places its detail summary
 above the bottom legend so neither layer obscures the model.
 At 640 px the workbench header wraps, route metadata becomes a two-column grid, and playback

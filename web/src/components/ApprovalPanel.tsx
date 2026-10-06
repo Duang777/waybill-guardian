@@ -94,7 +94,12 @@ export function ApprovalPanel({
   };
 
   return (
-    <aside className={styles.approvalPanel} aria-labelledby="approval-title">
+    <aside
+      className={`${styles.approvalPanel} ${
+        isPending ? styles.approvalPanelPending : ""
+      }`}
+      aria-labelledby="approval-title"
+    >
       <PanelHeading status={approval.status} />
       <div className={styles.approvalBody}>
         <div className={styles.approvalLead}>
@@ -313,7 +318,7 @@ function PanelHeading({
       }`}
     >
       <div>
-        <span className={styles.eyebrow}>Human-in-the-loop</span>
+        <span className={styles.eyebrow}>人工审批</span>
         <strong>人工决策闸</strong>
       </div>
       {status === "executed" ? (
