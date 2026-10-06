@@ -180,6 +180,24 @@ try {
     runs.push({ run: index + 1, eventCount, status: "completed" });
   }
 
+  await page.setViewportSize({ width: 720, height: 900 });
+  const tabletApprovalLayout = await page
+    .locator('aside[aria-labelledby="approval-title"]')
+    .evaluate((panel) => {
+      const heading = panel.firstElementChild?.getBoundingClientRect();
+      const bounds = panel.getBoundingClientRect();
+      return {
+        panelWidth: Math.round(bounds.width),
+        headingWidth: Math.round(heading?.width ?? 0),
+        headingHeight: Math.round(heading?.height ?? 0),
+      };
+    });
+  assert(
+    tabletApprovalLayout.headingWidth === tabletApprovalLayout.panelWidth &&
+      tabletApprovalLayout.headingHeight <= 84,
+    `tablet approval heading is stretched: ${JSON.stringify(tabletApprovalLayout)}`,
+  );
+
   await page.setViewportSize({ width: 375, height: 812 });
   assert(!(await hasHorizontalOverflow(page)), "mobile layout has horizontal overflow");
   const undersized = await undersizedButtons(page);

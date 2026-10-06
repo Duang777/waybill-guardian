@@ -1871,15 +1871,13 @@
   }
 
   .approvalPanel {
-    display: grid;
-    grid-template-columns: 250px minmax(0, 1fr);
+    display: block;
   }
 
   .panelHeading {
-    min-height: 100%;
-    align-content: start;
-    border-right: 1px solid oklch(0.2 0.01 255);
-    border-bottom: 0;
+    min-height: 76px;
+    border-right: 0;
+    border-bottom: 1px solid oklch(0.2 0.01 255);
   }
 
   .approvalIdle {
