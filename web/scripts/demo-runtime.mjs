@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 export const webDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const repoDir = resolve(webDir, "..");
+const processStartupTimeoutMS = 60_000;
 
 export function startProcess(command, args, options) {
   const child = spawn(command, args, {
@@ -53,7 +54,7 @@ export async function waitForHTTP(
   diagnostics = [process],
   readinessPattern,
 ) {
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + processStartupTimeoutMS;
   while (Date.now() < deadline) {
     const failure = processFailure(process);
     if (failure !== null) {
