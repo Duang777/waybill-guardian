@@ -4,6 +4,7 @@ import type {
   HubOverview,
   RouteOverview,
 } from "../api";
+import type { FacilitySceneSelection } from "./HubNetworkScene";
 import styles from "../overview.module.css";
 import {
   buildFacilityLayouts,
@@ -19,9 +20,11 @@ type NetworkMapProps = {
   routes: readonly RouteOverview[];
   anomalies: readonly AnomalyOverview[];
   selectedHubID: string | null;
+  facilitySelection: FacilitySceneSelection | null;
   reducedMotion: boolean;
   paused: boolean;
   onSelectHub: (hubID: string) => void;
+  onSelectFacilityObject: (selection: FacilitySceneSelection) => void;
 };
 
 const bounds = {
@@ -36,9 +39,11 @@ export function NetworkMap({
   routes,
   anomalies,
   selectedHubID,
+  facilitySelection,
   reducedMotion,
   paused,
   onSelectHub,
+  onSelectFacilityObject,
 }: NetworkMapProps) {
   const hubByID = new Map(hubs.map((hub) => [hub.hub_id, hub]));
   const facilityLayouts = useMemo(
@@ -55,8 +60,10 @@ export function NetworkMap({
       <FacilityDetailMap
         hub={selectedHub}
         layout={selectedLayout}
+        selection={facilitySelection}
         reducedMotion={reducedMotion}
         paused={paused}
+        onSelect={onSelectFacilityObject}
       />
     );
   }
@@ -175,13 +182,17 @@ export function NetworkMap({
 function FacilityDetailMap({
   hub,
   layout,
+  selection,
   reducedMotion,
   paused,
+  onSelect,
 }: {
   hub: HubOverview;
   layout: FacilityLayout;
+  selection: FacilitySceneSelection | null;
   reducedMotion: boolean;
   paused: boolean;
+  onSelect: (selection: FacilitySceneSelection) => void;
 }) {
   const scale = Math.min(
     650 / layout.campusWidth,
@@ -217,8 +228,9 @@ function FacilityDetailMap({
           const elementCenterY = centerY + element.z * scale;
           const width = Math.max(element.width * scale, 2);
           const height = Math.max(element.depth * scale, 2);
+          const selectable = element.kind === "beacon";
           return (
-          <rect
+            <rect
               key={`${element.kind}-${index}`}
               x={elementCenterX - width / 2}
               y={elementCenterY - height / 2}
@@ -226,32 +238,74 @@ function FacilityDetailMap({
               height={height}
               rx={element.kind === "beacon" ? width / 2 : 0}
               className={fallbackElementClass(element.kind, hub)}
+              role={selectable ? "button" : undefined}
+              tabIndex={selectable ? 0 : undefined}
+              aria-label={selectable ? "查看园区异常节点" : undefined}
+              data-selected={
+                selectable && selection?.kind === "alert" ? "true" : undefined
+              }
+              data-dimmed={
+                selection !== null && !selectable ? "true" : undefined
+              }
+              onClick={
+                selectable
+                  ? () => onSelect({ kind: "alert", id: "facility-alert" })
+                  : undefined
+              }
+              onKeyDown={
+                selectable
+                  ? (event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onSelect({ kind: "alert", id: "facility-alert" });
+                      }
+                    }
+                  : undefined
+              }
               transform={
                 element.rotationY === 0
                   ? undefined
                   : `rotate(${element.rotationY * (180 / Math.PI)} ${elementCenterX} ${elementCenterY})`
               }
-          />
+            />
           );
         })}
         <g className={styles.facilityTransportLayer}>
           {layout.transportSegments.map((segment) => (
             <line
-              key={[
-                segment.from[0],
-                segment.from[1],
-                segment.to[0],
-                segment.to[1],
-              ].join(":")}
+              key={segment.id}
               x1={centerX + segment.from[0] * scale}
               y1={centerY + segment.from[1] * scale}
               x2={centerX + segment.to[0] * scale}
               y2={centerY + segment.to[1] * scale}
+              role="button"
+              tabIndex={0}
+              aria-label={`查看${segment.status === "risk" ? "高风险" : "正常"}场内路段`}
+              data-facility-object={`route:${segment.id}`}
+              data-selected={
+                selection?.kind === "route" && selection.id === segment.id
+                  ? "true"
+                  : undefined
+              }
+              data-dimmed={
+                selection !== null &&
+                segment.status !== "risk" &&
+                !(selection.kind === "route" && selection.id === segment.id)
+                  ? "true"
+                  : undefined
+              }
               className={
                 segment.status === "risk"
                   ? styles.facilityRouteRisk
                   : styles.facilityRouteActive
               }
+              onClick={() => onSelect({ kind: "route", id: segment.id })}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelect({ kind: "route", id: segment.id });
+                }
+              }}
             />
           ))}
           {layout.vehicles.map((vehicle) => {
@@ -274,6 +328,31 @@ function FacilityDetailMap({
                     : undefined
                 }
                 data-vehicle-state={vehicle.state}
+                data-facility-object={`vehicle:${vehicle.id}`}
+                data-selected={
+                  selection?.kind === "vehicle" &&
+                  selection.id === vehicle.id
+                    ? "true"
+                    : undefined
+                }
+                data-dimmed={
+                  selection !== null &&
+                  vehicle.state !== "alert" &&
+                  !(selection.kind === "vehicle" &&
+                    selection.id === vehicle.id)
+                    ? "true"
+                    : undefined
+                }
+                role="button"
+                tabIndex={0}
+                aria-label={`查看作业车辆 ${vehicle.id}`}
+                onClick={() => onSelect({ kind: "vehicle", id: vehicle.id })}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelect({ kind: "vehicle", id: vehicle.id });
+                  }
+                }}
               >
                 {!reducedMotion && !paused && vehicle.speed > 0 && (
                   <animateMotion

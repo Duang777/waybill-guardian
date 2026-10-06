@@ -5,7 +5,11 @@ import {
   type HubOverview,
   type RouteOverview,
 } from "../api";
-import { buildSceneModel, buildSceneView } from "./HubNetworkScene";
+import {
+  buildSceneModel,
+  buildSceneView,
+  resolveFacilityCameraTarget,
+} from "./HubNetworkScene";
 
 const hubs = [
   {
@@ -352,5 +356,75 @@ describe("buildSceneView", () => {
     const model = buildSceneModel(hubs, routes, []);
 
     expect(buildSceneView(model, "HUB-UNKNOWN").mode).toBe("network");
+  });
+});
+
+describe("resolveFacilityCameraTarget", () => {
+  const detail = (() => {
+    const model = buildSceneModel(hubs, routes, [anomaly("YD2026100001", 90)]);
+    const view = buildSceneView(model, "HUB-A");
+    if (view.mode !== "facility") {
+      throw new Error("expected a facility scene");
+    }
+    return view.detail;
+  })();
+
+  it("tracks the selected vehicle along the shared facility path", () => {
+    const vehicle = detail.vehicles.find((item) => item.speed > 0);
+    expect(vehicle).toBeDefined();
+    if (vehicle === undefined) {
+      return;
+    }
+
+    const first = resolveFacilityCameraTarget(
+      detail,
+      "follow",
+      { kind: "vehicle", id: vehicle.id },
+      0,
+    );
+    const second = resolveFacilityCameraTarget(
+      detail,
+      "follow",
+      { kind: "vehicle", id: vehicle.id },
+      1,
+    );
+
+    expect(first.tracking).toBe(true);
+    expect([second.x, second.z]).not.toEqual([first.x, first.z]);
+  });
+
+  it("focuses the selected route segment in risk mode", () => {
+    const segment = detail.transportSegments[0];
+    expect(segment).toBeDefined();
+    if (segment === undefined) {
+      return;
+    }
+
+    expect(
+      resolveFacilityCameraTarget(
+        detail,
+        "risk",
+        { kind: "route", id: segment.id },
+        0,
+      ),
+    ).toEqual({
+      x: (segment.from[0] + segment.to[0]) / 2,
+      y: -0.08,
+      z: (segment.from[1] + segment.to[1]) / 2,
+      zoom: 4.2,
+      tracking: false,
+    });
+  });
+
+  it("returns a stable facility-wide overview", () => {
+    expect(
+      resolveFacilityCameraTarget(detail, "overview", null, 100),
+    ).toEqual({
+      x: 0,
+      y: -0.08,
+      z: 0,
+      zoom: 3.05,
+      tracking: false,
+    });
   });
 });

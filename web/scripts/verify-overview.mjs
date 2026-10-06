@@ -254,6 +254,60 @@ try {
     detailPixelProbe !== null && detailPixelProbe.colors >= 3,
     `facility detail canvas is blank: ${JSON.stringify(detailPixelProbe)}`,
   );
+  const cameraPresets = page.getByRole("group", { name: "镜头预设" });
+  await cameraPresets
+    .getByRole("button", { name: "跟随", exact: true })
+    .click();
+  await page.waitForFunction(() => {
+    const stage = document.querySelector('[data-network-renderer="webgl"]');
+    return (
+      stage?.getAttribute("data-camera-preset") === "follow" &&
+      stage.getAttribute("data-scene-selected-object")?.startsWith("vehicle:")
+    );
+  });
+  const firstCameraFocus = await networkCanvas.getAttribute(
+    "data-camera-focus",
+  );
+  await page.waitForTimeout(1_000);
+  const movedCameraFocus = await networkCanvas.getAttribute(
+    "data-camera-focus",
+  );
+  assert(
+    typeof firstCameraFocus === "string" &&
+      firstCameraFocus !== "" &&
+      typeof movedCameraFocus === "string" &&
+      movedCameraFocus !== "" &&
+      movedCameraFocus !== firstCameraFocus,
+    `follow camera did not track a moving vehicle: ${firstCameraFocus} -> ${movedCameraFocus}`,
+  );
+  await page.screenshot({
+    path: join(artifactDir, "overview-facility-follow.png"),
+  });
+  await cameraPresets
+    .getByRole("button", { name: "异常", exact: true })
+    .click();
+  await page.waitForFunction(() => {
+    const stage = document.querySelector('[data-network-renderer="webgl"]');
+    const selected = stage?.getAttribute("data-scene-selected-object") ?? "";
+    return (
+      stage?.getAttribute("data-camera-preset") === "risk" &&
+      (selected.startsWith("route:") || selected === "alert:facility-alert")
+    );
+  });
+  await page.waitForTimeout(700);
+  await page.screenshot({
+    path: join(artifactDir, "overview-facility-risk.png"),
+  });
+  await cameraPresets
+    .getByRole("button", { name: "总览", exact: true })
+    .click();
+  await page.waitForFunction(() => {
+    const stage = document.querySelector('[data-network-renderer="webgl"]');
+    return (
+      stage?.getAttribute("data-camera-preset") === "overview" &&
+      stage.getAttribute("data-scene-selected-object") === ""
+    );
+  });
   await page.screenshot({
     path: join(artifactDir, "overview-facility-detail.png"),
   });
@@ -411,11 +465,11 @@ try {
     path: join(artifactDir, "overview-desktop-1920.png"),
     fullPage: true,
   });
-  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.waitForTimeout(800);
-  assert(!(await hasHorizontalOverflow(page)), "1600px overview overflowed horizontally");
+  assert(!(await hasHorizontalOverflow(page)), "1440px overview overflowed horizontally");
   await page.screenshot({
-    path: join(artifactDir, "overview-desktop-1600.png"),
+    path: join(artifactDir, "overview-desktop-1440.png"),
   });
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.waitForTimeout(800);
@@ -648,7 +702,7 @@ try {
         independent_approvals: 5,
         approvals_left_pending: 4,
         map_drilldown_waybill: drilldownWaybillID,
-        responsive_widths: [1920, 1600, 1280, 375, 320],
+        responsive_widths: [1920, 1440, 1280, 375, 320],
       },
       null,
       2,
@@ -914,6 +968,57 @@ async function verifyWebGLFallback(webURL) {
       (await facilityMap.locator("[data-vehicle-state]").count()) > 0,
       "SVG fallback did not render facility vehicles",
     );
+    const firstVehicle = facilityMap
+      .locator('[data-facility-object^="vehicle:"]')
+      .first();
+    await firstVehicle.click();
+    await page.waitForFunction(() => {
+      const stage = document.querySelector('[data-network-renderer="svg"]');
+      return (
+        stage?.getAttribute("data-camera-preset") === "follow" &&
+        stage.getAttribute("data-scene-selected-object")?.startsWith("vehicle:")
+      );
+    });
+    assert(
+      (await firstVehicle.getAttribute("data-selected")) === "true",
+      "SVG fallback did not expose the selected vehicle",
+    );
+    const firstRoute = facilityMap
+      .locator('[data-facility-object^="route:"]')
+      .first();
+    await firstRoute.click({ force: true });
+    await page.waitForFunction(() => {
+      const stage = document.querySelector('[data-network-renderer="svg"]');
+      return (
+        stage?.getAttribute("data-camera-preset") === "risk" &&
+        stage.getAttribute("data-scene-selected-object")?.startsWith("route:")
+      );
+    });
+    const selectedRoute = facilityMap.locator(
+      '[data-facility-object^="route:"][data-selected="true"]',
+    );
+    assert(
+      (await selectedRoute.count()) === 1,
+      "SVG fallback did not expose exactly one selected route",
+    );
+    assert(
+      (await facilityMap.locator('[data-dimmed="true"]').count()) > 0,
+      "SVG fallback did not lower contrast for unrelated objects",
+    );
+    await facilityMap
+      .getByRole("button", { name: "查看园区异常节点", exact: true })
+      .click();
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[data-network-renderer="svg"]')
+          ?.getAttribute("data-scene-selected-object") ===
+        "alert:facility-alert",
+    );
+    await page.waitForTimeout(250);
+    await page.screenshot({
+      path: join(artifactDir, "overview-facility-fallback.png"),
+    });
     const firstSignature = await page
       .locator('[data-fallback-mode="facility"]')
       .getAttribute("data-fallback-signature");

@@ -93,6 +93,16 @@ split-yard, and gateway. Capacity, route distance, location, throughput, in-flig
 risk determine the campus proportions, warehouse arrangement, docks, storage slots, entrance,
 and alert tower. The same hub must keep a stable geometry signature, while different hubs must
 not share one.
+
+Facility inspection offers only three camera presets: overview, vehicle follow, and anomaly.
+There is no free-flight camera. Selecting a vehicle, physical route segment, or alert beacon
+switches to the matching preset and reuses the dark caption rail for object state, associated
+waybill evidence, risk, and disposition. The camera interpolates position, focus, and zoom;
+vehicle follow samples the same closed path as the rendered vehicle so the two cannot drift.
+Unrelated normal infrastructure fades toward neutral gray, while every risk segment and alert
+vehicle retains vermilion. The SVG fallback exposes the same objects as keyboard-operable
+controls and preserves selection and dimming semantics.
+
 Do not use a dark skybox, bloom, glass panels, or decorative gradients. Geographic map tiles
 are reserved for the waybill evidence view; the CEO network remains an abstract 3D field.
 
