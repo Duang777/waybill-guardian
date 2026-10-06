@@ -5,6 +5,9 @@ const apiTarget = process.env.VITE_API_TARGET ?? "http://127.0.0.1:8080";
 
 export default defineConfig({
   plugins: [react()],
+  optimizeDeps: {
+    exclude: ["maplibre-gl"],
+  },
   server: {
     host: "127.0.0.1",
     port: 5173,

@@ -16,12 +16,14 @@
 }
 
 .appShell {
-  width: min(100%, 1500px);
+  width: 100%;
+  max-width: 1680px;
   min-height: 100vh;
   margin: 0 auto;
   overflow: hidden;
-  background: oklch(0.992 0.003 95);
-  box-shadow: 0 0 0 1px oklch(0.875 0.012 95);
+  background: oklch(0.982 0.004 95);
+  border-right: 1px solid oklch(0.82 0.008 95);
+  border-left: 1px solid oklch(0.82 0.008 95);
 }
 
 .topbar {
@@ -34,11 +36,12 @@
     auto
     minmax(150px, 1fr);
   align-items: center;
-  gap: 18px;
-  min-height: 64px;
-  padding: 10px 20px;
-  background: oklch(0.215 0.018 255);
-  color: oklch(0.96 0.006 95);
+  gap: 24px;
+  min-height: 58px;
+  padding: 8px 22px;
+  border-bottom: 1px solid oklch(0.2 0.01 255);
+  background: oklch(0.985 0.003 95);
+  color: oklch(0.18 0.012 255);
 }
 
 .brand {
@@ -54,14 +57,15 @@
   height: 40px;
   flex: 0 0 auto;
   place-items: center;
-  border-radius: 4px;
-  color: oklch(0.78 0.01 255);
+  border-right: 1px solid oklch(0.82 0.008 95);
+  border-radius: 0;
+  color: oklch(0.35 0.012 255);
   text-decoration: none;
 }
 
 .backButton:hover {
-  color: oklch(0.96 0.006 95);
-  background: oklch(0.3 0.018 255);
+  color: oklch(0.12 0.01 255);
+  background: oklch(0.94 0.006 95);
 }
 
 .brandMark {
@@ -70,9 +74,9 @@
   height: 38px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid oklch(0.62 0.08 183);
-  border-radius: 4px;
-  color: oklch(0.82 0.055 183);
+  border: 1px solid oklch(0.2 0.01 255);
+  border-radius: 0;
+  color: oklch(0.2 0.01 255);
   font-family: "SFMono-Regular", "JetBrains Mono", monospace;
   font-size: 12px;
   font-weight: 700;
@@ -87,15 +91,16 @@
 
 .brand strong {
   overflow: hidden;
-  font-size: 15px;
-  font-weight: 650;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
 .brand div > span {
-  color: oklch(0.72 0.012 255);
-  font-size: 11px;
+  color: oklch(0.48 0.012 255);
+  font-size: 10px;
 }
 
 .waybillPicker {
@@ -107,7 +112,7 @@
 }
 
 .waybillPicker > span {
-  color: oklch(0.72 0.055 183);
+  color: oklch(0.48 0.012 255);
   font-family: "SFMono-Regular", "JetBrains Mono", monospace;
   font-size: 10px;
 }
@@ -117,10 +122,10 @@
   min-width: 0;
   height: 40px;
   padding: 0 32px 0 10px;
-  border: 1px solid oklch(0.42 0.018 255);
-  border-radius: 6px;
-  color: oklch(0.92 0.006 95);
-  background: oklch(0.27 0.018 255);
+  border: 1px solid oklch(0.72 0.01 95);
+  border-radius: 0;
+  color: oklch(0.2 0.012 255);
+  background: oklch(0.985 0.003 95);
   font-size: 12px;
   cursor: pointer;
 }
@@ -134,12 +139,12 @@
   display: flex;
   align-items: center;
   gap: 9px;
-  color: oklch(0.72 0.012 255);
+  color: oklch(0.48 0.012 255);
   font-size: 11px;
 }
 
 .runLabel {
-  color: oklch(0.72 0.055 183);
+  color: oklch(0.48 0.012 255);
   font-family: "SFMono-Regular", "JetBrains Mono", monospace;
   font-size: 10px;
 }
@@ -159,7 +164,7 @@
 .iconButton {
   min-height: 40px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 0;
   cursor: pointer;
   transition:
     transform 120ms cubic-bezier(0.16, 1, 0.3, 1),
@@ -186,8 +191,8 @@
   gap: 8px;
   min-width: 132px;
   padding: 0 16px;
-  background: oklch(0.97 0.004 185);
-  color: oklch(0.21 0.018 245);
+  background: oklch(0.18 0.012 255);
+  color: oklch(0.985 0.003 95);
   font-size: 13px;
   font-weight: 700;
 }
@@ -197,45 +202,57 @@
 }
 
 .main {
-  min-height: calc(100vh - 64px);
-  background: oklch(0.955 0.005 185);
+  min-height: calc(100vh - 58px);
+  background: oklch(0.982 0.004 95);
 }
 
 .summaryStrip {
   display: grid;
-  grid-template-columns: minmax(230px, 1fr) minmax(440px, 1.7fr) minmax(310px, 1.1fr);
+  grid-template-columns: minmax(0, 1.65fr) minmax(440px, 0.85fr);
+  grid-template-rows: 1fr auto;
   align-items: stretch;
-  min-height: 112px;
-  background: oklch(0.992 0.003 95);
-  border-bottom: 1px solid oklch(0.875 0.012 95);
+  min-height: 238px;
+  background: oklch(0.982 0.004 95);
+  border-bottom: 1px solid oklch(0.2 0.01 255);
 }
 
 .routeSummary,
 .shipmentFacts,
 .riskCluster {
-  padding: 18px 20px;
+  padding: 22px;
 }
 
 .routeSummary {
-  display: flex;
-  align-items: center;
-  gap: 13px;
+  grid-row: 1 / 3;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-content: space-between;
+  align-items: start;
+  gap: 18px;
+  min-width: 0;
+  padding-top: 26px;
+  padding-bottom: 24px;
+  border-right: 1px solid oklch(0.2 0.01 255);
 }
 
 .routeIcon {
   display: grid;
-  width: 42px;
-  height: 42px;
+  width: 34px;
+  height: 34px;
   flex: 0 0 auto;
   place-items: center;
-  border-radius: 8px;
-  background: oklch(0.93 0.025 183);
-  color: oklch(0.4 0.085 183);
+  border: 1px solid oklch(0.2 0.01 255);
+  border-radius: 50%;
+  background: transparent;
+  color: oklch(0.2 0.01 255);
 }
 
 .routeSummary > div:last-child {
   display: grid;
-  gap: 2px;
+  grid-template-rows: auto 1fr auto;
+  align-self: stretch;
+  gap: 10px;
+  min-width: 0;
 }
 
 .eyebrow {
@@ -249,9 +266,13 @@
 }
 
 .routeTitle {
-  font-size: 20px;
-  font-weight: 650;
-  line-height: 1.3;
+  align-self: center;
+  overflow-wrap: anywhere;
+  font-family: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+  font-size: 64px;
+  font-weight: 700;
+  line-height: 1;
+  text-wrap: balance;
 }
 
 .routeSummary .mono {
@@ -260,23 +281,23 @@
 
 .shipmentFacts {
   display: grid;
-  grid-template-columns: repeat(4, minmax(82px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: center;
-  border-right: 1px solid oklch(0.875 0.012 95);
-  border-left: 1px solid oklch(0.875 0.012 95);
+  padding: 16px 22px;
+  border-bottom: 1px solid oklch(0.78 0.01 95);
 }
 
 .shipmentFacts > div {
   min-width: 0;
-  padding: 0 14px;
-  border-right: 1px solid oklch(0.9 0.009 95);
+  padding: 8px 14px;
+  border-right: 1px solid oklch(0.82 0.008 95);
 }
 
-.shipmentFacts > div:first-child {
+.shipmentFacts > div:nth-child(odd) {
   padding-left: 0;
 }
 
-.shipmentFacts > div:last-child {
+.shipmentFacts > div:nth-child(even) {
   padding-right: 0;
   border-right: 0;
 }
@@ -293,7 +314,7 @@
 .shipmentFacts dd {
   overflow: hidden;
   margin: 0;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 650;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -320,15 +341,16 @@
 
 .riskCluster {
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-content: center;
-  gap: 8px;
+  gap: 14px;
+  padding-top: 17px;
+  padding-bottom: 18px;
 }
 
 .riskItem {
   display: grid;
-  grid-template-columns: 72px 1fr;
-  align-items: center;
-  gap: 10px;
+  gap: 7px;
 }
 
 .riskLabel {
@@ -351,14 +373,14 @@
   position: relative;
   height: 5px;
   overflow: hidden;
-  border-radius: 4px;
-  background: oklch(0.9 0.009 95);
+  border-radius: 0;
+  background: oklch(0.86 0.009 95);
 }
 
 .riskFill {
   display: block;
   height: 100%;
-  border-radius: inherit;
+  border-radius: 0;
 }
 
 .riskFillHigh {
@@ -429,18 +451,17 @@
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 400px);
-  gap: 16px;
-  padding: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(350px, 390px);
+  gap: 0;
+  padding: 0;
 }
 
 .primaryColumn {
   display: grid;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid oklch(0.86 0.009 185);
-  border-radius: 4px;
-  background: oklch(0.995 0.002 185);
+  border-right: 1px solid oklch(0.2 0.01 255);
+  background: oklch(0.982 0.004 95);
 }
 
 .mapPanel {
@@ -454,25 +475,25 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 58px;
-  padding: 10px 16px;
-  border-bottom: 1px solid oklch(0.875 0.012 95);
+  min-height: 72px;
+  padding: 14px 22px;
+  border-bottom: 1px solid oklch(0.2 0.01 255);
 }
 
 .panelTitleRow h2,
 .timelineHeader h2,
 .approvalLead h2 {
   margin: 1px 0 0;
-  font-size: 17px;
-  font-weight: 650;
-  line-height: 1.35;
+  font-size: 27px;
+  font-weight: 600;
+  line-height: 1.2;
   text-wrap: balance;
 }
 
 .panelTitleRow {
-  min-height: 64px;
-  padding-inline: 18px;
-  background: oklch(0.995 0.002 185);
+  min-height: 84px;
+  padding-inline: 22px;
+  background: oklch(0.982 0.004 95);
 }
 
 .anomalyLegend {
@@ -495,9 +516,9 @@
 .mapStage {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 238px;
-  height: 356px;
-  min-height: 356px;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  height: 500px;
+  min-height: 500px;
   overflow: hidden;
   background: oklch(0.985 0.003 185);
 }
@@ -520,20 +541,56 @@
 }
 
 .mapEmpty {
-  height: 356px;
+  height: 500px;
   background: oklch(0.97 0.006 185);
 }
 
-.amapCanvas {
+.mapCanvas {
   position: absolute;
   inset: 0;
   z-index: 2;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 240ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .mapVisible {
   opacity: 1;
+  pointer-events: auto;
+}
+
+.mapCanvas :global(.maplibregl-canvas) {
+  outline: none;
+}
+
+.mapCanvas :global(.maplibregl-ctrl-top-right) {
+  top: 8px;
+  right: 8px;
+}
+
+.mapCanvas :global(.maplibregl-ctrl-group) {
+  overflow: hidden;
+  border: 1px solid oklch(0.79 0.014 185);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.mapCanvas :global(.maplibregl-ctrl-group button) {
+  width: 40px;
+  height: 40px;
+}
+
+.mapCanvas :global(.maplibregl-ctrl-attrib) {
+  border-top: 1px solid oklch(0.84 0.012 185);
+  border-right: 1px solid oklch(0.84 0.012 185);
+  border-radius: 0 3px 0 0;
+  color: oklch(0.42 0.018 245);
+  background: oklch(0.99 0.003 185 / 0.92);
+  font-size: 9px;
+}
+
+.mapCanvas :global(.maplibregl-ctrl-attrib a) {
+  color: inherit;
 }
 
 .localMap {
@@ -588,7 +645,7 @@
   overflow: visible;
 }
 
-.routeLine polyline {
+.routeLine path {
   fill: none;
   stroke-linecap: round;
   stroke-linejoin: round;
@@ -660,10 +717,10 @@
   overflow: hidden;
   padding: 5px 7px;
   border: 1px solid oklch(0.82 0.012 185);
-  border-radius: 3px;
+  border-radius: 0;
   color: oklch(0.28 0.022 245);
   background: oklch(0.995 0.002 185 / 0.9);
-  box-shadow: 0 3px 10px oklch(0.22 0.02 255 / 0.08);
+  box-shadow: none;
   font-size: 10px;
   font-weight: 700;
   line-height: 1.25;
@@ -694,7 +751,7 @@
   max-width: calc(100% - 24px);
   padding: 8px 10px;
   border: 1px solid oklch(0.83 0.014 185);
-  border-radius: 3px;
+  border-radius: 0;
   background: oklch(0.99 0.003 185 / 0.92);
   color: oklch(0.4 0.035 185);
   font-size: 10px;
@@ -723,11 +780,11 @@
   display: grid;
   min-width: 0;
   align-content: space-between;
-  gap: 18px;
-  padding: 20px 18px 16px;
-  border-left: 1px solid oklch(0.86 0.009 185);
-  background: oklch(0.995 0.002 185);
-  color: oklch(0.22 0.02 245);
+  gap: 24px;
+  padding: 24px 20px 18px;
+  border-left: 0;
+  background: oklch(0.18 0.012 255);
+  color: oklch(0.96 0.004 95);
 }
 
 .pointInspectorLead {
@@ -741,26 +798,27 @@
 }
 
 .pointInspector .eyebrow {
-  color: oklch(0.53 0.025 245);
+  color: oklch(0.7 0.012 95);
 }
 
 .pointInspector strong {
   overflow-wrap: anywhere;
-  font-size: 17px;
-  line-height: 1.35;
+  font-family: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+  font-size: 24px;
+  line-height: 1.25;
 }
 
 .pointIndex {
-  color: oklch(0.58 0.2 28);
+  color: oklch(0.68 0.19 30);
   font-family: "SFMono-Regular", "JetBrains Mono", monospace;
-  font-size: 30px;
+  font-size: 44px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
 
 .pointIndex small {
-  color: oklch(0.65 0.016 245);
+  color: oklch(0.58 0.01 95);
   font-size: 11px;
   font-weight: 500;
 }
@@ -778,11 +836,11 @@
   align-items: baseline;
   gap: 8px;
   padding: 9px 0;
-  border-top: 1px solid oklch(0.9 0.006 185);
+  border-top: 1px solid oklch(0.36 0.008 255);
 }
 
 .pointInspector dt {
-  color: oklch(0.55 0.02 245);
+  color: oklch(0.65 0.01 95);
   font-size: 10px;
 }
 
@@ -801,7 +859,7 @@
   align-items: center;
   gap: 7px;
   padding-top: 12px;
-  border-top: 1px solid oklch(0.86 0.009 185);
+  border-top: 1px solid oklch(0.36 0.008 255);
 }
 
 .riskSignal,
@@ -825,11 +883,11 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 62px;
-  padding: 9px 14px 9px 18px;
-  border-top: 1px solid oklch(0.86 0.009 185);
-  border-bottom: 1px solid oklch(0.86 0.009 185);
-  background: oklch(0.98 0.004 185);
+  min-height: 68px;
+  padding: 10px 18px 10px 22px;
+  border-top: 1px solid oklch(0.2 0.01 255);
+  border-bottom: 1px solid oklch(0.2 0.01 255);
+  background: oklch(0.982 0.004 95);
 }
 
 .playbackLabel {
@@ -853,7 +911,7 @@
   width: 40px;
   padding: 0;
   place-items: center;
-  border-radius: 3px;
+  border-radius: 0;
   background: oklch(0.24 0.02 245);
   color: oklch(0.98 0.003 185);
 }
@@ -898,11 +956,11 @@
 }
 
 .timelinePanel {
-  min-height: 300px;
+  min-height: 360px;
 }
 
 .timelineHeader {
-  min-height: 56px;
+  min-height: 84px;
 }
 
 .timelineMeta,
@@ -916,7 +974,7 @@
 .inferenceBadge,
 .confidenceBadge {
   padding: 4px 7px;
-  border-radius: 4px;
+  border-radius: 0;
   font-size: 10px;
   font-weight: 700;
   white-space: nowrap;
@@ -965,7 +1023,7 @@
 }
 
 .timelineList {
-  max-height: 294px;
+  max-height: 360px;
   margin: 0;
   padding: 0;
   overflow-y: auto;
@@ -977,8 +1035,8 @@
   position: relative;
   display: grid;
   grid-template-columns: 38px 24px minmax(0, 1fr);
-  min-height: 72px;
-  padding: 12px 16px 12px 10px;
+  min-height: 82px;
+  padding: 15px 22px 15px 12px;
   outline: 0 solid transparent;
   outline-offset: -2px;
   transition:
@@ -1089,17 +1147,14 @@
   align-self: start;
   min-width: 0;
   overflow: hidden;
-  border-radius: 8px;
-  background: oklch(0.995 0.002 95);
-  box-shadow:
-    0 12px 32px oklch(0.22 0.02 255 / 0.1),
-    0 0 0 1px oklch(0.875 0.012 95);
+  background: oklch(0.982 0.004 95);
 }
 
 .panelHeading {
-  min-height: 64px;
-  background: oklch(0.225 0.02 255);
-  color: oklch(0.96 0.006 95);
+  min-height: 84px;
+  padding-inline: 20px;
+  background: oklch(0.18 0.012 255);
+  color: oklch(0.96 0.004 95);
 }
 
 .panelHeading > div {
@@ -1133,8 +1188,8 @@
 }
 
 .approvalIdle {
-  min-height: 448px;
-  padding: 40px 28px;
+  min-height: 568px;
+  padding: 48px 28px;
 }
 
 .agentSweep {
@@ -1184,21 +1239,23 @@
 }
 
 .approvalBody {
-  padding: 18px;
+  padding: 22px 20px 24px;
 }
 
 .approvalLead {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  display: grid;
   gap: 12px;
 }
 
 .approvalLead h2 {
-  font-size: 21px;
+  max-width: 12ch;
+  font-family: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+  font-size: 32px;
+  line-height: 1.14;
 }
 
 .approvalBadges {
+  justify-content: flex-start;
   flex-wrap: wrap;
 }
 
@@ -1211,7 +1268,7 @@
 .approvalStatus {
   flex: 0 0 auto;
   padding: 5px 8px;
-  border-radius: 4px;
+  border-radius: 0;
   font-size: 11px;
   font-weight: 700;
 }
@@ -1245,7 +1302,7 @@
 }
 
 .approvalReason {
-  margin: 10px 0 18px;
+  margin: 16px 0 22px;
   color: oklch(0.43 0.02 255);
   font-size: 13px;
   line-height: 1.7;
@@ -1342,7 +1399,7 @@
   width: 32px;
   height: 32px;
   place-items: center;
-  border-radius: 6px;
+  border-radius: 0;
   background: oklch(0.925 0.015 255);
   color: oklch(0.39 0.045 255);
 }
@@ -1371,7 +1428,7 @@
   gap: 1px;
   margin: 0;
   overflow: hidden;
-  border-radius: 6px;
+  border-radius: 0;
   background: oklch(0.875 0.012 95);
 }
 
@@ -1402,7 +1459,7 @@
   gap: 6px;
   padding: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: 0;
   background: transparent;
   color: oklch(0.36 0.08 255);
   font: inherit;
@@ -1459,13 +1516,14 @@
 }
 
 .primaryButton {
-  background: oklch(0.69 0.145 67);
-  color: oklch(0.22 0.035 67);
-  box-shadow: 0 4px 10px oklch(0.48 0.12 62 / 0.2);
+  background: oklch(0.18 0.012 255);
+  color: oklch(0.985 0.003 95);
+  box-shadow: none;
 }
 
 .secondaryButton {
-  background: oklch(0.91 0.009 95);
+  border: 1px solid oklch(0.22 0.01 255);
+  background: transparent;
   color: oklch(0.35 0.03 255);
 }
 
@@ -1505,7 +1563,7 @@
   min-height: 76px;
   padding: 10px;
   border: 1px solid oklch(0.79 0.018 255);
-  border-radius: 6px;
+  border-radius: 0;
   color: oklch(0.215 0.018 255);
   background: oklch(0.992 0.003 95);
   font-size: 12px;
@@ -1521,12 +1579,12 @@
 @media (hover: hover) {
   .triggerButton:hover,
   .primaryButton:hover {
-    background: oklch(0.9 0.008 185);
+    background: oklch(0.3 0.012 255);
   }
 
   .secondaryButton:hover,
   .iconButton:hover {
-    background: oklch(0.87 0.012 95);
+    background: oklch(0.9 0.008 95);
   }
 
   .dangerButton:hover {
@@ -1554,19 +1612,19 @@
 
 @media (max-width: 1180px) {
   .summaryStrip {
-    grid-template-columns: minmax(220px, 0.9fr) minmax(400px, 1.5fr);
+    grid-template-columns: minmax(0, 1.3fr) minmax(400px, 0.9fr);
   }
 
-  .riskCluster {
-    grid-column: 1 / -1;
-    grid-template-columns: repeat(3, 1fr);
-    padding-top: 12px;
-    padding-bottom: 12px;
-    border-top: 1px solid oklch(0.875 0.012 95);
+  .routeTitle {
+    font-size: 52px;
   }
 
   .workspace {
-    grid-template-columns: minmax(0, 1fr) minmax(340px, 370px);
+    grid-template-columns: minmax(0, 1fr) minmax(330px, 360px);
+  }
+
+  .mapStage {
+    grid-template-columns: minmax(0, 1fr) 230px;
   }
 }
 
@@ -1581,34 +1639,90 @@
 
   .summaryStrip {
     grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+  }
+
+  .routeSummary {
+    grid-row: auto;
+    min-height: 210px;
+    border-right: 0;
+    border-bottom: 1px solid oklch(0.2 0.01 255);
+  }
+
+  .routeTitle {
+    font-size: 58px;
   }
 
   .shipmentFacts {
-    border-top: 1px solid oklch(0.875 0.012 95);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     border-right: 0;
     border-left: 0;
   }
 
+  .shipmentFacts > div,
+  .shipmentFacts > div:nth-child(odd),
+  .shipmentFacts > div:nth-child(even) {
+    padding: 0 14px;
+    border-right: 1px solid oklch(0.82 0.008 95);
+  }
+
+  .shipmentFacts > div:first-child {
+    padding-left: 0;
+  }
+
+  .shipmentFacts > div:last-child {
+    padding-right: 0;
+    border-right: 0;
+  }
+
   .riskCluster {
-    grid-column: auto;
+    grid-column: 1;
+    border-top: 0;
   }
 
   .workspace {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .primaryColumn {
+    border-right: 0;
+    border-bottom: 1px solid oklch(0.2 0.01 255);
+  }
+
+  .approvalPanel {
+    display: grid;
+    grid-template-columns: 250px minmax(0, 1fr);
+  }
+
+  .panelHeading {
+    min-height: 100%;
+    align-content: start;
+    border-right: 1px solid oklch(0.2 0.01 255);
+    border-bottom: 0;
+  }
+
   .approvalIdle {
-    min-height: 260px;
+    min-height: 300px;
   }
 }
 
 @media (max-width: 640px) {
+  .appShell {
+    border-right: 0;
+    border-left: 0;
+  }
+
   .topbar {
     grid-template-columns: minmax(0, 1fr) auto;
-    min-height: 68px;
+    min-height: 0;
     padding:
       10px max(12px, env(safe-area-inset-right))
       10px max(12px, env(safe-area-inset-left));
+  }
+
+  .brand {
+    grid-row: 1;
+    grid-column: 1;
   }
 
   .brand div > span {
@@ -1625,11 +1739,14 @@
   }
 
   .triggerButton {
-    min-width: 118px;
+    grid-row: 1;
+    grid-column: 2;
+    min-width: 112px;
     padding: 0 12px;
   }
 
   .waybillPicker {
+    grid-row: 2;
     grid-column: 1 / -1;
     grid-template-columns: 58px minmax(0, 1fr);
   }
@@ -1640,9 +1757,37 @@
     padding: 14px;
   }
 
+  .routeSummary {
+    grid-template-columns: 30px minmax(0, 1fr);
+    gap: 12px;
+    min-height: 176px;
+    padding-top: 18px;
+    padding-bottom: 18px;
+  }
+
+  .routeIcon {
+    width: 30px;
+    height: 30px;
+  }
+
+  .routeTitle {
+    font-size: 36px;
+    line-height: 1.04;
+  }
+
   .shipmentFacts {
     grid-template-columns: repeat(2, 1fr);
     gap: 14px 0;
+  }
+
+  .shipmentFacts > div,
+  .shipmentFacts > div:nth-child(odd),
+  .shipmentFacts > div:nth-child(even) {
+    padding: 0 10px;
+  }
+
+  .shipmentFacts > div:nth-child(odd) {
+    padding-left: 0;
   }
 
   .shipmentFacts > div:nth-child(2) {
@@ -1658,14 +1803,19 @@
   }
 
   .workspace {
-    gap: 12px;
-    padding: 12px;
+    gap: 0;
+    padding: 0;
   }
 
   .panelTitleRow,
   .timelineHeader {
-    min-height: 56px;
-    padding: 9px 12px;
+    min-height: 76px;
+    padding: 12px 14px;
+  }
+
+  .panelTitleRow h2,
+  .timelineHeader h2 {
+    font-size: 22px;
   }
 
   .timelineHeader {
@@ -1687,26 +1837,26 @@
 
   .mapStage {
     grid-template-columns: 1fr;
-    grid-template-rows: 260px auto;
+    grid-template-rows: 300px auto;
     height: auto;
     min-height: 0;
   }
 
   .mapEmpty {
-    height: 310px;
-    min-height: 310px;
+    height: 300px;
+    min-height: 300px;
   }
 
   .pointInspector {
     grid-template-columns: minmax(0, 1fr);
-    gap: 12px;
-    padding: 14px 12px 12px;
-    border-top: 1px solid oklch(0.86 0.009 185);
+    gap: 14px;
+    padding: 16px 14px 14px;
+    border-top: 1px solid oklch(0.2 0.01 255);
     border-left: 0;
   }
 
   .pointInspectorLead {
-    grid-template-columns: 52px minmax(0, 1fr);
+    grid-template-columns: 72px minmax(0, 1fr);
     align-items: start;
     gap: 10px;
   }
@@ -1721,8 +1871,8 @@
     align-content: start;
     gap: 3px;
     padding: 8px 7px;
-    border-top: 1px solid oklch(0.9 0.006 185);
-    border-right: 1px solid oklch(0.9 0.006 185);
+    border-top: 1px solid oklch(0.36 0.008 255);
+    border-right: 1px solid oklch(0.36 0.008 255);
   }
 
   .pointInspector dl > div:last-child {
@@ -1769,12 +1919,26 @@
     padding: 15px;
   }
 
+  .approvalPanel {
+    display: block;
+  }
+
+  .panelHeading {
+    min-height: 76px;
+    border-right: 0;
+    border-bottom: 1px solid oklch(0.2 0.01 255);
+  }
+
+  .approvalIdle {
+    min-height: 300px;
+  }
+
   .approvalLead h2 {
-    font-size: 19px;
+    font-size: 28px;
   }
 
   .approvalBadges {
-    max-width: 132px;
+    max-width: none;
   }
 
   .evidenceList {

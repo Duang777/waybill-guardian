@@ -33,6 +33,7 @@ provider fallback middleware，但当前实现没有配置 fallback。
 | `three` | `0.186.1` | MIT | 全国公路港三维场景、合批几何和 WebGL 渲染 |
 | `@react-three/fiber` | `9.8.1` | MIT | Three.js 的 React renderer 和场景生命周期 |
 | `@amap/amap-jsapi-loader` | `1.0.1` | MIT | 按需加载高德 JS API |
+| `maplibre-gl` | `6.12.0` | BSD-3-Clause | 在未配置高德 key 时渲染可交互的矢量地图、轨迹和点位 |
 | `lucide-react` | `1.50.0` | ISC | 界面图标 |
 | `zod` | `4.6.5` | MIT | 浏览器端 API 边界校验 |
 
@@ -41,6 +42,7 @@ provider fallback middleware，但当前实现没有配置 fallback。
 | npm 包 | 版本 | 许可证 |
 |---|---|---|
 | `@amap/amap-jsapi-types` | `0.0.15` | MIT |
+| `@types/geojson` | `7946.0.16` | MIT |
 | `@types/node` | `24.10.0` | MIT |
 | `@types/react`、`@types/react-dom` | `19.3.0` | MIT |
 | `@types/three` | `0.186.0` | MIT |
@@ -75,6 +77,10 @@ provider fallback middleware，但当前实现没有配置 fallback。
 - 地图和底图：配置 `VITE_AMAP_KEY` 后，浏览器加载高德地图 JS API。地图、底图和接口数据
   不随仓库再分发，使用时适用
   [高德地图开放平台服务协议](https://lbs.amap.com/pages/terms/)。
+- 默认矢量底图：未配置高德 key 时，MapLibre 从
+  [OpenFreeMap](https://openfreemap.org/) 加载 Positron 样式和瓦片，底层道路与地名数据
+  来自 [OpenStreetMap](https://www.openstreetmap.org/copyright)。页面显示两者署名；
+  在线样式、瓦片和数据不随仓库再分发。
 
 ## 参考项目
 
@@ -92,5 +98,8 @@ provider fallback middleware，但当前实现没有配置 fallback。
 - [BoardUI](https://github.com/BoardUI/boardui)：
   参考其 MIT 许可公开源码中的浅灰分组底、白色内部工作面板、轻量接触阴影和分段控件
   层级。本仓库使用 CSS Modules 独立实现，没有复制 BoardUI 组件、模板或素材。
+- [Awwwards](https://www.awwwards.com/)：
+  只参考其获奖站点常见的编辑排版、全宽主视觉和细线分区方法。本仓库没有复制页面源码、
+  商标、图片、字体或其他素材。
 
 若以后复制第三方文件或代码片段，必须在此登记项目、来源路径、目标路径、用途和许可证要求。

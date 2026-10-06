@@ -14,6 +14,7 @@ import (
 const (
 	defaultWaybillCount = 200
 	defaultOutputPath   = "data/simulated/waybills-v1.json"
+	trackingPointCount  = 7
 )
 
 type hubSeed struct {
@@ -125,6 +126,11 @@ type weatherRecord struct {
 	Segment     string `json:"segment"`
 	Condition   string `json:"condition"`
 	AlertLevel  string `json:"alert_level"`
+}
+
+type routeCoordinate struct {
+	Longitude float64
+	Latitude  float64
 }
 
 func main() {
@@ -296,41 +302,201 @@ func generate(waybillCount int) dataset {
 		start := baseTime.Add(time.Duration(index) * 7 * time.Minute)
 		result.Tracking = append(
 			result.Tracking,
-			trackingRecord{
-				WaybillID:  waybillID,
-				Sequence:   1,
-				Label:      origin.Name,
-				RecordedAt: start.Format(time.RFC3339),
-				Longitude:  origin.Longitude,
-				Latitude:   origin.Latitude,
-				SpeedKPH:   0,
-				Anomaly:    false,
-			},
-			trackingRecord{
-				WaybillID:   waybillID,
-				Sequence:    2,
-				Label:       routeMidpointLabel(origin, destination),
-				RecordedAt:  start.Add(time.Duration(route.StandardHours/2) * time.Hour).Format(time.RFC3339),
-				Longitude:   roundCoordinate((origin.Longitude + destination.Longitude) / 2),
-				Latitude:    roundCoordinate((origin.Latitude + destination.Latitude) / 2),
-				SpeedKPH:    map[bool]int{true: 0, false: 68}[anomalous],
-				StopHours:   optionalStop(anomalous, stopHours),
-				Anomaly:     anomalous,
-				AnomalyType: anomalyType,
-			},
-			trackingRecord{
-				WaybillID:  waybillID,
-				Sequence:   3,
-				Label:      destination.Name,
-				RecordedAt: start.Add(time.Duration(route.StandardHours) * time.Hour).Format(time.RFC3339),
-				Longitude:  destination.Longitude,
-				Latitude:   destination.Latitude,
-				SpeedKPH:   0,
-				Anomaly:    false,
-			},
+			buildTrackingRecords(
+				waybillID,
+				routeIndex,
+				origin,
+				destination,
+				route,
+				start,
+				anomalous,
+				anomalyType,
+				stopHours,
+			)...,
 		)
 	}
 	return result
+}
+
+func buildTrackingRecords(
+	waybillID string,
+	routeIndex int,
+	origin hubRecord,
+	destination hubRecord,
+	route routeRecord,
+	start time.Time,
+	anomalous bool,
+	anomalyType string,
+	stopHours float64,
+) []trackingRecord {
+	coordinates := buildRouteCoordinates(origin, destination, routeIndex)
+	lastIndex := len(coordinates) - 1
+	anomalyIndex := lastIndex / 2
+	duration := time.Duration(route.StandardHours) * time.Hour
+	records := make([]trackingRecord, 0, len(coordinates))
+	for index, coordinate := range coordinates {
+		isAnomaly := anomalous && index == anomalyIndex
+		pointAnomalyType := ""
+		if isAnomaly {
+			pointAnomalyType = anomalyType
+		}
+		records = append(records, trackingRecord{
+			WaybillID:   waybillID,
+			Sequence:    index + 1,
+			Label:       trackingPointLabel(origin, destination, index, lastIndex),
+			RecordedAt:  start.Add(duration * time.Duration(index) / time.Duration(lastIndex)).Format(time.RFC3339),
+			Longitude:   coordinate.Longitude,
+			Latitude:    coordinate.Latitude,
+			SpeedKPH:    trackingPointSpeed(routeIndex, index, lastIndex, isAnomaly),
+			StopHours:   optionalStop(isAnomaly, stopHours),
+			Anomaly:     isAnomaly,
+			AnomalyType: pointAnomalyType,
+		})
+	}
+	return records
+}
+
+func buildRouteCoordinates(
+	origin hubRecord,
+	destination hubRecord,
+	routeIndex int,
+) []routeCoordinate {
+	middleLatitude := (origin.Latitude + destination.Latitude) / 2
+	longitudeScale := math.Cos(middleLatitude * math.Pi / 180)
+	scaledLongitudeDelta := (destination.Longitude - origin.Longitude) * longitudeScale
+	latitudeDelta := destination.Latitude - origin.Latitude
+	directDistance := math.Hypot(scaledLongitudeDelta, latitudeDelta)
+	normalLongitude := -latitudeDelta / directDistance
+	normalLatitude := scaledLongitudeDelta / directDistance
+	amplitude := math.Min(
+		1.2,
+		directDistance*(0.065+float64(routeIndex%5)*0.006),
+	)
+
+	preferredDirection := 1.0
+	if routeIndex%2 != 0 {
+		preferredDirection = -1
+	}
+	preferred := buildRouteCandidate(
+		origin,
+		destination,
+		longitudeScale,
+		scaledLongitudeDelta,
+		latitudeDelta,
+		normalLongitude,
+		normalLatitude,
+		amplitude,
+		preferredDirection,
+	)
+	alternate := buildRouteCandidate(
+		origin,
+		destination,
+		longitudeScale,
+		scaledLongitudeDelta,
+		latitudeDelta,
+		normalLongitude,
+		normalLatitude,
+		amplitude,
+		-preferredDirection,
+	)
+	if routeCandidateScore(alternate) < routeCandidateScore(preferred) {
+		return alternate
+	}
+	return preferred
+}
+
+func buildRouteCandidate(
+	origin hubRecord,
+	destination hubRecord,
+	longitudeScale float64,
+	scaledLongitudeDelta float64,
+	latitudeDelta float64,
+	normalLongitude float64,
+	normalLatitude float64,
+	amplitude float64,
+	direction float64,
+) []routeCoordinate {
+	coordinates := make([]routeCoordinate, 0, trackingPointCount)
+	for index := range trackingPointCount {
+		if index == 0 {
+			coordinates = append(coordinates, routeCoordinate{
+				Longitude: origin.Longitude,
+				Latitude:  origin.Latitude,
+			})
+			continue
+		}
+		if index == trackingPointCount-1 {
+			coordinates = append(coordinates, routeCoordinate{
+				Longitude: destination.Longitude,
+				Latitude:  destination.Latitude,
+			})
+			continue
+		}
+		progress := float64(index) / float64(trackingPointCount-1)
+		lateralOffset := direction * amplitude *
+			(math.Sin(math.Pi*progress) + 0.28*math.Sin(2*math.Pi*progress))
+		coordinates = append(coordinates, routeCoordinate{
+			Longitude: roundCoordinate(
+				origin.Longitude +
+					(scaledLongitudeDelta*progress+normalLongitude*lateralOffset)/
+						longitudeScale,
+			),
+			Latitude: roundCoordinate(
+				origin.Latitude +
+					latitudeDelta*progress +
+					normalLatitude*lateralOffset,
+			),
+		})
+	}
+	return coordinates
+}
+
+func routeCandidateScore(coordinates []routeCoordinate) float64 {
+	score := 0.0
+	for _, coordinate := range coordinates[1 : len(coordinates)-1] {
+		nearestHubDistance := math.Inf(1)
+		for _, hub := range hubSeeds {
+			distance := haversineKM(
+				coordinate.Longitude,
+				coordinate.Latitude,
+				hub.Longitude,
+				hub.Latitude,
+			)
+			nearestHubDistance = math.Min(nearestHubDistance, distance)
+		}
+		score += nearestHubDistance
+	}
+	return score
+}
+
+func trackingPointLabel(
+	origin hubRecord,
+	destination hubRecord,
+	index int,
+	lastIndex int,
+) string {
+	switch index {
+	case 0:
+		return origin.Name
+	case lastIndex:
+		return destination.Name
+	case lastIndex / 2:
+		return routeMidpointLabel(origin, destination)
+	default:
+		return fmt.Sprintf("%s至%s干线轨迹点 %d", origin.City, destination.City, index)
+	}
+}
+
+func trackingPointSpeed(
+	routeIndex int,
+	index int,
+	lastIndex int,
+	anomalous bool,
+) int {
+	if index == 0 || index == lastIndex || anomalous {
+		return 0
+	}
+	return 62 + (routeIndex+index*3)%11
 }
 
 func optionalStop(anomalous bool, value float64) *float64 {
