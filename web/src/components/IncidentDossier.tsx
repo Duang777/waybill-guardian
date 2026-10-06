@@ -2,12 +2,12 @@ import {
   Check,
   Circle,
   Crosshair,
-  LoaderCircle,
   Radio,
 } from "lucide-react";
 import type { Approval, RunStatus } from "../api";
 import styles from "../app.module.css";
 import {
+  playbackCursor,
   timelinePhases,
   visibleEvents,
   type EvidenceSelection,
@@ -30,6 +30,7 @@ export function RunStageBar({
 }: RunStageBarProps) {
   const phases = timelinePhases(visibleEvents(timeline));
   const activePhase = currentPhase(phases);
+  const replaying = timeline.playback.kind !== "live";
 
   return (
     <section
@@ -38,26 +39,33 @@ export function RunStageBar({
     >
       <div className={styles.runStageContext}>
         <div className={styles.runStageHeading}>
-          <span className={styles.eyebrow}>Run stage / live</span>
+          <span className={styles.eyebrow}>
+            {replaying ? "Run stage / replay" : "Run stage / live"}
+          </span>
           <span className={styles.agentConnection}>
             <Radio aria-hidden="true" size={12} />
-            {connectionLabel({ connected, runID, runStatus })}
+            {connectionLabel({ connected, runID, runStatus, replaying })}
           </span>
         </div>
         <div
           className={styles.agentTaskLead}
           key={`${runID ?? "idle"}-${activePhase?.id ?? "waiting"}`}
         >
-          <h2 id="run-stage-title">{taskHeading(runStatus, activePhase)}</h2>
-          <p>{taskDescription(runStatus, activePhase)}</p>
+          <h2 id="run-stage-title">
+            {replaying
+              ? `回放：${activePhase?.label ?? "等待事件"}`
+              : taskHeading(runStatus, activePhase)}
+          </h2>
+          <p>
+            {replaying
+              ? `正在查看事件 ${playbackCursor(timeline)} / ${timeline.events.length}`
+              : taskDescription(runStatus, activePhase)}
+          </p>
         </div>
-        <span className={styles.agentRunID}>
-          {runID === null ? "尚未创建任务" : compactID(runID)}
-        </span>
       </div>
 
       <ol
-        className={`${styles.agentPlan} ${planProgressClass(phases)}`}
+        className={styles.agentPlan}
         aria-label="Agent 六阶段运行带"
       >
         {phases.map((phase, index) => (
@@ -66,6 +74,7 @@ export function RunStageBar({
               styles[`agentPlanStep${capitalizeStatus(phase.status)}`]
             }`}
             aria-current={phase.status === "current" ? "step" : undefined}
+            aria-label={`${phase.label}，${phaseStatusLabel(phase.status)}`}
             key={phase.id}
           >
             <span className={styles.agentPlanIcon} aria-hidden="true">
@@ -73,7 +82,10 @@ export function RunStageBar({
             </span>
             <span className={styles.agentPlanLabel}>
               <small>{(index + 1).toString().padStart(2, "0")}</small>
-              {phase.label}
+              <strong>{phase.label}</strong>
+            </span>
+            <span className={styles.agentPlanState}>
+              {phaseStatusLabel(phase.status)}
             </span>
           </li>
         ))}
@@ -90,6 +102,7 @@ export function EvidenceLedger({
   onEvidenceSelect: (selection: EvidenceSelection) => void;
 }) {
   const evidence = approval?.evidence ?? [];
+  const groups = groupEvidence(evidence);
 
   return (
     <aside
@@ -102,7 +115,8 @@ export function EvidenceLedger({
           <h2 id="evidence-ledger-title">证据账本</h2>
         </div>
         <span className={styles.evidenceCount}>
-          {evidence.length.toString().padStart(2, "0")}
+          <strong>{groups.length.toString().padStart(2, "0")}</strong>
+          <small>条结论 · {evidence.length.toString().padStart(2, "0")} 条引用</small>
         </span>
       </div>
 
@@ -114,48 +128,208 @@ export function EvidenceLedger({
         </div>
       ) : (
         <ol className={styles.evidenceLedgerList}>
-          {evidence.map((item, index) => (
-            <li key={evidenceKey(item)}>
-              <span className={styles.evidenceOrdinal} aria-hidden="true">
-                {(index + 1).toString().padStart(2, "0")}
-              </span>
-              <div>
-                <span className={styles.evidenceLabel}>{item.label}</span>
-                {"source" in item ? (
-                  <button
-                    className={styles.agentEvidenceLink}
-                    type="button"
-                    aria-label={`定位证据：${item.label}，审计事件 ${item.source.source_seq}`}
-                    title={`定位到审计事件 #${item.source.source_seq}`}
-                    onClick={() =>
-                      onEvidenceSelect({
-                        sourceSeq: item.source.source_seq,
-                        fieldPath: item.source.field_path,
-                      })
-                    }
-                  >
-                    <span>{item.value}</span>
-                    <Crosshair aria-hidden="true" size={14} />
-                  </button>
-                ) : (
-                  <strong>{item.value}</strong>
-                )}
-              </div>
-              {"source" in item && (
-                <span className={styles.evidenceSource}>
-                  EVENT #{item.source.source_seq.toString().padStart(2, "0")}
+          {groups.map((group, index) => (
+            <li className={styles.evidenceGroup} key={group.label}>
+              <div className={styles.evidenceGroupHeading}>
+                <span className={styles.evidenceOrdinal} aria-hidden="true">
+                  {(index + 1).toString().padStart(2, "0")}
                 </span>
-              )}
+                <h3>{evidenceGroupTitle(group)}</h3>
+                <span className={styles.evidenceSource}>
+                  {groupSourceLabel(group)}
+                </span>
+              </div>
+              <ul className={styles.evidenceFactList}>
+                {group.items.map((item) => (
+                  <li key={evidenceKey(item)}>
+                    <span className={styles.evidenceFactLabel}>
+                      {evidenceFactLabel(item)}
+                    </span>
+                    {"source" in item ? (
+                      <button
+                        className={styles.agentEvidenceLink}
+                        type="button"
+                        aria-label={`定位证据：${group.label}，${evidenceFactLabel(item)}：${evidenceDisplayValue(item)}，审计事件 ${item.source.source_seq}`}
+                        title={`定位到审计事件 #${item.source.source_seq}`}
+                        onClick={() =>
+                          onEvidenceSelect({
+                            sourceSeq: item.source.source_seq,
+                            fieldPath: item.source.field_path,
+                          })
+                        }
+                      >
+                        <strong>{evidenceDisplayValue(item)}</strong>
+                        <Crosshair aria-hidden="true" size={14} />
+                      </button>
+                    ) : (
+                      <strong>{evidenceDisplayValue(item)}</strong>
+                    )}
+                  </li>
+                ))}
+              </ul>
             </li>
           ))}
         </ol>
       )}
-      <div className={styles.evidenceLedgerFooter}>
-        <span>证据点击后同步定位地图与审计事件</span>
-        <span>HASH VERIFIED</span>
-      </div>
     </aside>
   );
+}
+
+type EvidenceItem = Approval["evidence"][number];
+
+type EvidenceGroup = {
+  label: string;
+  items: EvidenceItem[];
+};
+
+function groupEvidence(items: readonly EvidenceItem[]): EvidenceGroup[] {
+  const groups: EvidenceGroup[] = [];
+  const groupsByLabel = new Map<string, EvidenceGroup>();
+
+  for (const item of items) {
+    const existing = groupsByLabel.get(item.label);
+    if (existing !== undefined) {
+      existing.items.push(item);
+      continue;
+    }
+
+    const group = { label: item.label, items: [item] };
+    groupsByLabel.set(item.label, group);
+    groups.push(group);
+  }
+
+  return groups;
+}
+
+function evidenceFactLabel(item: EvidenceItem): string {
+  if (!("source" in item)) {
+    return "核验事实";
+  }
+
+  if (item.source.field_path.endsWith("/continuous_drive_hours")) {
+    return "连续驾驶";
+  }
+  if (item.source.field_path.endsWith("/fatigue_alert")) {
+    return "疲劳预警";
+  }
+  if (
+    item.source.field_path.includes("/points/") &&
+    item.source.field_path.endsWith("/stop_hours")
+  ) {
+    return "异常停留";
+  }
+  if (
+    item.source.field_path.includes("/points/") &&
+    item.source.field_path.endsWith("/anomaly")
+  ) {
+    return "异常标记";
+  }
+  if (
+    item.source.field_path.includes("/points/") &&
+    item.source.field_path.endsWith("/label")
+  ) {
+    return "异常位置";
+  }
+  if (item.source.field_path.endsWith("/condition")) {
+    return "天气状况";
+  }
+  if (item.source.field_path.endsWith("/alert_level")) {
+    return "预警级别";
+  }
+  return "核验事实";
+}
+
+function evidenceDisplayValue(item: EvidenceItem): string {
+  const value = item.value.trim();
+  if (!("source" in item)) {
+    return value;
+  }
+
+  if (
+    item.source.field_path.endsWith("/continuous_drive_hours") ||
+    item.source.field_path.endsWith("/stop_hours")
+  ) {
+    return value.includes("小时") ? value : `${value} 小时`;
+  }
+  if (
+    item.source.field_path.endsWith("/fatigue_alert") ||
+    item.source.field_path.endsWith("/anomaly")
+  ) {
+    if (value.toLowerCase() === "true") {
+      return "已触发";
+    }
+    if (value.toLowerCase() === "false") {
+      return "未触发";
+    }
+  }
+  if (item.source.field_path.endsWith("/alert_level")) {
+    return weatherAlertLabel(value);
+  }
+  return value;
+}
+
+function weatherAlertLabel(value: string): string {
+  switch (value.toLowerCase()) {
+    case "none":
+    case "no_alert":
+      return "无";
+    case "low":
+      return "低";
+    case "medium":
+      return "中";
+    case "high":
+      return "高";
+    default:
+      return value;
+  }
+}
+
+function evidenceGroupTitle(group: EvidenceGroup): string {
+  const fieldPaths = group.items.flatMap((item) =>
+    "source" in item ? [item.source.field_path] : [],
+  );
+  if (
+    fieldPaths.some(
+      (path) =>
+        path.endsWith("/continuous_drive_hours") ||
+        path.endsWith("/fatigue_alert"),
+    )
+  ) {
+    return "驾驶员状态";
+  }
+  if (
+    fieldPaths.some(
+      (path) =>
+        path.includes("/points/") &&
+        (path.endsWith("/label") ||
+          path.endsWith("/anomaly") ||
+          path.endsWith("/stop_hours")),
+    )
+  ) {
+    return "轨迹异常";
+  }
+  if (fieldPaths.some((path) => path.includes("/segments/"))) {
+    return "天气影响";
+  }
+  return group.label;
+}
+
+function groupSourceLabel(group: EvidenceGroup): string {
+  const sourceSequences: number[] = [];
+  for (const item of group.items) {
+    if (
+      "source" in item &&
+      !sourceSequences.includes(item.source.source_seq)
+    ) {
+      sourceSequences.push(item.source.source_seq);
+    }
+  }
+  if (sourceSequences.length === 0) {
+    return "已核验";
+  }
+  return sourceSequences
+    .map((seq) => `EVENT #${seq.toString().padStart(2, "0")}`)
+    .join(" / ");
 }
 
 function currentPhase(
@@ -230,11 +404,16 @@ function connectionLabel({
   connected,
   runID,
   runStatus,
+  replaying,
 }: {
   connected: boolean;
   runID: string | null;
   runStatus: RunStatus | null;
+  replaying: boolean;
 }): string {
+  if (replaying) {
+    return connected ? "SSE 在线 · 回放快照" : "回放快照";
+  }
   if (connected) {
     return "SSE 在线";
   }
@@ -258,11 +437,26 @@ function phaseIcon(phase: TimelinePhase) {
     case "complete":
       return <Check size={12} />;
     case "current":
-      return <LoaderCircle size={12} />;
+      return <Circle fill="currentColor" size={10} />;
     case "upcoming":
       return <Circle size={10} />;
     default: {
       const exhaustive: never = phase.status;
+      return exhaustive;
+    }
+  }
+}
+
+function phaseStatusLabel(status: TimelinePhase["status"]): string {
+  switch (status) {
+    case "complete":
+      return "已完成";
+    case "current":
+      return "当前";
+    case "upcoming":
+      return "待处理";
+    default: {
+      const exhaustive: never = status;
       return exhaustive;
     }
   }
@@ -285,34 +479,8 @@ function capitalizeStatus(
   }
 }
 
-function planProgressClass(phases: readonly TimelinePhase[]): string {
-  const reached = phases.filter((phase) => phase.status !== "upcoming").length;
-  switch (reached) {
-    case 0:
-      return styles.agentPlanProgress0;
-    case 1:
-      return styles.agentPlanProgress1;
-    case 2:
-      return styles.agentPlanProgress2;
-    case 3:
-      return styles.agentPlanProgress3;
-    case 4:
-      return styles.agentPlanProgress4;
-    case 5:
-      return styles.agentPlanProgress5;
-    case 6:
-      return styles.agentPlanProgress6;
-    default:
-      return styles.agentPlanProgress0;
-  }
-}
-
 function evidenceKey(item: Approval["evidence"][number]): string {
   return "source" in item
     ? `${item.label}-${item.source.source_seq}-${item.source.field_path}`
     : `${item.label}-${item.value}`;
-}
-
-function compactID(value: string): string {
-  return value.length > 18 ? `${value.slice(0, 8)}...${value.slice(-6)}` : value;
 }

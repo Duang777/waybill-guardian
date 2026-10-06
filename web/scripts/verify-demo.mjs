@@ -89,7 +89,7 @@ try {
     await page.getByText("待确认", { exact: true }).waitFor();
     await page.getByText("发送至货主 · 川行快运", { exact: true }).waitFor();
     await page.getByText("发送至司机 · 川行快运", { exact: true }).waitFor();
-    await page.getByText("离线回放模式", { exact: true }).waitFor();
+    await page.getByText("离线规则推理", { exact: true }).waitFor();
     await page.getByText("候选方案", { exact: true }).waitFor();
     await page.getByText("置信度 86%", { exact: true }).waitFor();
 
@@ -114,6 +114,34 @@ try {
         (await auditToggle.getAttribute("aria-expanded")) === "true",
         "linked evidence did not open the audit drawer",
       );
+      await page.getByText("轨迹异常", { exact: true }).waitFor();
+      await page.getByText("回放：归因", { exact: true }).waitFor();
+      const exitReplayButton = page.getByRole("button", {
+        name: "退出回放并返回实时状态",
+        exact: true,
+      });
+      await exitReplayButton.waitFor();
+      const exitReplayLayout = await exitReplayButton.evaluate((element) => ({
+        whiteSpace: getComputedStyle(element).whiteSpace,
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+      }));
+      assert(
+        exitReplayLayout.whiteSpace === "nowrap" &&
+          exitReplayLayout.scrollWidth <= exitReplayLayout.clientWidth &&
+          exitReplayLayout.scrollHeight <= exitReplayLayout.clientHeight,
+        `exit replay control wraps or overflows: ${JSON.stringify(exitReplayLayout)}`,
+      );
+      await page.waitForTimeout(200);
+      assert(
+        await skipLinkIsHidden(page),
+        "skip link is visible in the replay state",
+      );
+      await page.screenshot({
+        path: join(artifactDir, "desktop-replay-1280.png"),
+      });
       const drawerMotion = await page
         .locator("#audit-drawer-content")
         .evaluate((element) => getComputedStyle(element).transitionProperty);
@@ -136,7 +164,7 @@ try {
         ),
         `evidence target #${sourceSeq} did not focus its route point`,
       );
-      await page.getByRole("button", { name: "实时", exact: true }).click();
+      await exitReplayButton.click();
       await page.getByText("待确认", { exact: true }).waitFor();
       await page.screenshot({
         path: join(artifactDir, "desktop-pending.png"),
@@ -193,7 +221,12 @@ try {
         (await page.getByText("方案已执行", { exact: true }).count()) === 0,
         "approval panel did not follow the playback cursor",
       );
-      await page.getByRole("button", { name: "实时", exact: true }).click();
+      await page
+        .getByRole("button", {
+          name: "退出回放并返回实时状态",
+          exact: true,
+        })
+        .click();
       await page.getByText("方案已执行", { exact: true }).waitFor();
     }
     runs.push({ run: index + 1, eventCount, status: "completed" });
@@ -312,6 +345,7 @@ try {
     screenshots: [
       join(artifactDir, "workbench-pending-1600.png"),
       join(artifactDir, "workbench-pending-1920.png"),
+      join(artifactDir, "desktop-replay-1280.png"),
       join(artifactDir, "desktop-pending.png"),
       join(artifactDir, "mobile-completed.png"),
       join(artifactDir, "mobile-evidence-ledger-375.png"),
@@ -438,8 +472,8 @@ async function hasHorizontalOverflow(page) {
 }
 
 async function auditEventCount(page) {
-  const label = await page.getByText(/^\d+ events$/).textContent();
-  const count = Number(label?.match(/^(\d+) events$/)?.[1]);
+  const label = await page.getByText(/^\d+ 条事件$/).textContent();
+  const count = Number(label?.match(/^(\d+) 条事件$/)?.[1]);
   assert(Number.isInteger(count), `invalid audit event count ${label}`);
   return count;
 }

@@ -70,7 +70,7 @@ export function AuditDrawer({
             {modeLabel(mode)}
           </span>
           <span className={styles.eventCount}>
-            {state.events.length.toString().padStart(2, "0")} events
+            {state.events.length.toString().padStart(2, "0")} 条事件
           </span>
           <ChevronUp
             className={`${styles.auditDrawerChevron} ${
@@ -126,7 +126,7 @@ export function TimelinePanel({
               {modeLabel(mode)}
             </span>
             <span className={styles.eventCount}>
-              {state.events.length.toString().padStart(2, "0")} events
+              {state.events.length.toString().padStart(2, "0")} 条事件
             </span>
           </div>
         </div>
@@ -181,10 +181,11 @@ export function PlaybackControls({
         className={`${styles.liveButton} ${isLive ? styles.liveButtonActive : ""}`}
         type="button"
         disabled={isLive}
+        aria-label={isLive ? "当前为实时状态" : "退出回放并返回实时状态"}
         onClick={() => dispatch({ type: "go_live" })}
       >
         <Radio aria-hidden="true" size={14} />
-        实时
+        {isLive ? "实时" : "退出回放"}
       </button>
     </div>
   );
@@ -466,7 +467,7 @@ function modeLabel(mode: InferenceMode): string {
     case "online":
       return mode.model === null ? "在线推理" : `在线推理 · ${mode.model}`;
     case "offline":
-      return "离线回放模式";
+      return "离线规则推理";
     case "legacy":
       return "历史运行";
     default: {

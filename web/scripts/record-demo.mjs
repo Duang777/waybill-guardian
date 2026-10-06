@@ -160,7 +160,12 @@ try {
     .click();
   await page.getByRole("button", { name: "播放回放", exact: true }).click();
   await hold(page, 5_000);
-  await page.getByRole("button", { name: "实时", exact: true }).click();
+  await page
+    .getByRole("button", {
+      name: "退出回放并返回实时状态",
+      exact: true,
+    })
+    .click();
   await hold(page, 1_500);
 
   await setCaption(

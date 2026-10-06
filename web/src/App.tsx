@@ -347,14 +347,21 @@ function WaybillWorkbench({
   }, [timeline.playback.kind]);
 
   const projectedEvents = useMemo(() => visibleEvents(timeline), [timeline]);
-  const currentApproval = useMemo(() => latestApproval(projectedEvents), [projectedEvents]);
+  const workbenchEvents =
+    timeline.focusedSeq === null ? projectedEvents : timeline.events;
+  const currentApproval = useMemo(
+    () => latestApproval(workbenchEvents),
+    [workbenchEvents],
+  );
   const currentProposal = useMemo(
-    () => proposalForApproval(projectedEvents, currentApproval),
-    [currentApproval, projectedEvents],
+    () => proposalForApproval(workbenchEvents, currentApproval),
+    [currentApproval, workbenchEvents],
   );
   const currentStatus =
-    runStatus(projectedEvents) ??
-    (timeline.playback.kind === "live" ? (run?.status ?? null) : null);
+    runStatus(workbenchEvents) ??
+    (timeline.playback.kind === "live" || timeline.focusedSeq !== null
+      ? (run?.status ?? null)
+      : null);
   const view = selection.kind === "ready" ? selection.data : null;
   const waybillResource = toWaybillResource(selection);
   const selectedWaybillID =
@@ -647,7 +654,11 @@ function WaybillWorkbench({
               <section className={styles.mapPanel} aria-labelledby="route-map-title">
                 <div className={styles.panelTitleRow}>
                   <div>
-                    <span className={styles.eyebrow}>Spatial evidence / live</span>
+                    <span className={styles.eyebrow}>
+                      {timeline.playback.kind === "live"
+                        ? "Spatial evidence / live"
+                        : "Spatial evidence / replay"}
+                    </span>
                     <h2 id="route-map-title">运输轨迹证据</h2>
                   </div>
                   <span className={styles.anomalyLegend}>
