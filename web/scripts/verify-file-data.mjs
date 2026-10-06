@@ -45,7 +45,6 @@ try {
     `${backendURL}/healthz`,
     backendProcess,
     processes,
-    /waybill guardian listening/,
   );
 
   const webProcess = startProcess(
@@ -69,7 +68,7 @@ try {
     },
   );
   processes.push(webProcess);
-  await waitForHTTP(webURL, webProcess, processes, /Local:/);
+  await waitForHTTP(webURL, webProcess, processes);
 
   browser = await chromium.launch({
     executablePath: await findChrome(),

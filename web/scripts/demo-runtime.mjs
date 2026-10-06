@@ -52,17 +52,13 @@ export async function waitForHTTP(
   url,
   process,
   diagnostics = [process],
-  readinessPattern,
+  { timeoutMilliseconds = processStartupTimeoutMS } = {},
 ) {
-  const deadline = Date.now() + processStartupTimeoutMS;
+  const deadline = Date.now() + timeoutMilliseconds;
   while (Date.now() < deadline) {
     const failure = processFailure(process);
     if (failure !== null) {
       throw new Error(`${failure}\n${diagnosticOutput(diagnostics)}`);
-    }
-    if (!readinessPattern.test(process.diagnosticOutput())) {
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
-      continue;
     }
     try {
       const response = await fetch(url);
