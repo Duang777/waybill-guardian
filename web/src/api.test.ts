@@ -262,6 +262,8 @@ describe("waybill API", () => {
                 availability: "available",
                 formula: "closed / anomalies",
               },
+              kpiFixture("average_handling_minutes"),
+              kpiFixture("approval_rate_pct"),
             ],
           }),
         ),
@@ -272,6 +274,56 @@ describe("waybill API", () => {
 
     expect(report.metrics[0]?.value).toBeNull();
     expect(report.metrics[2]?.value).toBe(2);
+  });
+
+  it("rejects a KPI report that omits a documented operating metric", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse({
+            window: "24h0m0s",
+            as_of: "2026-10-12T04:24:00Z",
+            assumptions: { evidence_step_minutes: 8 },
+            metrics: [
+              kpiFixture("time_recovered_hours"),
+              kpiFixture("cost_impact_cny"),
+              kpiFixture("labor_saved_hours"),
+              kpiFixture("anomaly_closure_rate_pct"),
+              kpiFixture("average_handling_minutes"),
+            ],
+          }),
+        ),
+      ),
+    );
+
+    await expect(getKPIs()).rejects.toThrow(/approval_rate_pct/);
+  });
+
+  it("rejects duplicate KPI keys", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse({
+            window: "24h0m0s",
+            as_of: "2026-10-12T04:24:00Z",
+            assumptions: { evidence_step_minutes: 8 },
+            metrics: [
+              kpiFixture("time_recovered_hours"),
+              kpiFixture("cost_impact_cny"),
+              kpiFixture("labor_saved_hours"),
+              kpiFixture("anomaly_closure_rate_pct"),
+              kpiFixture("average_handling_minutes"),
+              kpiFixture("approval_rate_pct"),
+              kpiFixture("approval_rate_pct"),
+            ],
+          }),
+        ),
+      ),
+    );
+
+    await expect(getKPIs()).rejects.toThrow(/duplicate KPI approval_rate_pct/);
   });
 
   it("accepts a validated read-only model brief", () => {
@@ -511,6 +563,17 @@ describe("waybill API", () => {
     expect(parsed.waybill.sla_hours).toBe(0);
   });
 });
+
+function kpiFixture(key: string) {
+  return {
+    key,
+    label: key,
+    value: 0,
+    unit: "%",
+    availability: "available",
+    formula: `${key} formula`,
+  };
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {

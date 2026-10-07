@@ -13,12 +13,16 @@ import {
   APIError,
   getKPIs,
   getOverview,
+  listActiveRuns,
   openTimeline,
+  operatingKPIKeys,
   startBatch,
   type AuditEvent,
   type KPIReport,
   type KPIMetric,
+  type OperatingKPIKey,
   type Overview,
+  type Run,
   type RunID,
   type RunStatus,
   type WaybillID,
@@ -33,6 +37,11 @@ import {
 } from "./components/cult";
 import { HubNetwork } from "./components/HubNetwork";
 import styles from "./overview.module.css";
+import {
+  advanceRunProjection,
+  mergeRunProjections,
+  type RunProjection,
+} from "./overview-run-projection";
 import { overviewWorkbenchHref } from "./workbench-route";
 
 type OverviewResource =
@@ -47,24 +56,12 @@ type BatchState =
 
 type QueueView = "all" | "unassigned" | "active";
 
-type RunProjection = {
+type RunStream = {
   runID: RunID;
-  status: RunStatus;
+  close: () => void;
 };
 
-const primaryKPIKeys = [
-  "time_recovered_hours",
-  "cost_impact_cny",
-  "labor_saved_hours",
-  "anomaly_closure_rate_pct",
-] as const;
-
-type PrimaryKPIKey = (typeof primaryKPIKeys)[number];
-
-type PrimaryKPI = {
-  key: PrimaryKPIKey;
-  metric: KPIMetric;
-};
+const activeRunRefreshMilliseconds = 2_000;
 
 type KPIContext = {
   anomalyCount: number;
@@ -91,7 +88,64 @@ export function OverviewPage() {
   const [batch, setBatch] = useState<BatchState>({ kind: "idle" });
   const [queueView, setQueueView] = useState<QueueView>("all");
   const request = useRef<AbortController | null>(null);
-  const streams = useRef<Map<WaybillID, () => void>>(new Map());
+  const activeRequest = useRef<AbortController | null>(null);
+  const streams = useRef<Map<WaybillID, RunStream>>(new Map());
+
+  const watchRun = useCallback((run: Run) => {
+    const currentStream = streams.current.get(run.waybill_id);
+    if (currentStream?.runID === run.run_id) {
+      if (isStreamTerminal(run.status)) {
+        currentStream.close();
+        streams.current.delete(run.waybill_id);
+      }
+      return;
+    }
+    currentStream?.close();
+    streams.current.delete(run.waybill_id);
+    if (isStreamTerminal(run.status)) {
+      return;
+    }
+
+    const close = openTimeline(run.run_id, run.last_seq, {
+      onEvent: (event) => {
+        const status = statusFromEvent(event);
+        setRunProjections((current) => {
+          const existing = current.get(run.waybill_id) ?? {
+            runID: run.run_id,
+            status: run.status,
+            lastSeq: run.last_seq,
+          };
+          const advanced = advanceRunProjection(existing, {
+            runID: event.run_id,
+            seq: event.seq,
+            status,
+          });
+          if (advanced === existing && current.has(run.waybill_id)) {
+            return current;
+          }
+          const next = new Map(current);
+          next.set(run.waybill_id, advanced);
+          return next;
+        });
+        if (status !== null && isStreamTerminal(status)) {
+          streams.current.delete(run.waybill_id);
+        }
+      },
+      onConnectionChange: () => undefined,
+      onError: () => undefined,
+    });
+    streams.current.set(run.waybill_id, { runID: run.run_id, close });
+  }, []);
+
+  const syncRuns = useCallback(
+    (runs: readonly Run[]) => {
+      setRunProjections((current) => mergeRunProjections(current, runs));
+      for (const run of runs) {
+        watchRun(run);
+      }
+    },
+    [watchRun],
+  );
 
   const load = useCallback(async () => {
     request.current?.abort();
@@ -99,11 +153,13 @@ export function OverviewPage() {
     request.current = controller;
     setResource({ kind: "loading" });
     try {
-      const [overview, kpis] = await Promise.all([
+      const [overview, kpis, activeRuns] = await Promise.all([
         getOverview(controller.signal),
         getKPIs("24h", controller.signal),
+        listActiveRuns(controller.signal),
       ]);
       if (!controller.signal.aborted) {
+        syncRuns(activeRuns);
         setResource({ kind: "ready", overview, kpis });
       }
     } catch (error) {
@@ -111,31 +167,47 @@ export function OverviewPage() {
         setResource({ kind: "error", message: errorMessage(error) });
       }
     }
-  }, []);
+  }, [syncRuns]);
+
+  const refreshActiveRuns = useCallback(async () => {
+    if (activeRequest.current !== null) {
+      return;
+    }
+    const controller = new AbortController();
+    activeRequest.current = controller;
+    try {
+      const activeRuns = await listActiveRuns(controller.signal);
+      if (!controller.signal.aborted) {
+        syncRuns(activeRuns);
+      }
+    } catch {
+      // The next interval retries without replacing the last known projection.
+    } finally {
+      if (activeRequest.current === controller) {
+        activeRequest.current = null;
+      }
+    }
+  }, [syncRuns]);
 
   useEffect(() => {
     void load();
+    const interval = window.setInterval(
+      () => void refreshActiveRuns(),
+      activeRunRefreshMilliseconds,
+    );
     return () => {
+      window.clearInterval(interval);
       request.current?.abort();
-      for (const close of streams.current.values()) {
-        close();
+      activeRequest.current?.abort();
+      for (const stream of streams.current.values()) {
+        stream.close();
       }
       streams.current.clear();
     };
-  }, [load]);
+  }, [load, refreshActiveRuns]);
 
   const anomalies =
     resource.kind === "ready" ? resource.overview.anomalies : [];
-  const primaryKPIs = useMemo(() => {
-    if (resource.kind !== "ready") {
-      return [];
-    }
-    const byKey = new Map(resource.kpis.metrics.map((metric) => [metric.key, metric]));
-    return primaryKPIKeys.flatMap<PrimaryKPI>((key) => {
-      const metric = byKey.get(key);
-      return metric === undefined ? [] : [{ key, metric }];
-    });
-  }, [resource]);
   const queueEntries = useMemo(
     () =>
       anomalies.map((item, index) => {
@@ -233,42 +305,7 @@ export function OverviewPage() {
         ): item is typeof item & { run: NonNullable<typeof item.run> } =>
           item.run !== undefined,
       );
-      setRunProjections((current) => {
-        const next = new Map(current);
-        for (const item of accepted) {
-          next.set(item.waybill_id, {
-            runID: item.run.run_id,
-            status: item.run.status,
-          });
-        }
-        return next;
-      });
-      for (const item of accepted) {
-        streams.current.get(item.waybill_id)?.();
-        let close: () => void = () => {};
-        close = openTimeline(item.run.run_id, item.run.last_seq, {
-          onEvent: (event) => {
-            const status = statusFromEvent(event);
-            if (status !== null) {
-              setRunProjections((current) => {
-                const next = new Map(current);
-                next.set(item.waybill_id, {
-                  runID: item.run.run_id,
-                  status,
-                });
-                return next;
-              });
-            }
-            if (status !== null && isTerminal(status)) {
-              close();
-              streams.current.delete(item.waybill_id);
-            }
-          },
-          onConnectionChange: () => undefined,
-          onError: () => undefined,
-        });
-        streams.current.set(item.waybill_id, close);
-      }
+      syncRuns(accepted.map((item) => item.run));
       setSelected(new Set());
       const failed = result.requested - result.accepted;
       setBatch({
@@ -332,17 +369,13 @@ export function OverviewPage() {
             </section>
             {resource.kind === "ready" && (
               <section className={styles.kpiStrip} aria-label="24 小时经营指标">
-                {primaryKPIs.map((kpi) => (
-                  <OverviewKPI
-                    key={kpi.key}
-                    metricKey={kpi.key}
-                    metric={kpi.metric}
-                    context={{
-                      anomalyCount: resource.overview.totals.anomalies,
-                      hasClosedRunSample: hasClosedRunSample(resource.kpis),
-                    }}
-                  />
-                ))}
+                <OverviewKPIBand
+                  report={resource.kpis}
+                  context={{
+                    anomalyCount: resource.overview.totals.anomalies,
+                    hasClosedRunSample: hasClosedRunSample(resource.kpis),
+                  }}
+                />
               </section>
             )}
           </div>
@@ -567,12 +600,33 @@ export function OverviewPage() {
   );
 }
 
+export function OverviewKPIBand({
+  report,
+  context,
+}: {
+  report: KPIReport;
+  context: KPIContext;
+}) {
+  const byKey = new Map(report.metrics.map((metric) => [metric.key, metric]));
+  return operatingKPIKeys.map((key) => {
+    const metric = byKey.get(key);
+    return metric === undefined ? null : (
+      <OverviewKPI
+        key={key}
+        metricKey={key}
+        metric={metric}
+        context={context}
+      />
+    );
+  });
+}
+
 export function OverviewKPI({
   metricKey,
   metric,
   context,
 }: {
-  metricKey: PrimaryKPIKey;
+  metricKey: OperatingKPIKey;
   metric: KPIMetric;
   context: KPIContext;
 }) {
@@ -631,7 +685,7 @@ export function OverviewKPI({
 }
 
 function kpiPresentation(
-  metricKey: PrimaryKPIKey,
+  metricKey: OperatingKPIKey,
   metric: KPIMetric,
   context: KPIContext,
 ): KPIPresentation {
@@ -640,6 +694,12 @@ function kpiPresentation(
       kind: "unavailable",
       detail: metric.reason ?? "当前指标缺少计算依据",
     };
+  }
+  if (
+    metricKey === "average_handling_minutes" ||
+    metricKey === "approval_rate_pct"
+  ) {
+    return { kind: "value", value: metric.value };
   }
   if (metric.value !== 0 || context.hasClosedRunSample) {
     return { kind: "value", value: metric.value };
@@ -763,12 +823,13 @@ function statusFromEvent(event: AuditEvent): RunStatus | null {
   }
 }
 
-function isTerminal(status: RunStatus): boolean {
+function isStreamTerminal(status: RunStatus): boolean {
   return (
     status === "completed" ||
     status === "rejected" ||
     status === "failed" ||
-    status === "review_required"
+    status === "review_required" ||
+    status === "manual_review"
   );
 }
 
@@ -777,7 +838,9 @@ function isActive(status: RunStatus | undefined): boolean {
     status === "started" ||
     status === "investigating" ||
     status === "awaiting_approval" ||
-    status === "executing"
+    status === "executing" ||
+    status === "review_required" ||
+    status === "manual_review"
   );
 }
 

@@ -1,22 +1,24 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { KPIMetric } from "./api";
-import { OverviewKPI } from "./OverviewPage";
+import type { KPIMetric, KPIReport } from "./api";
+import { OverviewKPI, OverviewKPIBand } from "./OverviewPage";
 
 function metric({
   key,
+  label = "测试指标",
   value,
   unit = "小时",
   reason,
 }: {
   key: string;
+  label?: string;
   value: number | null;
   unit?: string;
   reason?: string;
 }): KPIMetric {
   return {
     key,
-    label: "测试指标",
+    label,
     value,
     unit,
     availability: value === null ? "unavailable" : "available",
@@ -26,6 +28,69 @@ function metric({
 }
 
 describe("OverviewKPI", () => {
+  it("renders the six documented operating metrics", () => {
+    const metrics = [
+      metric({
+        key: "time_recovered_hours",
+        label: "已实现时效挽回",
+        value: 0,
+      }),
+      metric({
+        key: "cost_impact_cny",
+        label: "已实现成本影响",
+        value: 0,
+        unit: "元",
+      }),
+      metric({ key: "labor_saved_hours", label: "人力节省", value: 0 }),
+      metric({
+        key: "anomaly_closure_rate_pct",
+        label: "异常闭环率",
+        value: 0,
+        unit: "%",
+      }),
+      metric({
+        key: "anomaly_rate_pct",
+        label: "异常率",
+        value: 33.5,
+        unit: "%",
+      }),
+      metric({
+        key: "average_handling_minutes",
+        label: "平均处置时长",
+        value: null,
+        unit: "分钟",
+        reason: "窗口内尚无闭环 run",
+      }),
+      metric({
+        key: "approval_rate_pct",
+        label: "人工审批通过率",
+        value: null,
+        unit: "%",
+        reason: "窗口内尚无人工审批决定",
+      }),
+    ];
+    const report: KPIReport = {
+      window: "24h0m0s",
+      as_of: "2026-10-12T04:24:00Z",
+      assumptions: { evidence_step_minutes: 8 },
+      metrics,
+    };
+
+    const markup = renderToStaticMarkup(
+      <OverviewKPIBand
+        report={report}
+        context={{ anomalyCount: 67, hasClosedRunSample: false }}
+      />,
+    );
+
+    expect(markup.match(/<article/g)).toHaveLength(6);
+    expect(markup).toContain("平均处置时长");
+    expect(markup).toContain("窗口内尚无闭环 run");
+    expect(markup).toContain("人工审批通过率");
+    expect(markup).toContain("窗口内尚无人工审批决定");
+    expect(markup).not.toContain(">异常率<");
+  });
+
   it("explains a zero value when no run has closed", () => {
     const markup = renderToStaticMarkup(
       <OverviewKPI
