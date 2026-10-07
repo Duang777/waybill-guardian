@@ -107,10 +107,10 @@ flowchart TD
 | 文件导入 | 已交付 | `PLATFORM=file` 在启动时加载 JSON 或 CSV v1，页面可以选择其中的运单。写操作留在内存 fixture 运行时。见已关闭的 [issue 60](https://github.com/Duang777/waybill-guardian/issues/60) 和 [`docs/file-data-source-design.md`](docs/file-data-source-design.md)。 |
 | 公路港总览 | 已交付 | 首页展示 72 港网络、KPI、异常队列和经营简报，并支持批量启动后逐单审批。见 [issue 61](https://github.com/Duang777/waybill-guardian/issues/61)。 |
 | Apache-2.0 与依赖许可清单 | 已交付 | 根目录含 `LICENSE`，传递依赖清单位于 [`docs/licenses/`](docs/licenses/)。 |
-| 非 GET 请求的 CSRF 检查 | 计划中 | [issue 64](https://github.com/Duang777/waybill-guardian/issues/64) |
+| 非 GET 请求的 CSRF 检查 | 已交付 | Go 标准库 `CrossOriginProtection` 校验 `Sec-Fetch-Site` 和 `Origin`，JSON 写接口校验 `Content-Type`。见已关闭的 [issue 64](https://github.com/Duang777/waybill-guardian/issues/64)。 |
 | Docker Compose | 已交付 | 单容器提供前端和 API，可选 PostgreSQL 17 profile。 |
 | GitHub Actions | 已交付 | PR 和 main 运行 Go、Web、PostgreSQL、许可与镜像检查。 |
-| 指挥中心视觉 | 计划中 | [issue 77](https://github.com/Duang777/waybill-guardian/issues/77)，包含 issue 69 到 76。 |
+| 白色工业沙盘与证据联动 | 已交付 | 初赛范围已完成，覆盖全国港网、证据定位、录屏布局和移动端。见已关闭的 [issue 77](https://github.com/Duang777/waybill-guardian/issues/77)。 |
 
 ## 演示
 
@@ -496,11 +496,11 @@ hastekit `agent-sdk-go` v0.0.24 以 Go module 引入，许可证是 Apache-2.0�
 | [60](https://github.com/Duang777/waybill-guardian/issues/60) | 已关闭。启动时加载 JSON 或 CSV v1，并在页面上选择运单 |
 | [61](https://github.com/Duang777/waybill-guardian/issues/61) | 已完成。多公路港总览、价值 KPI、只读模型简报和批量启动 |
 | [62](https://github.com/Duang777/waybill-guardian/issues/62) | 已完成。Apache-2.0、传递依赖清单和 `.mailmap` |
-| [64](https://github.com/Duang777/waybill-guardian/issues/64) | 非 GET 请求的 CSRF 检查 |
+| [64](https://github.com/Duang777/waybill-guardian/issues/64) | 已完成。非 GET 请求的跨站检查和 JSON `Content-Type` 校验 |
 | [65](https://github.com/Duang777/waybill-guardian/issues/65) | 已完成。单容器镜像和 Docker Compose |
 | [67](https://github.com/Duang777/waybill-guardian/issues/67) | 已完成。GitHub Actions |
 | [68](https://github.com/Duang777/waybill-guardian/issues/68) | 仍开放。本页已有架构图、KPI 口径、演示入口和文件校验命令，正式配音视频仍未完成 |
-| [77](https://github.com/Duang777/waybill-guardian/issues/77) | 前端视觉，含 issue 69 到 76 |
+| [77](https://github.com/Duang777/waybill-guardian/issues/77) | 已完成初赛范围。全国港网、证据联动、录屏布局和移动端已交付。Issue 70、72、74、76 保持独立 P2 |
 
 生产化处置链路见 [issue 44](https://github.com/Duang777/waybill-guardian/issues/44)。
 
