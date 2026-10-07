@@ -38,7 +38,7 @@
 
 默认 `PLATFORM=mock` 只加载内置运单 `YD2026101001`，数据在 [`internal/tools/testdata/demo.json`](internal/tools/testdata/demo.json)。`PLATFORM=file` 在启动时加载一份 JSON 或 CSV v1，支持可选的公路港、车辆和线路网络。页面可以选择文件中的运单并启动处置。文件模式下的写操作仍走内存中的 fixture 写入运行时，短信不会真正发出。
 
-首页是全国公路港经营总览，显示网络、KPI、异常队列和带统计引用的经营简报，并支持一次启动 5 个独立 run。全国视图是用于演示网络关系的抽象港网，不是测绘底图，也不绘制行政边界。点击运单进入单运单工作台，每个 run 仍保留独立审批和 SSE 时间线。1600×900 和 1920×1080 下，总览把港网、队列和经营简报收进一屏；单运单工作台按“六阶段运行带、地图与证据账本、全宽人工决策闸、审计抽屉”组织为异常案件桌案。审批操作无需滚动整页即可执行。
+首页是全国公路港经营总览，显示网络、KPI、异常队列、三张经营图表和带统计引用的经营简报，并支持一次启动 5 个独立 run。三张图分别展示当前异常构成、当前处置状态和高异常占比线路，不用快照数据伪造历史趋势。全国视图是用于演示网络关系的抽象港网，不是测绘底图，也不绘制行政边界。点击运单进入单运单工作台，每个 run 仍保留独立审批和 SSE 时间线。1560×800、1600×900 和 1920×1080 下，总览把港网、队列、图表和经营简报收进一屏；单运单工作台按“六阶段运行带、地图与证据账本、全宽人工决策闸、审计抽屉”组织为异常案件桌案。审批操作无需滚动整页即可执行。
 
 <p align="center">
   <img alt="桌面宽度下，内置样例停在人工审批。六阶段运行带位于地图上方，证据账本紧邻地图，全宽人工决策闸展示改派方案和待执行动作，底部审计记录保持折叠。展示分是 ETA 83、路况 75、天气 0。" src="docs/assets/console-approval.png" width="840">
@@ -105,7 +105,7 @@ flowchart TD
 | 改派 HTTP 沙箱 | 已交付 | 仅 `tms.reassign`。读仍是内置样例。不是生产 TMS。 |
 | 在线模型调用 | 进行中 | 正式演示入口默认在线。两种兼容 API 和三运单 fake 验收已通过；真实国产模型联调仍需要部署方凭据。见 [issue 59](https://github.com/Duang777/waybill-guardian/issues/59)。 |
 | 文件导入 | 已交付 | `PLATFORM=file` 在启动时加载 JSON 或 CSV v1，页面可以选择其中的运单。写操作留在内存 fixture 运行时。见已关闭的 [issue 60](https://github.com/Duang777/waybill-guardian/issues/60) 和 [`docs/file-data-source-design.md`](docs/file-data-source-design.md)。 |
-| 公路港总览 | 已交付 | 首页展示 72 港网络、KPI、异常队列和经营简报，并支持批量启动后逐单审批。见 [issue 61](https://github.com/Duang777/waybill-guardian/issues/61)。 |
+| 公路港总览 | 已交付 | 首页展示 72 港网络、KPI、三张经营图表、异常队列和经营简报，并支持批量启动后逐单审批。见 [issue 61](https://github.com/Duang777/waybill-guardian/issues/61) 和 [issue 72](https://github.com/Duang777/waybill-guardian/issues/72)。 |
 | Apache-2.0 与依赖许可清单 | 已交付 | 根目录含 `LICENSE`，传递依赖清单位于 [`docs/licenses/`](docs/licenses/)。 |
 | 非 GET 请求的 CSRF 检查 | 已交付 | Go 标准库 `CrossOriginProtection` 校验 `Sec-Fetch-Site` 和 `Origin`，JSON 写接口校验 `Content-Type`。见已关闭的 [issue 64](https://github.com/Duang777/waybill-guardian/issues/64)。 |
 | Docker Compose | 已交付 | 单容器提供前端和 API，可选 PostgreSQL 17 profile。 |
@@ -329,6 +329,9 @@ env -u GOROOT go run ./cmd/dataimport validate \
 服务按授权运单范围、数据时间和模型可见聚合内容缓存结果，相同内容的连续请求只生成一次。
 模型调用、解析、隐私或引用校验失败时，接口仍以 HTTP 200 返回确定性简报，并返回稳定的
 `fallback_reason`。页面显示配置的模型名或“规则模板”。`BRIEF_TIMEOUT` 默认是 `8s`。
+
+页面从同一份总览快照生成异常构成和高异常占比线路图，并用 SSE 投影更新当前处置状态图。
+接口没有历史桶、上期快照或人工基线时，页面不显示趋势、环比或处置漏斗。
 
 `POST /api/runs:batch` 接受最多 20 个 `waybill_id`。服务为每个运单调用一次 `StartRun`，
 并返回逐项成功或失败结果。`MAX_CONCURRENT_RUNS` 限制同时执行的调查任务。每个已接受的

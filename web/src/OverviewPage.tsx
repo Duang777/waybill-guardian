@@ -40,9 +40,12 @@ import {
   SkeletonBlock,
   StateFeedback,
 } from "./components/StateFeedback";
+import { OverviewOperatingCharts } from "./charts/OverviewOperatingCharts";
 import styles from "./overview.module.css";
+import { anomalyTypeLabel } from "./overview-labels";
 import {
   advanceRunProjection,
+  effectiveRunStatus,
   mergeRunProjections,
   type RunProjection,
 } from "./overview-run-projection";
@@ -224,7 +227,11 @@ export function OverviewPage() {
         return {
           item,
           rank: index + 1,
-          status: projection?.status ?? item.run_status,
+          status: effectiveRunStatus({
+            waybillID: item.waybill_id,
+            snapshotStatus: item.run_status,
+            projections: runProjections,
+          }),
           href: overviewWorkbenchHref(
             item.waybill_id,
             projection?.runID,
@@ -427,7 +434,7 @@ export function OverviewPage() {
           )}
           {resource.kind === "ready" && (
             <>
-              <div className={styles.workspace}>
+              <div className={styles.operationsGrid}>
                 <section className={styles.mapPanel} aria-labelledby="map-heading">
                   <PanelErrorBoundary name="全国港网">
                     <HubNetwork
@@ -445,6 +452,11 @@ export function OverviewPage() {
                     />
                   </PanelErrorBoundary>
                 </section>
+
+                <OverviewOperatingCharts
+                  overview={resource.overview}
+                  runProjections={runProjections}
+                />
 
                 <section className={styles.queuePanel} aria-labelledby="queue-heading">
                   <div className={styles.queueHeader}>
@@ -563,7 +575,7 @@ export function OverviewPage() {
                             </div>
                             <div className={styles.queueMeta}>
                               <span>{item.waybill_id}</span>
-                              <span>{anomalyLabel(item.type)}</span>
+                              <span>{anomalyTypeLabel(item.type)}</span>
                               <HaloBadge tone={statusTone(status)}>
                                 {runStatusLabel(status)}
                               </HaloBadge>
@@ -584,55 +596,55 @@ export function OverviewPage() {
                     )}
                   </div>
                 </section>
-              </div>
 
-              <section className={styles.briefSection} aria-labelledby="brief-heading">
-                <div className={styles.sectionHeader}>
-                  <div>
-                    <span className={styles.eyebrow}>只读经营洞察</span>
-                    <h2 id="brief-heading">经营简报</h2>
+                <section className={styles.briefSection} aria-labelledby="brief-heading">
+                  <div className={styles.sectionHeader}>
+                    <div>
+                      <span className={styles.eyebrow}>只读经营洞察</span>
+                      <h2 id="brief-heading">经营简报</h2>
+                    </div>
+                    <div className={styles.briefMeta}>
+                      <HaloBadge tone="success">
+                        <ShieldCheck aria-hidden="true" size={15} />
+                        只读聚合
+                      </HaloBadge>
+                      <HaloBadge
+                        tone={
+                          resource.overview.brief.mode === "model_read_only"
+                            ? "info"
+                            : "neutral"
+                        }
+                        title={briefFallbackDetail(resource.overview.brief)}
+                      >
+                        {resource.overview.brief.mode === "model_read_only" ? (
+                          <Bot aria-hidden="true" size={15} />
+                        ) : (
+                          <FileText aria-hidden="true" size={15} />
+                        )}
+                        {briefSourceLabel(resource.overview.brief)}
+                      </HaloBadge>
+                    </div>
                   </div>
-                  <div className={styles.briefMeta}>
-                    <HaloBadge tone="success">
-                      <ShieldCheck aria-hidden="true" size={15} />
-                      只读聚合
-                    </HaloBadge>
-                    <HaloBadge
-                      tone={
-                        resource.overview.brief.mode === "model_read_only"
-                          ? "info"
-                          : "neutral"
-                      }
-                      title={briefFallbackDetail(resource.overview.brief)}
-                    >
-                      {resource.overview.brief.mode === "model_read_only" ? (
-                        <Bot aria-hidden="true" size={15} />
-                      ) : (
-                        <FileText aria-hidden="true" size={15} />
-                      )}
-                      {briefSourceLabel(resource.overview.brief)}
-                    </HaloBadge>
-                  </div>
-                </div>
-                <div className={styles.briefGrid}>
-                  {resource.overview.brief.items.map((item, index) => (
-                    <article className={styles.briefItem} key={item.id}>
-                      <span className={styles.briefIndex}>0{index + 1}</span>
-                      <div>
-                        <h3>{item.headline}</h3>
-                        <p>{item.body}</p>
-                        <div className={styles.citations}>
-                          {item.evidence.map((evidence) => (
-                            <span key={`${item.id}-${evidence.source}-${evidence.label}`}>
-                              {evidence.label} · {evidence.value}
-                            </span>
-                          ))}
+                  <div className={styles.briefGrid}>
+                    {resource.overview.brief.items.map((item, index) => (
+                      <article className={styles.briefItem} key={item.id}>
+                        <span className={styles.briefIndex}>0{index + 1}</span>
+                        <div>
+                          <h3>{item.headline}</h3>
+                          <p>{item.body}</p>
+                          <div className={styles.citations}>
+                            {item.evidence.map((evidence) => (
+                              <span key={`${item.id}-${evidence.source}-${evidence.label}`}>
+                                {evidence.label} · {evidence.value}
+                              </span>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              </section>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              </div>
             </>
           )}
         </main>
@@ -896,13 +908,27 @@ function LoadingOverview() {
       aria-live="polite"
       aria-busy="true"
     >
-      <div className={styles.workspace}>
+      <div className={styles.operationsGrid}>
         <section className={styles.mapPanel}>
           <div className={styles.overviewMapSkeleton}>
             <SkeletonBlock className={styles.mapSkeletonTitle} />
             <SkeletonBlock className={styles.mapSkeletonNetwork} />
             <SkeletonBlock className={styles.mapSkeletonLegend} />
           </div>
+        </section>
+        <section
+          className={styles.overviewChartsSkeleton}
+          aria-label="正在加载经营图表"
+        >
+          {Array.from({ length: 3 }, (_, index) => (
+            <article key={`chart-skeleton-${index}`}>
+              <div>
+                <SkeletonBlock className={styles.chartSkeletonEyebrow} />
+                <SkeletonBlock className={styles.chartSkeletonTitle} />
+              </div>
+              <SkeletonBlock className={styles.chartSkeletonPlot} />
+            </article>
+          ))}
         </section>
         <section className={styles.queuePanel}>
           <div className={styles.queueSkeletonHeader}>
@@ -918,25 +944,25 @@ function LoadingOverview() {
             ))}
           </div>
         </section>
+        <section className={styles.briefSection}>
+          <div className={styles.briefSkeletonHeader}>
+            <SkeletonBlock className={styles.mapSkeletonTitle} />
+            <SkeletonBlock className={styles.queueSkeletonControl} />
+          </div>
+          <div className={styles.briefGrid}>
+            {Array.from({ length: 3 }, (_, index) => (
+              <article className={styles.briefSkeletonItem} key={`brief-skeleton-${index}`}>
+                <SkeletonBlock className={styles.briefSkeletonIndex} />
+                <div>
+                  <SkeletonBlock className={styles.briefSkeletonTitle} />
+                  <SkeletonBlock className={styles.briefSkeletonLine} />
+                  <SkeletonBlock className={styles.briefSkeletonLineShort} />
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
       </div>
-      <section className={styles.briefSection}>
-        <div className={styles.briefSkeletonHeader}>
-          <SkeletonBlock className={styles.mapSkeletonTitle} />
-          <SkeletonBlock className={styles.queueSkeletonControl} />
-        </div>
-        <div className={styles.briefGrid}>
-          {Array.from({ length: 3 }, (_, index) => (
-            <article className={styles.briefSkeletonItem} key={`brief-skeleton-${index}`}>
-              <SkeletonBlock className={styles.briefSkeletonIndex} />
-              <div>
-                <SkeletonBlock className={styles.briefSkeletonTitle} />
-                <SkeletonBlock className={styles.briefSkeletonLine} />
-                <SkeletonBlock className={styles.briefSkeletonLineShort} />
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
     </div>
   );
 }
@@ -1034,17 +1060,6 @@ function statusTone(status: RunStatus | undefined): HaloBadgeTone {
     return "danger";
   }
   return "neutral";
-}
-
-function anomalyLabel(value: string): string {
-  const labels: Record<string, string> = {
-    delay: "时效延误",
-    damage: "货损",
-    fatigue: "疲劳驾驶",
-    loss: "货物丢失",
-    weather: "天气影响",
-  };
-  return labels[value] ?? value;
 }
 
 function formatMetricValue(value: number, unit: string): string {

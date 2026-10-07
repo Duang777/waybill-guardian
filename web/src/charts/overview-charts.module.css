@@ -1,0 +1,327 @@
+.section {
+  --chart-paper: #fdfcf8;
+  --chart-ink: #282b2e;
+  --chart-muted: #687078;
+  --chart-line: #d9dcda;
+  --chart-signal: #c84c2d;
+  --chart-network: #28756f;
+  --chart-gold: #a67924;
+  --chart-blue: #47789a;
+  --chart-green: #4f7d55;
+  --chart-rose: #a85b66;
+  --chart-graphite: #5e6469;
+  min-width: 0;
+  background: var(--chart-paper);
+  border-top: 1px solid var(--chart-line);
+}
+
+.grid {
+  display: grid;
+  height: 100%;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.panel {
+  display: grid;
+  min-width: 0;
+  min-height: 240px;
+  grid-template-rows: auto minmax(0, 1fr);
+  margin: 0;
+  border-right: 1px solid var(--chart-line);
+  background: var(--chart-paper);
+}
+
+.panel:last-child {
+  border-right: 0;
+}
+
+.caption {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(104px, 0.8fr);
+  align-items: end;
+  gap: 10px;
+  min-height: 58px;
+  padding: 9px 12px 7px;
+  border-bottom: 1px solid var(--chart-line);
+}
+
+.captionCompact {
+  grid-template-columns: 1fr;
+}
+
+.caption h3,
+.caption p {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.caption h3 {
+  color: var(--chart-ink);
+  font-family: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.caption p {
+  color: var(--chart-muted);
+  font-size: 10px;
+  line-height: 1.45;
+  text-align: right;
+  text-wrap: pretty;
+}
+
+.eyebrow {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--chart-network);
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.body {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1.35fr) minmax(118px, 1fr);
+}
+
+.viewport {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--chart-line);
+}
+
+.viewport > :global(div),
+.viewport :global([data-overview-chart]) {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.viewport :global([role="alert"]) {
+  height: 100%;
+  min-height: 0;
+  border: 0;
+}
+
+.factList,
+.routeList {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 5px 8px;
+  overflow-y: auto;
+  scrollbar-color: var(--chart-line) transparent;
+}
+
+.factList {
+  display: grid;
+  align-content: center;
+  list-style: none;
+}
+
+.factList li {
+  display: grid;
+  min-height: 21px;
+  grid-template-columns: 7px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 5px;
+  border-bottom: 1px solid color-mix(in oklch, var(--chart-line) 65%, transparent);
+  color: var(--chart-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.factList li:last-child {
+  border-bottom: 0;
+}
+
+.factList i {
+  width: 6px;
+  height: 6px;
+  background: var(--chart-graphite);
+}
+
+.factList i[data-chart-color="1"] {
+  background: var(--chart-signal);
+}
+
+.factList i[data-chart-color="2"] {
+  background: var(--chart-network);
+}
+
+.factList i[data-chart-color="3"] {
+  background: var(--chart-gold);
+}
+
+.factList i[data-chart-color="4"] {
+  background: var(--chart-blue);
+}
+
+.factList i[data-chart-color="5"] {
+  background: var(--chart-green);
+}
+
+.factList i[data-chart-color="6"] {
+  background: var(--chart-rose);
+}
+
+.factList i[data-disposition-key="unassigned"] {
+  background: var(--chart-graphite);
+}
+
+.factList i[data-disposition-key="investigating"] {
+  background: var(--chart-network);
+}
+
+.factList i[data-disposition-key="awaiting_approval"] {
+  background: var(--chart-gold);
+}
+
+.factList i[data-disposition-key="executing"] {
+  background: var(--chart-blue);
+}
+
+.factList i[data-disposition-key="completed"] {
+  background: var(--chart-green);
+}
+
+.factList i[data-disposition-key="rejected"] {
+  background: var(--chart-rose);
+}
+
+.factList i[data-disposition-key="needs_attention"] {
+  background: var(--chart-signal);
+}
+
+.factList span,
+.routeList span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.factList strong,
+.factList small,
+.routeList strong,
+.routeList small {
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-weight: 600;
+}
+
+.factList strong,
+.routeList strong {
+  color: var(--chart-ink);
+}
+
+.factList small,
+.routeList small {
+  color: var(--chart-muted);
+  font-size: 9px;
+}
+
+.routeList {
+  display: grid;
+  align-content: center;
+  list-style: decimal-leading-zero inside;
+}
+
+.routeList li {
+  display: grid;
+  min-height: 29px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1px 6px;
+  align-content: center;
+  border-bottom: 1px solid color-mix(in oklch, var(--chart-line) 65%, transparent);
+  color: var(--chart-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.routeList li:last-child {
+  border-bottom: 0;
+}
+
+.routeList small {
+  grid-column: 1 / -1;
+}
+
+.chartSkeleton {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  place-items: center;
+  padding: 20px;
+}
+
+.skeletonPlot {
+  width: 76%;
+  height: 58%;
+}
+
+.empty {
+  min-height: 0;
+  border: 0;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+@media (max-width: 1000px) and (min-width: 721px) {
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .panel:last-child {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--chart-line);
+  }
+}
+
+@media (max-width: 720px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .panel {
+    min-height: 340px;
+    border-right: 0;
+    border-bottom: 1px solid var(--chart-line);
+  }
+
+  .panel:last-child {
+    border-bottom: 0;
+  }
+
+  .caption {
+    grid-template-columns: 1fr;
+    gap: 3px;
+    padding-inline: 14px;
+  }
+
+  .caption p {
+    text-align: left;
+  }
+
+  .body {
+    min-height: 270px;
+    grid-template-columns: 1fr;
+    grid-template-rows: 126px auto;
+  }
+
+  .viewport {
+    border-right: 0;
+    border-bottom: 1px solid var(--chart-line);
+  }
+}

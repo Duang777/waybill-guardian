@@ -30,6 +30,7 @@ provider fallback middleware，但当前实现没有配置 fallback。
 | npm 包 | 版本 | 许可证 | 用途 |
 |---|---|---|---|
 | `react`、`react-dom` | `19.3.0` | MIT | 页面和状态渲染 |
+| `echarts` | `6.1.0` | Apache-2.0 | 按需渲染经营异常构成、当前处置状态和高异常占比线路图表 |
 | `three` | `0.186.1` | MIT | 全国公路港三维场景、合批几何和 WebGL 渲染 |
 | `@react-three/fiber` | `9.8.1` | MIT | Three.js 的 React renderer 和场景生命周期 |
 | `@amap/amap-jsapi-loader` | `1.0.1` | MIT | 按需加载高德 JS API |
@@ -37,6 +38,9 @@ provider fallback middleware，但当前实现没有配置 fallback。
 | `lucide-react` | `1.50.0` | ISC | 界面图标 |
 | `motion` | `14.0.0` | MIT | Cult UI 适配组件的数字、进度和布局过渡 |
 | `zod` | `4.6.5` | MIT | 浏览器端 API 边界校验 |
+
+ECharts 的 NOTICE 原文保存在
+[`docs/licenses/echarts-NOTICE.txt`](./docs/licenses/echarts-NOTICE.txt)。
 
 ## Web 构建和测试依赖
 

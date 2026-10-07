@@ -145,6 +145,42 @@ try {
   await page.locator("[data-scene-hud]").getByText("全国港网", { exact: true }).waitFor();
   await page.getByLabel("地图说明").getByText("非测绘底图", { exact: true }).waitFor();
   await page.getByText("规则模板", { exact: true }).waitFor();
+  const operatingCharts = page.locator("[data-operating-chart]");
+  await operatingCharts.first().waitFor();
+  assert(
+    (await operatingCharts.count()) === 3,
+    "overview did not render three operating charts",
+  );
+  const chartCanvases = operatingCharts.locator("canvas");
+  await chartCanvases.first().waitFor();
+  assert(
+    (await chartCanvases.count()) === 3,
+    "overview did not render three chart canvases",
+  );
+  for (let index = 0; index < 3; index += 1) {
+    const probe = await probe2DCanvasPixels(chartCanvases.nth(index));
+    assert(
+      probe !== null && probe.paintedPixels > 40 && probe.colors >= 1,
+      `operating chart ${index + 1} is blank: ${JSON.stringify(probe)}`,
+    );
+  }
+  const dispositionChart = page.locator(
+    '[data-operating-chart="disposition-composition"]',
+  );
+  const dispositionHost = dispositionChart.locator(
+    '[data-overview-chart="disposition-composition"]',
+  );
+  const dispositionInstanceID = await dispositionHost.getAttribute(
+    "data-chart-instance",
+  );
+  assert(
+    typeof dispositionInstanceID === "string" &&
+      dispositionInstanceID !== "",
+    "disposition chart did not expose a stable instance ID",
+  );
+  await dispositionHost.locator("canvas").evaluate((element) => {
+    window.__waybillDispositionCanvas = element;
+  });
   const networkMap = page.locator('[data-network-renderer="webgl"]');
   await networkMap.locator("canvas").waitFor();
   await page.waitForFunction(
@@ -520,6 +556,10 @@ try {
   await page.screenshot({
     path: join(artifactDir, "overview-desktop-1600.png"),
   });
+  await verifyOverviewCanvasFit(page, 1560, 800);
+  await page.screenshot({
+    path: join(artifactDir, "overview-desktop-1560x800.png"),
+  });
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.waitForTimeout(800);
   assert(!(await hasHorizontalOverflow(page)), "1440px overview overflowed horizontally");
@@ -607,6 +647,18 @@ try {
       `queue drilldown did not retain run identity: ${rowHref}`,
     );
   }
+  await dispositionChart.getByText("待审批", { exact: true }).waitFor();
+  assert(
+    (await dispositionHost.getAttribute("data-chart-instance")) ===
+      dispositionInstanceID,
+    "disposition chart recreated its ECharts instance after a live update",
+  );
+  assert(
+    await dispositionHost.locator("canvas").evaluate(
+      (element) => window.__waybillDispositionCanvas === element,
+    ),
+    "disposition chart replaced its canvas after a live update",
+  );
   await riskQueue.getByRole("radio", { name: "处置中", exact: true }).check();
   assert(
     (await queueItems.count()) === acceptedRuns.length,
@@ -693,6 +745,24 @@ try {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.waitForTimeout(1_000);
   assert(!(await hasHorizontalOverflow(page)), "375px overview overflowed horizontally");
+  const mobileSectionOrder = await page.evaluate(() => {
+    const charts = document
+      .querySelector("[data-overview-charts]")
+      ?.getBoundingClientRect();
+    const queue = document
+      .querySelector('[aria-labelledby="queue-heading"]')
+      ?.getBoundingClientRect();
+    return {
+      chartTop: charts?.top,
+      queueTop: queue?.top,
+    };
+  });
+  assert(
+    typeof mobileSectionOrder.chartTop === "number" &&
+      typeof mobileSectionOrder.queueTop === "number" &&
+      mobileSectionOrder.chartTop < mobileSectionOrder.queueTop,
+    `375px charts did not precede the long queue: ${JSON.stringify(mobileSectionOrder)}`,
+  );
   assert(
     !(await elementsOverlap(page, "[data-scene-hud]", "[data-scene-controls]")),
     "375px scene HUD overlapped the camera controls",
@@ -715,6 +785,7 @@ try {
   );
   await page.screenshot({
     path: join(artifactDir, "overview-mobile-320.png"),
+    fullPage: true,
   });
 
   await mapDrilldown.click();
@@ -815,6 +886,7 @@ try {
         webgl_fallback: "svg",
         queue_views: 3,
         primary_kpis: 6,
+        operating_charts: 3,
         batch_runs: 5,
         independent_approvals: 5,
         approvals_left_pending: 4,
@@ -823,7 +895,7 @@ try {
         restored_active_run: liveRuns.restored.run_id,
         discovered_external_run: liveRuns.discovered.run_id,
         map_drilldown_waybill: drilldownWaybillID,
-        responsive_widths: [1920, 1600, 1440, 1280, 375, 320],
+        responsive_widths: [1920, 1600, "1560x800", 1440, 1280, 375, 320],
       },
       null,
       2,
@@ -854,14 +926,22 @@ async function verifyOverviewCanvasFit(page, width, height) {
     return {
       viewportHeight: window.innerHeight,
       documentHeight: document.documentElement.scrollHeight,
-      workspace: bounds(document.querySelector('[class*="_workspace_"]')),
+      operations: bounds(
+        document.querySelector('[class*="_operationsGrid_"]'),
+      ),
+      map: bounds(document.querySelector('[class*="_mapPanel_"]')),
+      charts: bounds(document.querySelector("[data-overview-charts]")),
       brief: bounds(document.querySelector('[aria-labelledby="brief-heading"]')),
     };
   });
   assert(
     layout.documentHeight <= layout.viewportHeight + 1 &&
-      layout.workspace !== null &&
-      layout.workspace.height >= 480 &&
+      layout.operations !== null &&
+      layout.operations.bottom <= layout.viewportHeight + 1 &&
+      layout.map !== null &&
+      layout.map.height >= 350 &&
+      layout.charts !== null &&
+      layout.charts.height >= 240 &&
       layout.brief !== null &&
       layout.brief.bottom <= layout.viewportHeight + 1,
     `${width}x${height} overview does not fit its presentation canvas: ${JSON.stringify(layout)}`,
@@ -869,6 +949,14 @@ async function verifyOverviewCanvasFit(page, width, height) {
   assert(
     !(await hasHorizontalOverflow(page)),
     `${width}x${height} overview overflowed horizontally`,
+  );
+  assert(
+    !(await elementsOverlap(
+      page,
+      "[data-scene-hud]",
+      '[class*="_sceneSelection_"]',
+    )),
+    `${width}x${height} scene selection overlapped the network HUD`,
   );
 }
 
@@ -963,6 +1051,40 @@ async function probeCanvasPixels(canvas) {
   });
 }
 
+async function probe2DCanvasPixels(canvas) {
+  return canvas.evaluate(async (element) => {
+    const context = element.getContext("2d");
+    if (context === null) {
+      return null;
+    }
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const image = context.getImageData(
+      0,
+      0,
+      element.width,
+      element.height,
+    );
+    const colors = new Set();
+    let paintedPixels = 0;
+    for (let index = 0; index < image.data.length; index += 16) {
+      const alpha = image.data[index + 3];
+      if (alpha === 0) {
+        continue;
+      }
+      paintedPixels += 1;
+      colors.add(
+        `${image.data[index]},${image.data[index + 1]},${image.data[index + 2]}`,
+      );
+    }
+    return {
+      width: element.width,
+      height: element.height,
+      paintedPixels,
+      colors: colors.size,
+    };
+  });
+}
+
 async function measureSceneFPS(canvas, frames) {
   return canvas.evaluate(
     (element, frameCount) =>
@@ -996,6 +1118,16 @@ async function verifyReducedMotion(browser, webURL) {
   });
   try {
     await page.goto(webURL, { waitUntil: "networkidle" });
+    const chartHosts = page.locator("[data-overview-chart]");
+    await chartHosts.first().waitFor();
+    const chartMotionModes = await chartHosts.evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute("data-chart-motion")),
+    );
+    assert(
+      chartMotionModes.length === 3 &&
+        chartMotionModes.every((mode) => mode === "reduced"),
+      `reduced-motion charts reported ${chartMotionModes.join(", ")}`,
+    );
     const stage = page.locator('[data-network-renderer="webgl"]');
     await page.waitForFunction(
       () =>

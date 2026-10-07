@@ -38,7 +38,7 @@ The overview calculates time recovered, cost impact, labor saved, anomaly closur
 
 `PLATFORM=mock` loads only the embedded waybill `YD2026101001` from [`internal/tools/testdata/demo.json`](internal/tools/testdata/demo.json). `PLATFORM=file` loads one JSON or CSV v1 file at startup and supports optional highway-port, vehicle, and route network entities. The page can select a waybill from that file and start a run. Writes in file mode stay on the in-memory fixture write runtime, and SMS is not actually sent.
 
-The home page is a nationwide highway-port overview with the network, KPIs, anomaly queue, and cited operating briefs. The nationwide view is an abstract network diagram for demonstration, not a survey map, and it does not draw administrative boundaries. It can start five independent runs in one batch. Selecting a waybill opens its workbench; every run keeps its own approval and SSE timeline. At 1600 by 900 and 1920 by 1080, the overview fits the network, queue, and operating briefs in one viewport. The waybill workbench follows four layers: the six-stage run strip, the map and evidence ledger, the full-width human decision gate, and the audit drawer. The operator can approve a proposal without scrolling the whole page.
+The home page is a nationwide highway-port overview with the network, KPIs, three operating charts, the anomaly queue, and cited operating briefs. The charts show the current anomaly composition, current disposition state, and routes with high anomaly rates. They do not turn snapshot data into synthetic history. The nationwide view is an abstract network diagram for demonstration, not a survey map, and it does not draw administrative boundaries. It can start five independent runs in one batch. Selecting a waybill opens its workbench; every run keeps its own approval and SSE timeline. At 1560 by 800, 1600 by 900, and 1920 by 1080, the overview fits the network, queue, charts, and operating briefs in one viewport. The waybill workbench follows four layers: the six-stage run strip, the map and evidence ledger, the full-width human decision gate, and the audit drawer. The operator can approve a proposal without scrolling the whole page.
 
 <p align="center">
   <img alt="Desktop width. The embedded fixture is waiting for approval. The waybill selector shows Hangzhou to Chengdu, YD2026101001, and the button reads 重新处置. The proposal reassigns to 川行快运 and notifies the shipper and driver. The map is the local track. Display scores are ETA 83, road 75, weather 0." src="docs/assets/console-approval.png" width="840">
@@ -105,7 +105,7 @@ The status describes the code in this repository.
 | Reassign HTTP sandbox | Shipped | `tms.reassign` only. Reads stay on the fixture. Not a production TMS. |
 | Online model calls | In progress | Formal demo entry points default to online inference. Compatible fake tests cover both APIs and three waybills. Live domestic-provider acceptance still needs a deployment credential. See [issue 59](https://github.com/Duang777/waybill-guardian/issues/59). |
 | File import | Shipped | `PLATFORM=file` loads JSON or CSV v1 at startup, and the page can select a waybill from the file. Writes stay on the in-memory fixture runtime. See closed [issue 60](https://github.com/Duang777/waybill-guardian/issues/60) and [`docs/file-data-source-design.md`](docs/file-data-source-design.md). |
-| Highway-port overview | Shipped | The home page shows the 72-port network, KPIs, anomaly queue, operating briefs, and batch start with per-run approval. See [issue 61](https://github.com/Duang777/waybill-guardian/issues/61). |
+| Highway-port overview | Shipped | The home page shows the 72-port network, KPIs, three operating charts, the anomaly queue, operating briefs, and batch start with per-run approval. See [issue 61](https://github.com/Duang777/waybill-guardian/issues/61) and [issue 72](https://github.com/Duang777/waybill-guardian/issues/72). |
 | Apache-2.0 and dependency manifests | Shipped | The root has `LICENSE`. Transitive dependency manifests are in [`docs/licenses/`](docs/licenses/). |
 | CSRF checks on non-GET requests | Shipped | Go's `CrossOriginProtection` checks `Sec-Fetch-Site` and `Origin`. JSON write endpoints check `Content-Type`. See closed [issue 64](https://github.com/Duang777/waybill-guardian/issues/64). |
 | Docker Compose | Shipped | One container serves the frontend and API, with an optional PostgreSQL 17 profile. |
@@ -330,6 +330,11 @@ uses an independent model call without tools or history. The model receives aggr
 without waybill, route, port, person, or vehicle identities. It can cite only evidence IDs supplied
 by the server, which rebuilds the displayed references. If the model call, parsing, privacy check,
 or citation check fails, the endpoint returns the deterministic brief with HTTP 200.
+
+The page builds the anomaly-composition and high-anomaly-route charts from the same overview
+snapshot. SSE projections update the current disposition chart. The page does not show a trend,
+period comparison, or process funnel without historical buckets, a previous snapshot, or a manual
+baseline.
 
 `POST /api/runs:batch` accepts up to 20 `waybill_id` values and returns an independent result for
 each one. `MAX_CONCURRENT_RUNS` limits concurrent investigations. Every accepted run has its own
