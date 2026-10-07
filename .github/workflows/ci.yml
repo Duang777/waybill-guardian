@@ -71,6 +71,10 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       - run: go test -tags=integration -count=1 ./internal/storage/postgres
+      - run: >-
+          go test -tags=integration -race -count=50
+          -run '^TestRepositoryPersistsBindingBeforeDispatchAndRenewsEffectLease$'
+          ./internal/storage/postgres
       - run: go test -tags=integration -count=1 -run TestEventIngressConcurrentReplayWithPostgreSQL ./cmd/server
 
   web:

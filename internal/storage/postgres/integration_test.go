@@ -2053,6 +2053,8 @@ func TestRepositoryExecutesAndReplaysApprovedEffect(t *testing.T) {
 func TestRepositoryPersistsBindingBeforeDispatchAndRenewsEffectLease(t *testing.T) {
 	db := openIntegrationDB(t)
 	tenantID := "tenant-" + uuid.NewString()
+	effectLeaseTTL := 600 * time.Millisecond
+	renewInterval := effectLeaseTTL / 3
 	clients, _, err := guardtools.NewDemoRuntime()
 	if err != nil {
 		t.Fatal(err)
@@ -2070,7 +2072,7 @@ func TestRepositoryPersistsBindingBeforeDispatchAndRenewsEffectLease(t *testing.
 		TenantID:       tenantID,
 		WorkerID:       "worker-blocking",
 		LeaseTTL:       5 * time.Second,
-		EffectLeaseTTL: 150 * time.Millisecond,
+		EffectLeaseTTL: effectLeaseTTL,
 		OutboxLeaseTTL: 5 * time.Second,
 		PollInterval:   10 * time.Millisecond,
 		WriteRuntime:   blocking,
@@ -2127,7 +2129,7 @@ func TestRepositoryPersistsBindingBeforeDispatchAndRenewsEffectLease(t *testing.
 		)
 	}
 
-	time.Sleep(250 * time.Millisecond)
+	time.Sleep(2*renewInterval + 50*time.Millisecond)
 	var renewedLeaseUntil time.Time
 	if err := db.pool.QueryRow(t.Context(), `
 		SELECT lease_deadline
