@@ -101,7 +101,7 @@ describe("incident dossier", () => {
         timeline={initialTimelineState}
         runStatus="awaiting_approval"
         runID="run-1"
-        connected
+        connection="online"
       />,
     );
     const replayMarkup = renderToStaticMarkup(
@@ -112,7 +112,7 @@ describe("incident dossier", () => {
         }}
         runStatus="awaiting_approval"
         runID="run-1"
-        connected
+        connection="online"
       />,
     );
     const evidenceMarkup = renderToStaticMarkup(

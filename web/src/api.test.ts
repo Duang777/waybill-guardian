@@ -56,6 +56,26 @@ describe("waybill API", () => {
     await expect(listWaybills()).resolves.toEqual([]);
   });
 
+  it("classifies invalid JSON at the network boundary", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response("<html>gateway failure</html>", {
+            status: 200,
+            headers: { "Content-Type": "text/html" },
+          }),
+        ),
+      ),
+    );
+
+    await expect(listWaybills()).rejects.toMatchObject({
+      name: "APIError",
+      code: "invalid_json",
+      status: 200,
+    });
+  });
+
   it("posts the selected waybill and trusts the run returned by the server", async () => {
     let requestInput: RequestInfo | URL | null = null;
     let requestInit: RequestInit | undefined;
@@ -162,7 +182,30 @@ describe("waybill API", () => {
 
     expect(onEvent).toHaveBeenCalledOnce();
     expect(source?.closed).toBe(true);
-    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    expect(onConnectionChange).toHaveBeenNthCalledWith(1, "connecting");
+    expect(onConnectionChange).toHaveBeenLastCalledWith("closed");
+  });
+
+  it("reports an interrupted timeline as reconnecting", () => {
+    let source: FakeEventSource | undefined;
+    class StubEventSource extends FakeEventSource {
+      constructor() {
+        super();
+        source = this;
+      }
+    }
+    vi.stubGlobal("EventSource", StubEventSource);
+    const onConnectionChange = vi.fn();
+
+    openTimeline(runIdSchema.parse("run-reconnecting"), 3, {
+      onEvent: vi.fn(),
+      onConnectionChange,
+      onError: vi.fn(),
+    });
+    source?.onerror?.(new Event("error"));
+
+    expect(onConnectionChange).toHaveBeenNthCalledWith(1, "connecting");
+    expect(onConnectionChange).toHaveBeenLastCalledWith("reconnecting");
   });
 
   it("parses sourced approval evidence and its proposal reference", () => {

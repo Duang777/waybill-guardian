@@ -1,0 +1,135 @@
+.state {
+  display: grid;
+  min-height: 240px;
+  grid-template-columns: 44px minmax(240px, 520px);
+  place-content: center;
+  align-items: start;
+  gap: 14px 18px;
+  padding: 28px;
+  border-block: 1px solid oklch(0.82 0.012 185);
+  background: oklch(0.985 0.003 95);
+  color: oklch(0.25 0.018 255);
+}
+
+.stateCompact {
+  min-height: 160px;
+  grid-template-columns: 38px minmax(0, 360px);
+  padding: 22px;
+  border: 0;
+}
+
+.stateIcon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+
+.stateCompact .stateIcon {
+  width: 36px;
+  height: 36px;
+}
+
+.stateEmpty .stateIcon {
+  color: oklch(0.48 0.035 185);
+}
+
+.stateError .stateIcon {
+  color: oklch(0.52 0.16 28);
+}
+
+.stateOffline .stateIcon {
+  color: oklch(0.54 0.12 75);
+}
+
+.stateCopy {
+  display: grid;
+  gap: 5px;
+}
+
+.stateEyebrow {
+  color: oklch(0.51 0.018 255);
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.state h2 {
+  margin: 0;
+  font-family: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+  font-size: 25px;
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: 0;
+  text-wrap: balance;
+}
+
+.state p {
+  max-width: 56ch;
+  margin: 0;
+  color: oklch(0.47 0.018 255);
+  font-size: 13px;
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+.stateAction {
+  grid-column: 2;
+  align-self: center;
+  justify-self: start;
+}
+
+.stateCompact .stateAction {
+  grid-column: 2;
+  justify-self: start;
+}
+
+.skeleton {
+  display: block;
+  min-width: 20px;
+  min-height: 8px;
+  border-radius: 3px;
+  background: oklch(0.88 0.012 185);
+  animation: skeletonPulse 1.15s ease-in-out infinite alternate;
+}
+
+@keyframes skeletonPulse {
+  from {
+    opacity: 0.48;
+  }
+
+  to {
+    opacity: 0.92;
+  }
+}
+
+@media (max-width: 700px) {
+  .state,
+  .stateCompact {
+    min-height: 220px;
+    grid-template-columns: 38px minmax(0, 1fr);
+    place-content: center stretch;
+    padding: 24px 18px;
+  }
+
+  .stateAction,
+  .stateCompact .stateAction {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .state h2 {
+    font-size: 22px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+    opacity: 0.72;
+  }
+}

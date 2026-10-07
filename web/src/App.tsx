@@ -1,8 +1,15 @@
-import { AlertOctagon, ArrowLeft, Play, RotateCw, X } from "lucide-react";
+import {
+  AlertOctagon,
+  ArrowLeft,
+  Play,
+  Radio,
+  RotateCw,
+  WifiOff,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import styles from "./app.module.css";
 import {
-  APIError,
   confirmApproval,
   getRunSnapshot,
   getWaybill,
@@ -14,6 +21,7 @@ import {
   startRun,
   type RunID,
   type RunSummary,
+  type TimelineConnectionState,
   type WaybillCatalogItem,
   type WaybillID,
   type WaybillView,
@@ -26,8 +34,21 @@ import {
   EvidenceLedger,
   RunStageBar,
 } from "./components/IncidentDossier";
-import { ApprovalPanel } from "./components/ApprovalPanel";
-import { TextureButton, TextureLink } from "./components/cult";
+import {
+  ApprovalPanel,
+  type ApprovalDecisionState,
+} from "./components/ApprovalPanel";
+import {
+  HaloBadge,
+  TextureButton,
+  TextureLink,
+  type HaloBadgeTone,
+} from "./components/cult";
+import { PanelErrorBoundary } from "./components/PanelErrorBoundary";
+import {
+  SkeletonBlock,
+  StateFeedback,
+} from "./components/StateFeedback";
 import { SummaryStrip } from "./components/SummaryStrip";
 import { AuditDrawer } from "./components/TimelinePanel";
 import {
@@ -36,6 +57,7 @@ import {
 } from "./recovery";
 import {
   evidenceFocusTarget,
+  inferenceMode,
   initialTimelineState,
   latestApproval,
   proposalForApproval,
@@ -45,24 +67,36 @@ import {
   type EvidenceSelection,
 } from "./timeline";
 import type { WaybillResource } from "./waybill-resource";
+import {
+  requestIssueCopy,
+  requestIssueFromMessage,
+  toRequestIssue,
+  type RequestIssue,
+} from "./request-issue";
 import { OverviewPage } from "./OverviewPage";
 import {
   formatWorkbenchHref,
   parseWorkbenchRoute,
   type WorkbenchTarget,
 } from "./workbench-route";
+import {
+  connectionLabel,
+  decisionUnavailableReason,
+  workbenchConnectionState,
+  type WorkbenchConnectionState,
+} from "./workbench-connection";
 
 type CatalogResource =
   | { kind: "loading" }
   | { kind: "empty" }
   | { kind: "ready"; data: readonly WaybillCatalogItem[] }
-  | { kind: "error"; message: string };
+  | { kind: "error"; issue: RequestIssue };
 
 type WaybillSelection =
   | { kind: "empty" }
   | { kind: "loading"; target: WorkbenchTarget }
   | { kind: "ready"; waybillID: WaybillID; data: WaybillView }
-  | { kind: "error"; target: WorkbenchTarget; message: string };
+  | { kind: "error"; target: WorkbenchTarget; issue: RequestIssue };
 
 type PendingAction = "bootstrap" | "trigger" | "confirm" | "reject" | null;
 
@@ -124,14 +158,19 @@ function WaybillWorkbench({
   initialTarget: WorkbenchTarget;
 }) {
   const [catalog, setCatalog] = useState<CatalogResource>({ kind: "loading" });
-  const [selection, setSelection] = useState<WaybillSelection>({ kind: "empty" });
+  const [selection, setSelection] = useState<WaybillSelection>({
+    kind: "loading",
+    target: initialTarget,
+  });
   const [run, setRun] = useState<RunSummary | null>(null);
   const [timelineAfter, setTimelineAfter] = useState<number | null>(null);
   const [timeline, dispatch] = useReducer(timelineReducer, initialTimelineState);
-  const [connected, setConnected] = useState(false);
+  const [timelineConnection, setTimelineConnection] =
+    useState<TimelineConnectionState>("closed");
+  const [browserOnline, setBrowserOnline] = useState(() => navigator.onLine);
   const [pendingAction, setPendingAction] = useState<PendingAction>("bootstrap");
-  const [message, setMessage] = useState<string | null>(null);
-  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [message, setMessage] = useState<RequestIssue | null>(null);
+  const [recoveryError, setRecoveryError] = useState<RequestIssue | null>(null);
   const [routePointFocus, setRoutePointFocus] =
     useState<RoutePointFocusRequest | null>(null);
   const [auditOpen, setAuditOpen] = useState(false);
@@ -150,7 +189,7 @@ function WaybillWorkbench({
     const generation = selectionGeneration.current + 1;
     selectionGeneration.current = generation;
     selectionRequest.current = controller;
-    setConnected(false);
+    setTimelineConnection("closed");
     setTimelineAfter(null);
     setRoutePointFocus(null);
     setAuditOpen(false);
@@ -182,7 +221,7 @@ function WaybillWorkbench({
       if (isAbortError(error) || catalogGeneration.current !== generation) {
         return null;
       }
-      setCatalog({ kind: "error", message: errorMessage(error) });
+      setCatalog({ kind: "error", issue: toRequestIssue(error) });
       return null;
     }
   }, []);
@@ -218,8 +257,7 @@ function WaybillWorkbench({
         ) {
           return;
         }
-        const detail = errorMessage(error);
-        setSelection({ kind: "error", target, message: detail });
+        setSelection({ kind: "error", target, issue: toRequestIssue(error) });
       }
     },
     [],
@@ -267,7 +305,7 @@ function WaybillWorkbench({
         setSelection({
           kind: "error",
           target,
-          message: errorMessage(error),
+          issue: toRequestIssue(error),
         });
       }
     },
@@ -313,10 +351,16 @@ function WaybillWorkbench({
         return;
       }
       if (decision.kind === "blocked") {
-        setRecoveryError(decision.message);
+        setRecoveryError(
+          requestIssueFromMessage(decision.message, "unavailable"),
+        );
         return;
       }
       const waybills = await catalogPromise;
+      if (waybills?.length === 0) {
+        setSelection({ kind: "empty" });
+        return;
+      }
       const targetWaybillID = initialWaybillID ?? waybills?.[0]?.waybill_id;
       if (!controller.signal.aborted && targetWaybillID !== undefined) {
         await loadWaybill(targetWaybillID);
@@ -340,6 +384,16 @@ function WaybillWorkbench({
   }, [bootstrap]);
 
   useEffect(() => {
+    const updateBrowserConnection = () => setBrowserOnline(navigator.onLine);
+    window.addEventListener("online", updateBrowserConnection);
+    window.addEventListener("offline", updateBrowserConnection);
+    return () => {
+      window.removeEventListener("online", updateBrowserConnection);
+      window.removeEventListener("offline", updateBrowserConnection);
+    };
+  }, []);
+
+  useEffect(() => {
     if (
       run === null ||
       timelineAfter === null ||
@@ -348,7 +402,7 @@ function WaybillWorkbench({
       return;
     }
     const generation = selectionGeneration.current;
-    setConnected(false);
+    setTimelineConnection("connecting");
     const close = openTimeline(run.run_id, timelineAfter, {
       onEvent: (event) => {
         if (selectionGeneration.current === generation && event.run_id === run.run_id) {
@@ -357,12 +411,12 @@ function WaybillWorkbench({
       },
       onConnectionChange: (value) => {
         if (selectionGeneration.current === generation) {
-          setConnected(value);
+          setTimelineConnection(value);
         }
       },
       onError: (value) => {
         if (selectionGeneration.current === generation) {
-          setMessage(value);
+          setMessage(requestIssueFromMessage(value, "contract"));
         }
       },
     });
@@ -399,6 +453,17 @@ function WaybillWorkbench({
     (timeline.playback.kind === "live" || timeline.focusedSeq !== null
       ? (run?.status ?? null)
       : null);
+  const connection = workbenchConnectionState({
+    runID: run?.run_id ?? null,
+    runStatus: currentStatus,
+    timelineConnection,
+    browserOnline,
+  });
+  const currentInferenceMode = inferenceMode(timeline.events);
+  const approvalDecisionState = decisionState({
+    pendingAction,
+    connection,
+  });
   const view = selection.kind === "ready" ? selection.data : null;
   const waybillResource = toWaybillResource(selection);
   const selectedWaybillID =
@@ -423,14 +488,19 @@ function WaybillWorkbench({
     }
   }, [run, selectedWaybillID, selection]);
   const anomaly = view?.tracking.find((point) => point.anomaly) ?? null;
-  const resourceError =
+  const blockingIssue =
     recoveryError ??
     (selection.kind === "error"
-      ? selection.message
-      : catalog.kind === "error"
-        ? catalog.message
+      ? selection.issue
+      : catalog.kind === "error" && selection.kind !== "ready"
+        ? catalog.issue
         : null);
-  const displayedError = message ?? resourceError;
+  const bannerIssue =
+    message ??
+    (catalog.kind === "error" && selection.kind === "ready"
+      ? catalog.issue
+      : null);
+  const bannerCopy = bannerIssue === null ? null : requestIssueCopy(bannerIssue);
 
   const selectEvidence = (selection: EvidenceSelection) => {
     const target = evidenceFocusTarget(
@@ -487,7 +557,7 @@ function WaybillWorkbench({
         selectionGeneration.current === request.generation
       ) {
         setSelection(currentSelection);
-        setMessage(errorMessage(error));
+        setMessage(toRequestIssue(error));
       }
     } finally {
       if (selectionGeneration.current === request.generation) {
@@ -550,7 +620,7 @@ function WaybillWorkbench({
         waybillID: decided.waybill_id,
       });
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessage(toRequestIssue(error));
     } finally {
       setPendingAction(null);
     }
@@ -569,7 +639,7 @@ function WaybillWorkbench({
         waybillID: decided.waybill_id,
       });
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessage(toRequestIssue(error));
       throw error;
     } finally {
       setPendingAction(null);
@@ -626,10 +696,30 @@ function WaybillWorkbench({
             </select>
           </label>
           <div className={styles.runContext}>
-            <span className={styles.runLabel}>当前任务</span>
-            <span className={styles.mono}>
-              {run === null ? "NOT STARTED" : compactID(run.run_id)}
-            </span>
+            <div>
+              <span className={styles.runLabel}>当前任务</span>
+              <span className={styles.mono}>
+                {run === null ? "NOT STARTED" : compactID(run.run_id)}
+              </span>
+            </div>
+            <div className={styles.runSignals}>
+              <HaloBadge
+                tone={connectionTone(connection)}
+                live={connection === "online"}
+              >
+                {connection === "offline" ? (
+                  <WifiOff aria-hidden="true" size={12} />
+                ) : (
+                  <Radio aria-hidden="true" size={12} />
+                )}
+                {connectionLabel(connection)}
+              </HaloBadge>
+              {run !== null && (
+                <HaloBadge tone={inferenceTone(currentInferenceMode)}>
+                  {inferenceLabel(currentInferenceMode)}
+                </HaloBadge>
+              )}
+            </div>
           </div>
           <TextureButton
             className={styles.triggerButton}
@@ -661,15 +751,18 @@ function WaybillWorkbench({
           <SummaryStrip
             resource={waybillResource}
             status={currentStatus}
-            connected={connected}
+            connected={connection === "online"}
           />
 
-          {displayedError !== null && (
+          {bannerCopy !== null && (
             <div className={styles.errorBanner} role="alert">
               <AlertOctagon aria-hidden="true" size={17} />
-              <span>{displayedError}</span>
+              <span className={styles.errorCopy}>
+                <strong>{bannerCopy.title}</strong>
+                <span>{bannerCopy.detail}</span>
+              </span>
               <div className={styles.errorActions}>
-                {resourceError !== null && message === null && (
+                {catalog.kind === "error" && message === null && (
                   <TextureButton
                     type="button"
                     variant="secondary"
@@ -696,96 +789,256 @@ function WaybillWorkbench({
             </div>
           )}
 
-          <div className={styles.dossierWorkbench}>
-            <RunStageBar
-              timeline={timeline}
-              runStatus={currentStatus}
-              runID={run?.run_id ?? null}
-              connected={connected}
-            />
-
-            <div
-              className={styles.evidenceWorkspace}
-              aria-label="空间证据工作区"
-            >
-              <section className={styles.mapPanel} aria-labelledby="route-map-title">
-                <div className={styles.panelTitleRow}>
-                  <div>
-                    <span className={styles.eyebrow}>
-                      {timeline.playback.kind === "live"
-                        ? "Spatial evidence / live"
-                        : "Spatial evidence / replay"}
-                    </span>
-                    <h2 id="route-map-title">运输轨迹证据</h2>
-                  </div>
-                  <span className={styles.anomalyLegend}>
-                    <span aria-hidden="true" />
-                    {anomaly === null
-                      ? selection.kind === "error"
-                        ? "异常轨迹加载失败"
-                        : selectedWaybillID === null
-                        ? "暂无异常轨迹"
-                        : selection.kind === "loading"
-                          ? "等待异常轨迹"
-                          : "未发现异常轨迹"
-                      : anomaly.stop_hours === undefined
-                        ? "检测到异常节点"
-                        : `异常停留 ${formatHours(anomaly.stop_hours)} 小时`}
-                  </span>
-                </div>
-                <RouteMap
-                  points={view?.tracking ?? []}
-                  origin={view?.waybill.origin ?? null}
-                  destination={view?.waybill.destination ?? null}
-                  resourceKind={waybillResource.kind}
-                  focusRequest={routePointFocus}
-                />
-              </section>
-
-              <EvidenceLedger
-                approval={currentApproval}
-                onEvidenceSelect={selectEvidence}
-              />
+          {shouldShowConnectionNotice(connection) && (
+            <div className={styles.connectionNotice} role="status">
+              <WifiOff aria-hidden="true" size={16} />
+              <span>
+                <strong>{connectionLabel(connection)}</strong>
+                审计流会自动恢复，连接恢复前审批操作保持锁定。
+              </span>
             </div>
+          )}
 
-            <div className={styles.decisionDock} aria-label="人工决策区">
-              <ApprovalPanel
-                approval={currentApproval}
-                proposal={currentProposal}
+          {blockingIssue !== null ? (
+            <StateFeedback
+              className={styles.workbenchState}
+              tone="error"
+              eyebrow="Workbench error"
+              title={requestIssueCopy(blockingIssue).title}
+              detail={requestIssueCopy(blockingIssue).detail}
+              action={
+                <TextureButton
+                  type="button"
+                  variant="secondary"
+                  onClick={() => void retryResource()}
+                >
+                  <RotateCw aria-hidden="true" size={16} />
+                  重试
+                </TextureButton>
+              }
+            />
+          ) : waybillResource.kind === "loading" ? (
+            <WorkbenchSkeleton />
+          ) : waybillResource.kind === "empty" ? (
+            <StateFeedback
+              className={styles.workbenchState}
+              tone="empty"
+              eyebrow="Empty catalog"
+              title="当前没有异常运单"
+              detail="运单目录已加载完成，没有可进入处置工作台的异常记录。"
+              action={
+                <TextureLink href="/" variant="primary">
+                  <ArrowLeft aria-hidden="true" size={16} />
+                  返回经营总览
+                </TextureLink>
+              }
+            />
+          ) : waybillResource.kind === "ready" ? (
+            <div className={styles.dossierWorkbench}>
+              <RunStageBar
+                timeline={timeline}
                 runStatus={currentStatus}
-                view={view}
-                busy={
-                  pendingAction === "confirm" || pendingAction === "reject"
-                }
-                embedded
-                showEvidence={false}
-                onEvidenceSelect={selectEvidence}
-                onConfirm={confirm}
-                onReject={reject}
+                runID={run?.run_id ?? null}
+                connection={connection}
               />
-            </div>
 
-            <AuditDrawer
-              state={timeline}
-              dispatch={dispatch}
-              open={auditOpen}
-              onOpenChange={setAuditOpen}
-            />
-          </div>
+              <div
+                className={styles.evidenceWorkspace}
+                aria-label="空间证据工作区"
+              >
+                <section className={styles.mapPanel} aria-labelledby="route-map-title">
+                  <div className={styles.panelTitleRow}>
+                    <div>
+                      <span className={styles.eyebrow}>
+                        {timeline.playback.kind === "live"
+                          ? "Spatial evidence / live"
+                          : "Spatial evidence / replay"}
+                      </span>
+                      <h2 id="route-map-title">运输轨迹证据</h2>
+                    </div>
+                    <span className={styles.anomalyLegend}>
+                      <span aria-hidden="true" />
+                      {anomaly === null
+                        ? "未发现异常轨迹"
+                        : anomaly.stop_hours === undefined
+                          ? "检测到异常节点"
+                          : `异常停留 ${formatHours(anomaly.stop_hours)} 小时`}
+                    </span>
+                  </div>
+                  <PanelErrorBoundary name="运输轨迹">
+                    <RouteMap
+                      points={waybillResource.view.tracking}
+                      origin={waybillResource.view.waybill.origin}
+                      destination={waybillResource.view.waybill.destination}
+                      resourceKind="ready"
+                      focusRequest={routePointFocus}
+                    />
+                  </PanelErrorBoundary>
+                </section>
+
+                <PanelErrorBoundary name="证据账本">
+                  <EvidenceLedger
+                    approval={currentApproval}
+                    onEvidenceSelect={selectEvidence}
+                  />
+                </PanelErrorBoundary>
+              </div>
+
+              <div className={styles.decisionDock} aria-label="人工决策区">
+                <PanelErrorBoundary name="人工决策闸">
+                  <ApprovalPanel
+                    approval={currentApproval}
+                    proposal={currentProposal}
+                    runStatus={currentStatus}
+                    view={waybillResource.view}
+                    decisionState={approvalDecisionState}
+                    embedded
+                    showEvidence={false}
+                    onEvidenceSelect={selectEvidence}
+                    onConfirm={confirm}
+                    onReject={reject}
+                  />
+                </PanelErrorBoundary>
+              </div>
+
+              <PanelErrorBoundary name="审计记录">
+                <AuditDrawer
+                  state={timeline}
+                  dispatch={dispatch}
+                  open={auditOpen}
+                  onOpenChange={setAuditOpen}
+                />
+              </PanelErrorBoundary>
+            </div>
+          ) : null}
         </main>
       </div>
     </>
   );
 }
 
-function errorMessage(error: unknown): string {
-  if (error instanceof APIError) {
-    return error.message;
+function WorkbenchSkeleton() {
+  return (
+    <div
+      className={`${styles.dossierWorkbench} ${styles.workbenchSkeleton}`}
+      aria-label="正在加载运单工作台"
+      aria-busy="true"
+    >
+      <section className={styles.skeletonStage}>
+        <div>
+          <SkeletonBlock className={styles.skeletonShort} />
+          <SkeletonBlock className={styles.skeletonHeading} />
+        </div>
+        <div className={styles.skeletonSteps}>
+          {Array.from({ length: 6 }, (_, index) => (
+            <SkeletonBlock
+              className={styles.skeletonStep}
+              key={`stage-skeleton-${index}`}
+            />
+          ))}
+        </div>
+      </section>
+      <div className={styles.evidenceWorkspace}>
+        <section className={styles.mapPanel}>
+          <div className={styles.skeletonPanelHeading}>
+            <SkeletonBlock className={styles.skeletonHeading} />
+            <SkeletonBlock className={styles.skeletonShort} />
+          </div>
+          <div className={styles.skeletonMap}>
+            <SkeletonBlock className={styles.skeletonRoute} />
+          </div>
+        </section>
+        <aside className={styles.skeletonLedger}>
+          <SkeletonBlock className={styles.skeletonHeading} />
+          <SkeletonBlock />
+          <SkeletonBlock />
+          <SkeletonBlock />
+        </aside>
+      </div>
+      <div className={styles.decisionDock}>
+        <div className={styles.skeletonDecision}>
+          <SkeletonBlock className={styles.skeletonDecisionLabel} />
+          <SkeletonBlock className={styles.skeletonDecisionBody} />
+          <SkeletonBlock className={styles.skeletonDecisionAction} />
+        </div>
+      </div>
+      <SkeletonBlock className={styles.skeletonAudit} />
+    </div>
+  );
+}
+
+function decisionState({
+  pendingAction,
+  connection,
+}: {
+  pendingAction: PendingAction;
+  connection: WorkbenchConnectionState;
+}): ApprovalDecisionState {
+  if (pendingAction === "confirm" || pendingAction === "reject") {
+    return { kind: "busy" };
   }
-  if (error instanceof Error) {
-    return error.message;
+  const reason = decisionUnavailableReason(connection);
+  return reason === null
+    ? { kind: "ready" }
+    : { kind: "unavailable", reason };
+}
+
+function shouldShowConnectionNotice(
+  connection: WorkbenchConnectionState,
+): boolean {
+  return connection === "reconnecting" || connection === "offline";
+}
+
+function connectionTone(
+  connection: WorkbenchConnectionState,
+): HaloBadgeTone {
+  switch (connection) {
+    case "online":
+      return "success";
+    case "connecting":
+      return "info";
+    case "reconnecting":
+    case "offline":
+      return "warning";
+    case "idle":
+    case "sealed":
+      return "neutral";
+    default: {
+      const exhaustive: never = connection;
+      return exhaustive;
+    }
   }
-  return "请求未完成，请检查服务状态";
+}
+
+function inferenceLabel(mode: ReturnType<typeof inferenceMode>): string {
+  switch (mode.kind) {
+    case "online":
+      return mode.model === null ? "在线模型" : `在线模型 · ${mode.model}`;
+    case "offline":
+      return "离线规则";
+    case "legacy":
+      return "历史运行";
+    default: {
+      const exhaustive: never = mode;
+      return exhaustive;
+    }
+  }
+}
+
+function inferenceTone(
+  mode: ReturnType<typeof inferenceMode>,
+): HaloBadgeTone {
+  switch (mode.kind) {
+    case "online":
+      return "info";
+    case "offline":
+    case "legacy":
+      return "neutral";
+    default: {
+      const exhaustive: never = mode;
+      return exhaustive;
+    }
+  }
 }
 
 function recoverySource<T>(
@@ -793,7 +1046,7 @@ function recoverySource<T>(
 ): RecoverySource<T> {
   return result.status === "fulfilled"
     ? { kind: "ready", data: result.value }
-    : { kind: "error", message: errorMessage(result.reason) };
+    : { kind: "error", message: toRequestIssue(result.reason).detail };
 }
 
 function scopedRecoverySource<T extends { waybill_id: WaybillID }>(

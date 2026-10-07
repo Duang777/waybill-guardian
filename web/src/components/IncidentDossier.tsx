@@ -14,20 +14,24 @@ import {
   type TimelinePhase,
   type TimelineState,
 } from "../timeline";
+import {
+  connectionLabel,
+  type WorkbenchConnectionState,
+} from "../workbench-connection";
 import { HaloBadge, RollingNumber } from "./cult";
 
 type RunStageBarProps = {
   timeline: TimelineState;
   runStatus: RunStatus | null;
   runID: string | null;
-  connected: boolean;
+  connection: WorkbenchConnectionState;
 };
 
 export function RunStageBar({
   timeline,
   runStatus,
   runID,
-  connected,
+  connection,
 }: RunStageBarProps) {
   const phases = timelinePhases(visibleEvents(timeline));
   const activePhase = currentPhase(phases);
@@ -44,11 +48,11 @@ export function RunStageBar({
             {replaying ? "Run stage / replay" : "Run stage / live"}
           </span>
           <HaloBadge
-            tone={replaying ? "neutral" : connected ? "success" : "warning"}
-            live={!replaying && connected}
+            tone={connectionTone(connection, replaying)}
+            live={!replaying && connection === "online"}
           >
             <Radio aria-hidden="true" size={12} />
-            {connectionLabel({ connected, runID, runStatus, replaying })}
+            {runConnectionLabel(connection, replaying)}
           </HaloBadge>
         </div>
         <div
@@ -414,36 +418,41 @@ function taskDescription(
   }
 }
 
-function connectionLabel({
-  connected,
-  runID,
-  runStatus,
-  replaying,
-}: {
-  connected: boolean;
-  runID: string | null;
-  runStatus: RunStatus | null;
-  replaying: boolean;
-}): string {
+function runConnectionLabel(
+  connection: WorkbenchConnectionState,
+  replaying: boolean,
+): string {
   if (replaying) {
-    return connected ? "SSE 在线 · 回放快照" : "回放快照";
+    return connection === "online"
+      ? "SSE 在线 · 回放快照"
+      : `回放快照 · ${connectionLabel(connection)}`;
   }
-  if (connected) {
-    return "SSE 在线";
+  return connectionLabel(connection);
+}
+
+function connectionTone(
+  connection: WorkbenchConnectionState,
+  replaying: boolean,
+): "neutral" | "info" | "success" | "warning" {
+  if (replaying) {
+    return "neutral";
   }
-  if (runID === null) {
-    return "未启动";
+  switch (connection) {
+    case "online":
+      return "success";
+    case "connecting":
+      return "info";
+    case "reconnecting":
+    case "offline":
+      return "warning";
+    case "idle":
+    case "sealed":
+      return "neutral";
+    default: {
+      const exhaustive: never = connection;
+      return exhaustive;
+    }
   }
-  if (
-    runStatus === "completed" ||
-    runStatus === "rejected" ||
-    runStatus === "failed" ||
-    runStatus === "review_required" ||
-    runStatus === "manual_review"
-  ) {
-    return "审计已固化";
-  }
-  return "正在连接";
 }
 
 function phaseIcon(phase: TimelinePhase) {

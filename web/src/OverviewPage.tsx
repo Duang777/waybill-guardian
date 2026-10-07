@@ -1,5 +1,4 @@
 import {
-  AlertTriangle,
   Bot,
   CheckCheck,
   ChevronRight,
@@ -36,6 +35,11 @@ import {
   type HaloBadgeTone,
 } from "./components/cult";
 import { HubNetwork } from "./components/HubNetwork";
+import { PanelErrorBoundary } from "./components/PanelErrorBoundary";
+import {
+  SkeletonBlock,
+  StateFeedback,
+} from "./components/StateFeedback";
 import styles from "./overview.module.css";
 import {
   advanceRunProjection,
@@ -43,11 +47,16 @@ import {
   type RunProjection,
 } from "./overview-run-projection";
 import { overviewWorkbenchHref } from "./workbench-route";
+import {
+  requestIssueCopy,
+  toRequestIssue,
+  type RequestIssue,
+} from "./request-issue";
 
 type OverviewResource =
   | { kind: "loading" }
   | { kind: "ready"; overview: Overview; kpis: KPIReport }
-  | { kind: "error"; message: string };
+  | { kind: "error"; issue: RequestIssue };
 
 type BatchState =
   | { kind: "idle" }
@@ -164,7 +173,7 @@ export function OverviewPage() {
       }
     } catch (error) {
       if (!controller.signal.aborted) {
-        setResource({ kind: "error", message: errorMessage(error) });
+        setResource({ kind: "error", issue: toRequestIssue(error) });
       }
     }
   }, [syncRuns]);
@@ -337,9 +346,23 @@ export function OverviewPage() {
               <small>全国异常运力指挥</small>
             </span>
           </a>
-          <HaloBadge className={styles.headerNetworkStatus} tone="success" live>
-            全国网络
-          </HaloBadge>
+          <div className={styles.headerStatus}>
+            <HaloBadge
+              className={styles.headerNetworkStatus}
+              tone={networkStatusTone(resource)}
+              live={
+                resource.kind === "ready" &&
+                resource.overview.network_available
+              }
+            >
+              {networkStatusLabel(resource)}
+            </HaloBadge>
+            {resource.kind === "ready" && (
+              <HaloBadge tone="neutral">
+                {dataModeLabel(resource.overview.data_mode)}
+              </HaloBadge>
+            )}
+          </div>
           <TextureButton
             type="button"
             variant="icon"
@@ -367,7 +390,9 @@ export function OverviewPage() {
                 </div>
               )}
             </section>
-            {resource.kind === "ready" && (
+            {resource.kind === "loading" ? (
+              <OverviewKPISkeleton />
+            ) : resource.kind === "ready" ? (
               <section className={styles.kpiStrip} aria-label="24 小时经营指标">
                 <OverviewKPIBand
                   report={resource.kpis}
@@ -377,44 +402,48 @@ export function OverviewPage() {
                   }}
                 />
               </section>
-            )}
+            ) : null}
           </div>
 
           {resource.kind === "loading" && <LoadingOverview />}
           {resource.kind === "error" && (
-            <section className={styles.errorState} role="alert">
-              <AlertTriangle aria-hidden="true" size={20} />
-              <div>
-                <strong>经营数据暂不可用</strong>
-                <span>{resource.message}</span>
-              </div>
-              <TextureButton
-                type="button"
-                variant="secondary"
-                onClick={() => void load()}
-              >
-                <RefreshCw aria-hidden="true" size={16} />
-                重试
-              </TextureButton>
-            </section>
+            <StateFeedback
+              className={styles.overviewState}
+              tone="error"
+              eyebrow="Overview error"
+              title={requestIssueCopy(resource.issue).title}
+              detail={requestIssueCopy(resource.issue).detail}
+              action={
+                <TextureButton
+                  type="button"
+                  variant="secondary"
+                  onClick={() => void load()}
+                >
+                  <RefreshCw aria-hidden="true" size={16} />
+                  重试
+                </TextureButton>
+              }
+            />
           )}
           {resource.kind === "ready" && (
             <>
               <div className={styles.workspace}>
                 <section className={styles.mapPanel} aria-labelledby="map-heading">
-                  <HubNetwork
-                    hubs={resource.overview.hubs}
-                    routes={resource.overview.routes}
-                    anomalies={resource.overview.anomalies}
-                    runIDs={new Map(
-                      [...runProjections].map(([waybillID, projection]) => [
-                        waybillID,
-                        projection.runID,
-                      ]),
-                    )}
-                    dataMode={resource.overview.data_mode}
-                    totals={resource.overview.totals}
-                  />
+                  <PanelErrorBoundary name="全国港网">
+                    <HubNetwork
+                      hubs={resource.overview.hubs}
+                      routes={resource.overview.routes}
+                      anomalies={resource.overview.anomalies}
+                      runIDs={new Map(
+                        [...runProjections].map(([waybillID, projection]) => [
+                          waybillID,
+                          projection.runID,
+                        ]),
+                      )}
+                      dataMode={resource.overview.data_mode}
+                      totals={resource.overview.totals}
+                    />
+                  </PanelErrorBoundary>
                 </section>
 
                 <section className={styles.queuePanel} aria-labelledby="queue-heading">
@@ -487,10 +516,22 @@ export function OverviewPage() {
                   )}
                   <div className={styles.queueList}>
                     {visibleQueueEntries.length === 0 ? (
-                      <div className={styles.queueEmpty} role="status">
-                        <Bot aria-hidden="true" size={18} />
-                        当前视图暂无任务
-                      </div>
+                      <StateFeedback
+                        className={styles.queueEmptyState}
+                        tone="empty"
+                        eyebrow="Empty queue"
+                        title={
+                          anomalies.length === 0
+                            ? "当前没有异常运单"
+                            : "当前筛选没有任务"
+                        }
+                        detail={
+                          anomalies.length === 0
+                            ? "经营数据已加载完成，风险队列中没有待处置记录。"
+                            : "切换筛选条件可查看其他处置状态。"
+                        }
+                        compact
+                      />
                     ) : (
                       visibleQueueEntries.map(({ item, rank, status, href }) => (
                         <article className={styles.queueItem} key={item.waybill_id}>
@@ -784,13 +825,118 @@ function briefFallbackDetail(brief: Overview["brief"]): string {
   }
 }
 
+function networkStatusTone(resource: OverviewResource): HaloBadgeTone {
+  switch (resource.kind) {
+    case "loading":
+      return "neutral";
+    case "error":
+      return "danger";
+    case "ready":
+      return resource.overview.network_available ? "success" : "warning";
+    default: {
+      const exhaustive: never = resource;
+      return exhaustive;
+    }
+  }
+}
+
+function networkStatusLabel(resource: OverviewResource): string {
+  switch (resource.kind) {
+    case "loading":
+      return "数据连接中";
+    case "error":
+      return "数据不可用";
+    case "ready":
+      return resource.overview.network_available ? "全国网络在线" : "网络数据不完整";
+    default: {
+      const exhaustive: never = resource;
+      return exhaustive;
+    }
+  }
+}
+
+function dataModeLabel(mode: Overview["data_mode"]): string {
+  switch (mode) {
+    case "simulated":
+      return "仿真数据";
+    case "fixture":
+      return "文件数据";
+    case "external":
+      return "外部数据";
+    default: {
+      const exhaustive: never = mode;
+      return exhaustive;
+    }
+  }
+}
+
+function OverviewKPISkeleton() {
+  return (
+    <section
+      className={styles.kpiStrip}
+      aria-label="正在加载 24 小时经营指标"
+      aria-busy="true"
+    >
+      {Array.from({ length: 6 }, (_, index) => (
+        <article className={styles.kpiSkeleton} key={`kpi-skeleton-${index}`}>
+          <SkeletonBlock className={styles.kpiSkeletonLabel} />
+          <SkeletonBlock className={styles.kpiSkeletonValue} />
+          <SkeletonBlock className={styles.kpiSkeletonDetail} />
+        </article>
+      ))}
+    </section>
+  );
+}
+
 function LoadingOverview() {
   return (
-    <div className={styles.loadingState} aria-live="polite">
-      <span className={styles.loadingLine} />
-      <span className={styles.loadingLine} />
-      <span className={styles.loadingLine} />
-      <span>正在汇总全国网络</span>
+    <div
+      className={styles.loadingOverview}
+      aria-label="正在汇总全国经营数据"
+      aria-live="polite"
+      aria-busy="true"
+    >
+      <div className={styles.workspace}>
+        <section className={styles.mapPanel}>
+          <div className={styles.overviewMapSkeleton}>
+            <SkeletonBlock className={styles.mapSkeletonTitle} />
+            <SkeletonBlock className={styles.mapSkeletonNetwork} />
+            <SkeletonBlock className={styles.mapSkeletonLegend} />
+          </div>
+        </section>
+        <section className={styles.queuePanel}>
+          <div className={styles.queueSkeletonHeader}>
+            <SkeletonBlock className={styles.mapSkeletonTitle} />
+            <SkeletonBlock className={styles.queueSkeletonControl} />
+          </div>
+          <div className={styles.queueSkeletonList}>
+            {Array.from({ length: 5 }, (_, index) => (
+              <SkeletonBlock
+                className={styles.queueSkeletonItem}
+                key={`queue-skeleton-${index}`}
+              />
+            ))}
+          </div>
+        </section>
+      </div>
+      <section className={styles.briefSection}>
+        <div className={styles.briefSkeletonHeader}>
+          <SkeletonBlock className={styles.mapSkeletonTitle} />
+          <SkeletonBlock className={styles.queueSkeletonControl} />
+        </div>
+        <div className={styles.briefGrid}>
+          {Array.from({ length: 3 }, (_, index) => (
+            <article className={styles.briefSkeletonItem} key={`brief-skeleton-${index}`}>
+              <SkeletonBlock className={styles.briefSkeletonIndex} />
+              <div>
+                <SkeletonBlock className={styles.briefSkeletonTitle} />
+                <SkeletonBlock className={styles.briefSkeletonLine} />
+                <SkeletonBlock className={styles.briefSkeletonLineShort} />
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

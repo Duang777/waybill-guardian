@@ -230,6 +230,20 @@ try {
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.getByText("改派至川行快运", { exact: true }).waitFor();
       await page.getByText("待确认", { exact: true }).waitFor();
+      await page.getByText("SSE 重连中", { exact: true }).first().waitFor();
+      await page
+        .getByText("系统已暂时锁定审批操作", { exact: false })
+        .waitFor();
+      assert(
+        await page
+          .getByRole("button", { name: "确认并执行", exact: true })
+          .isDisabled(),
+        "timeline disconnection did not lock approval",
+      );
+      await page.unroute(timelinePattern);
+      await page.reload({ waitUntil: "networkidle" });
+      await page.getByText("改派至川行快运", { exact: true }).waitFor();
+      await page.getByText("SSE 在线", { exact: true }).first().waitFor();
     }
 
     await page.getByRole("button", { name: "确认并执行", exact: true }).click();
@@ -250,7 +264,6 @@ try {
         .waitFor();
       assert(triggerRequests === 1, "completed reload started another run");
       completedRunHref = page.url();
-      await page.unroute(timelinePattern);
     }
     await expandPhase(page, "attribution");
     await expandPhase(page, "proposal");

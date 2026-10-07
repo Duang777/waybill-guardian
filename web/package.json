@@ -14,6 +14,7 @@
     "verify:e2e": "node scripts/verify-demo.mjs",
     "verify:file-e2e": "node scripts/verify-file-data.mjs",
     "verify:overview": "node scripts/verify-overview.mjs",
+    "verify:states": "node scripts/verify-state-feedback.mjs",
     "record:demo": "node scripts/record-demo.mjs"
   },
   "dependencies": {

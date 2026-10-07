@@ -8,6 +8,7 @@ import {
   type HaloBadgeTone,
   type HaloProgressTone,
 } from "./cult";
+import { SkeletonBlock } from "./StateFeedback";
 
 type SummaryStripProps = {
   resource: WaybillResource;
@@ -51,7 +52,11 @@ export function SummaryStrip({
         </div>
         <div>
           <span className={styles.eyebrow}>异常运单</span>
-          <strong className={styles.routeTitle}>{route}</strong>
+          {resource.kind === "loading" ? (
+            <SkeletonBlock className={styles.summaryRouteSkeleton} />
+          ) : (
+            <strong className={styles.routeTitle}>{route}</strong>
+          )}
           <span className={styles.mono}>{waybillID ?? "尚未选择运单"}</span>
         </div>
       </div>
@@ -62,21 +67,41 @@ export function SummaryStrip({
             <Truck aria-hidden="true" size={14} />
             货物
           </dt>
-          <dd>{cargo}</dd>
+          <dd>
+            {resource.kind === "loading" ? (
+              <SkeletonBlock className={styles.summaryFactSkeleton} />
+            ) : (
+              cargo
+            )}
+          </dd>
         </div>
         <div>
           <dt>
             <Clock3 aria-hidden="true" size={14} />
             时效
           </dt>
-          <dd>{view === null ? "--" : `${view.waybill.sla_hours} 小时`}</dd>
+          <dd>
+            {resource.kind === "loading" ? (
+              <SkeletonBlock className={styles.summaryFactSkeleton} />
+            ) : view === null ? (
+              "--"
+            ) : (
+              `${view.waybill.sla_hours} 小时`
+            )}
+          </dd>
         </div>
         <div>
           <dt>
             <CloudSun aria-hidden="true" size={14} />
             天气
           </dt>
-          <dd>{view?.weather[0]?.condition ?? "--"}</dd>
+          <dd>
+            {resource.kind === "loading" ? (
+              <SkeletonBlock className={styles.summaryFactSkeleton} />
+            ) : (
+              (view?.weather[0]?.condition ?? "--")
+            )}
+          </dd>
         </div>
         <div>
           <dt>
@@ -92,9 +117,25 @@ export function SummaryStrip({
       </dl>
 
       <div className={styles.riskCluster}>
-        <RiskBar label="ETA 延误" value={view?.risk.eta_delay ?? 0} tone="high" />
-        <RiskBar label="路况" value={view?.risk.road ?? 0} tone="medium" />
-        <RiskBar label="天气" value={view?.risk.weather ?? 0} tone="low" />
+        {resource.kind === "loading" ? (
+          <>
+            <SkeletonBlock className={styles.summaryRiskSkeleton} />
+            <SkeletonBlock className={styles.summaryRiskSkeleton} />
+            <SkeletonBlock className={styles.summaryRiskSkeleton} />
+          </>
+        ) : resource.kind === "ready" ? (
+          <>
+            <RiskBar label="ETA 延误" value={resource.view.risk.eta_delay} tone="high" />
+            <RiskBar label="路况" value={resource.view.risk.road} tone="medium" />
+            <RiskBar label="天气" value={resource.view.risk.weather} tone="low" />
+          </>
+        ) : (
+          <>
+            <RiskPlaceholder label="ETA 延误" />
+            <RiskPlaceholder label="路况" />
+            <RiskPlaceholder label="天气" />
+          </>
+        )}
       </div>
     </section>
   );
@@ -132,6 +173,16 @@ function RiskBar({ label, value, tone }: RiskBarProps) {
       tone={tone}
       ariaLabel={`${label}风险 ${value} 分`}
     />
+  );
+}
+
+function RiskPlaceholder({ label }: { label: string }) {
+  return (
+    <div className={styles.riskPlaceholder}>
+      <span>{label}</span>
+      <strong>--</strong>
+      <span aria-hidden="true" />
+    </div>
   );
 }
 
