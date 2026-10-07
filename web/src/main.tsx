@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { MotionRoot } from "./motion/MotionRoot";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./global.css";
 
@@ -11,6 +12,8 @@ if (root === null) {
 
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <MotionRoot>
+      <App />
+    </MotionRoot>
   </StrictMode>,
 );

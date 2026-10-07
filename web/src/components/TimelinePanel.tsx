@@ -12,8 +12,11 @@ import {
   Route,
   UserRound,
 } from "lucide-react";
+import { m } from "motion/react";
 import { useEffect, useRef, useState, type Dispatch } from "react";
 import styles from "../app.module.css";
+import { motionTransition } from "../motion/tokens";
+import { useReducedMotionPreference } from "../motion/useReducedMotionPreference";
 import {
   HaloBadge,
   RollingNumber,
@@ -217,14 +220,21 @@ export function PlaybackControls({
 function TimelineFeed({ state }: TimelineFeedProps) {
   const events = visibleEvents(state);
   const phases = timelinePhases(events);
+  const reduceMotion = useReducedMotionPreference();
   const feed = useRef<HTMLDivElement>(null);
+  const previousState = useRef(state);
   const [expandedPhases, setExpandedPhases] = useState<
     readonly TimelinePhaseID[]
   >([]);
+  const appendedSeq = appendedLiveSequence(previousState.current, state);
   const focusedPhase = phaseContaining(phases, state.focusedSeq);
   const currentPhase =
     phases.find((phase) => phase.status === "current" && phase.steps.length > 0)
       ?.id ?? null;
+
+  useEffect(() => {
+    previousState.current = state;
+  }, [state]);
 
   useEffect(() => {
     if (state.runID === null || currentPhase === null) {
@@ -287,7 +297,8 @@ function TimelineFeed({ state }: TimelineFeedProps) {
           const expanded =
             phase.steps.length > 0 &&
             (focusedPhase === phase.id ||
-              expandedPhases.includes(phase.id));
+              expandedPhases.includes(phase.id) ||
+              (appendedSeq !== null && phase.id === currentPhase));
           const phaseTone = strongestTone(phase.steps);
           return (
             <section
@@ -343,9 +354,18 @@ function TimelineFeed({ state }: TimelineFeedProps) {
                 >
                   {phase.steps.map((step) => (
                     <TimelineStepRow
+                      animateEntry={
+                        appendedSeq !== null &&
+                        step.eventSeqs.includes(appendedSeq)
+                      }
+                      reduceMotion={reduceMotion}
                       focusedSeq={state.focusedSeq}
                       step={step}
-                      key={step.key}
+                      key={`${step.key}:${
+                        step.eventSeqs.includes(appendedSeq ?? -1)
+                          ? appendedSeq
+                          : "stable"
+                      }`}
                     />
                   ))}
                 </ol>
@@ -359,19 +379,33 @@ function TimelineFeed({ state }: TimelineFeedProps) {
 }
 
 function TimelineStepRow({
+  animateEntry,
   focusedSeq,
+  reduceMotion,
   step,
 }: {
+  animateEntry: boolean;
   focusedSeq: number | null;
+  reduceMotion: boolean;
   step: TimelineStep;
 }) {
   const focused =
     focusedSeq !== null && step.eventSeqs.includes(focusedSeq);
   return (
-    <li
+    <m.li
       className={`${styles.timelineEvent} ${
         focused ? styles.timelineEventFocused : ""
       }`}
+      initial={
+        animateEntry
+          ? reduceMotion
+            ? { opacity: 0 }
+            : { opacity: 0, y: 8 }
+          : false
+      }
+      animate={reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+      transition={motionTransition.event}
+      data-motion-event={animateEntry ? "enter" : "stable"}
       data-event-seqs={step.eventSeqs.join(",")}
       tabIndex={focused ? -1 : undefined}
     >
@@ -394,7 +428,26 @@ function TimelineStepRow({
           {actorLabel(step.actor)}
         </span>
       </div>
-    </li>
+    </m.li>
+  );
+}
+
+export function appendedLiveSequence(
+  previous: TimelineState,
+  current: TimelineState,
+): number | null {
+  if (
+    previous.runID === null ||
+    current.runID !== previous.runID ||
+    previous.playback.kind !== "live" ||
+    current.playback.kind !== "live" ||
+    current.events.length <= previous.events.length
+  ) {
+    return null;
+  }
+  const previousLastSeq = previous.events.at(-1)?.seq ?? 0;
+  return (
+    current.events.findLast((event) => event.seq > previousLastSeq)?.seq ?? null
   );
 }
 

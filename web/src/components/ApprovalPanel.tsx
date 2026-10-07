@@ -10,9 +10,12 @@ import {
   WifiOff,
   X,
 } from "lucide-react";
+import { m } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import type { Approval, Proposal, RunStatus, WaybillView } from "../api";
 import styles from "../app.module.css";
+import { motionTransition } from "../motion/tokens";
+import { useReducedMotionPreference } from "../motion/useReducedMotionPreference";
 import type { EvidenceSelection } from "../timeline";
 import {
   HaloBadge,
@@ -29,6 +32,7 @@ type ApprovalPanelProps = {
   runStatus: RunStatus | null;
   view: WaybillView | null;
   decisionState: ApprovalDecisionState;
+  transitionIntent?: "confirm" | "reject" | null;
   embedded?: boolean;
   showEvidence?: boolean;
   onEvidenceSelect: (selection: EvidenceSelection) => void;
@@ -47,6 +51,7 @@ export function ApprovalPanel({
   runStatus,
   view,
   decisionState,
+  transitionIntent = null,
   embedded = false,
   showEvidence = true,
   onEvidenceSelect,
@@ -55,7 +60,19 @@ export function ApprovalPanel({
 }: ApprovalPanelProps) {
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
+  const reduceMotion = useReducedMotionPreference();
   const approvalTitle = useRef<HTMLHeadingElement>(null);
+  const previousApproval = useRef<Pick<Approval, "id" | "status"> | null>(null);
+  const statusChanged =
+    approval !== null &&
+    previousApproval.current?.id === approval.id &&
+    previousApproval.current.status !== approval.status;
+  const statusTransition =
+    statusChanged ||
+    (approval !== null &&
+      approval.status !== "pending" &&
+      previousApproval.current === null &&
+      (decisionState.kind === "busy" || transitionIntent !== null));
 
   useEffect(() => {
     setRejecting(false);
@@ -65,6 +82,11 @@ export function ApprovalPanel({
     }
   }, [approval?.id]);
 
+  useEffect(() => {
+    previousApproval.current =
+      approval === null ? null : { id: approval.id, status: approval.status };
+  }, [approval?.id, approval?.status]);
+
   if (runStatus === "review_required") {
     return (
       <section
@@ -73,7 +95,11 @@ export function ApprovalPanel({
         }`}
         aria-labelledby="approval-title"
       >
-        <PanelHeading status="review_required" />
+        <PanelHeading
+          animateStatus={false}
+          reduceMotion={reduceMotion}
+          status="review_required"
+        />
         <div className={styles.approvalIdle}>
           <TriangleAlert aria-hidden="true" size={22} />
           <strong id="approval-title">提案需要人工复核</strong>
@@ -91,7 +117,11 @@ export function ApprovalPanel({
         }`}
         aria-labelledby="approval-title"
       >
-        <PanelHeading status="idle" />
+        <PanelHeading
+          animateStatus={false}
+          reduceMotion={reduceMotion}
+          status="idle"
+        />
         <div className={styles.approvalIdle}>
           <div className={styles.agentSweep} aria-hidden="true">
             <span />
@@ -130,8 +160,33 @@ export function ApprovalPanel({
       } ${embedded ? styles.approvalPanelEmbedded : ""}`}
       aria-labelledby="approval-title"
     >
-      <PanelHeading status={approval.status} />
-      <div className={styles.approvalBody}>
+      <PanelHeading
+        animateStatus={statusTransition}
+        reduceMotion={reduceMotion}
+        status={approval.status}
+      />
+      <m.div
+        className={styles.approvalBody}
+        initial={
+          statusTransition
+            ? {
+                opacity: 0,
+                ...(reduceMotion
+                  ? {}
+                  : {
+                      x: isFailureStatus(approval.status) ? 6 : 0,
+                      y: isFailureStatus(approval.status) ? 0 : 4,
+                    }),
+              }
+            : false
+        }
+        animate={
+          reduceMotion ? { opacity: 1 } : { opacity: 1, x: 0, y: 0 }
+        }
+        transition={motionTransition.status}
+        data-motion-status={statusTransition ? approval.status : "stable"}
+        key={`${approval.id}:${approval.status}`}
+      >
         <div className={styles.approvalLead}>
           <div>
             <span className={styles.eyebrow}>方案 v{approval.plan_version}</span>
@@ -355,14 +410,18 @@ export function ApprovalPanel({
             </div>
           </form>
         )}
-      </div>
+      </m.div>
     </section>
   );
 }
 
 function PanelHeading({
+  animateStatus,
+  reduceMotion,
   status,
 }: {
+  animateStatus: boolean;
+  reduceMotion: boolean;
   status: Approval["status"] | "review_required" | "idle";
 }) {
   return (
@@ -376,7 +435,27 @@ function PanelHeading({
         <strong>人工决策闸</strong>
       </div>
       {status === "executed" ? (
-        <CheckCircle2 className={styles.successIcon} aria-hidden="true" size={20} />
+        <m.span
+          className={styles.statusIcon}
+          initial={
+            animateStatus
+              ? reduceMotion
+                ? { opacity: 0 }
+                : { opacity: 0, scale: 0.72 }
+              : false
+          }
+          animate={
+            reduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1 }
+          }
+          transition={motionTransition.status}
+          data-motion-icon={animateStatus ? "success" : "stable"}
+        >
+          <CheckCircle2
+            className={styles.successIcon}
+            aria-hidden="true"
+            size={20}
+          />
+        </m.span>
       ) : status === "review_required" ? (
         <TriangleAlert className={styles.reviewIcon} aria-hidden="true" size={20} />
       ) : status === "rejected" ||
@@ -388,6 +467,15 @@ function PanelHeading({
         <span className={styles.guardIndicator} aria-hidden="true" />
       )}
     </div>
+  );
+}
+
+function isFailureStatus(status: Approval["status"]): boolean {
+  return (
+    status === "partially_failed" ||
+    status === "failed" ||
+    status === "rejected" ||
+    status === "expired"
   );
 }
 

@@ -100,6 +100,11 @@ type WaybillSelection =
 
 type PendingAction = "bootstrap" | "trigger" | "confirm" | "reject" | null;
 
+type DecisionFeedback = {
+  approvalID: string;
+  action: "confirm" | "reject";
+};
+
 type SelectionRequest = {
   generation: number;
   controller: AbortController;
@@ -169,6 +174,8 @@ function WaybillWorkbench({
     useState<TimelineConnectionState>("closed");
   const [browserOnline, setBrowserOnline] = useState(() => navigator.onLine);
   const [pendingAction, setPendingAction] = useState<PendingAction>("bootstrap");
+  const [decisionFeedback, setDecisionFeedback] =
+    useState<DecisionFeedback | null>(null);
   const [message, setMessage] = useState<RequestIssue | null>(null);
   const [recoveryError, setRecoveryError] = useState<RequestIssue | null>(null);
   const [routePointFocus, setRoutePointFocus] =
@@ -469,6 +476,23 @@ function WaybillWorkbench({
   const selectedWaybillID =
     waybillResource.kind === "empty" ? null : waybillResource.waybillID;
   useEffect(() => {
+    if (
+      decisionFeedback === null ||
+      currentApproval === null ||
+      currentApproval.id !== decisionFeedback.approvalID ||
+      currentApproval.status === "pending"
+    ) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setDecisionFeedback((current) =>
+        current?.approvalID === decisionFeedback.approvalID ? null : current,
+      );
+    }, 320);
+    return () => window.clearTimeout(timer);
+  }, [currentApproval, decisionFeedback]);
+
+  useEffect(() => {
     if (selectedWaybillID === null) {
       return;
     }
@@ -611,6 +635,10 @@ function WaybillWorkbench({
     if (currentApproval === null) {
       return;
     }
+    setDecisionFeedback({
+      approvalID: currentApproval.id,
+      action: "confirm",
+    });
     setPendingAction("confirm");
     setMessage(null);
     try {
@@ -620,6 +648,9 @@ function WaybillWorkbench({
         waybillID: decided.waybill_id,
       });
     } catch (error) {
+      setDecisionFeedback((current) =>
+        current?.approvalID === currentApproval.id ? null : current,
+      );
       setMessage(toRequestIssue(error));
     } finally {
       setPendingAction(null);
@@ -630,6 +661,10 @@ function WaybillWorkbench({
     if (currentApproval === null) {
       return;
     }
+    setDecisionFeedback({
+      approvalID: currentApproval.id,
+      action: "reject",
+    });
     setPendingAction("reject");
     setMessage(null);
     try {
@@ -639,6 +674,9 @@ function WaybillWorkbench({
         waybillID: decided.waybill_id,
       });
     } catch (error) {
+      setDecisionFeedback((current) =>
+        current?.approvalID === currentApproval.id ? null : current,
+      );
       setMessage(toRequestIssue(error));
       throw error;
     } finally {
@@ -892,6 +930,12 @@ function WaybillWorkbench({
                     runStatus={currentStatus}
                     view={waybillResource.view}
                     decisionState={approvalDecisionState}
+                    transitionIntent={
+                      decisionFeedback !== null &&
+                      decisionFeedback.approvalID === currentApproval?.id
+                        ? decisionFeedback.action
+                        : null
+                    }
                     embedded
                     showEvidence={false}
                     onEvidenceSelect={selectEvidence}

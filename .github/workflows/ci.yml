@@ -187,11 +187,13 @@ jobs:
         working-directory: web
       - run: npm run verify:overview
         working-directory: web
+      - run: npm run verify:motion
+        working-directory: web
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: e2e-screenshots
-          path: web/artifacts/*.png
+          path: web/artifacts/**/*.png
           if-no-files-found: warn
           retention-days: 7

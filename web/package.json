@@ -16,6 +16,7 @@
     "verify:bundle": "node scripts/verify-chart-bundle.mjs",
     "verify:overview": "node scripts/verify-overview.mjs",
     "verify:states": "node scripts/verify-state-feedback.mjs",
+    "verify:motion": "node scripts/verify-motion.mjs",
     "record:demo": "node scripts/record-demo.mjs"
   },
   "dependencies": {

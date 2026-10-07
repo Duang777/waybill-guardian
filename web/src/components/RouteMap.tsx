@@ -1,4 +1,5 @@
 import { Compass, MapPin } from "lucide-react";
+import { m } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   Feature,
@@ -14,6 +15,8 @@ import type {
 import { hasAMapKey, loadAMap } from "../amap";
 import type { TrackPoint } from "../api";
 import styles from "../app.module.css";
+import { motionTransition } from "../motion/tokens";
+import { useReducedMotionPreference } from "../motion/useReducedMotionPreference";
 import type { WaybillResource } from "../waybill-resource";
 
 const vectorMapStyleURL = "https://tiles.openfreemap.org/styles/positron";
@@ -116,9 +119,18 @@ export function RouteMap({
     selection.points === points && selection.index < points.length
       ? selection.index
       : preferredIndex;
+  const previousSelection = useRef({ points, index: selectedIndex });
+  const selectionChanged =
+    previousSelection.current.points === points &&
+    previousSelection.current.index !== selectedIndex;
+  const reduceMotion = useReducedMotionPreference();
   const [mode, setMode] = useState<MapMode>(() => initialMapMode());
   const selected = points[selectedIndex] ?? null;
   const projected = useMemo(() => projectPoints(points), [points]);
+
+  useEffect(() => {
+    previousSelection.current = { points, index: selectedIndex };
+  }, [points, selectedIndex]);
 
   useEffect(() => {
     const element = mapElement.current;
@@ -254,10 +266,23 @@ export function RouteMap({
         )}
       </div>
       {selected !== null && (
-        <div
+        <m.div
           className={styles.pointInspector}
           aria-label="轨迹点详情"
           aria-live="polite"
+          initial={
+            selectionChanged
+              ? reduceMotion
+                ? { opacity: 0 }
+                : { opacity: 0, y: 5 }
+              : false
+          }
+          animate={
+            reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }
+          }
+          transition={motionTransition.event}
+          data-motion-point={selectionChanged ? "enter" : "stable"}
+          key={`${selected.recorded_at}:${selectedIndex}`}
         >
           <div className={styles.pointInspectorLead}>
             <span className={styles.pointIndex}>
@@ -292,7 +317,7 @@ export function RouteMap({
             />
             <span className={styles.eyebrow}>当前轨迹点</span>
           </div>
-        </div>
+        </m.div>
       )}
     </div>
   );

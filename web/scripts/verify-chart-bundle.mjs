@@ -10,6 +10,8 @@ const chartKey = "src/charts/OverviewEChart.tsx";
 const sceneKey = "src/components/HubNetworkScene.tsx";
 const mapKey = "node_modules/maplibre-gl/dist/maplibre-gl.mjs";
 const budgetBytes = 350 * 1_024;
+const entryBaselineGzipBytes = 187_686;
+const entryGrowthBudgetBytes = 25 * 1_024;
 
 const entry = requireChunk(entryKey);
 const chart = requireChunk(chartKey);
@@ -36,22 +38,27 @@ for (const file of chartFiles) {
   gzipBytes += gzipSync(source).byteLength;
 }
 
-const entrySource = await readFile(
-  join(webDir, "dist", entry.file),
-  "utf8",
-);
+const entrySource = await readFile(join(webDir, "dist", entry.file));
+const entryText = entrySource.toString("utf8");
+const entryGzipBytes = gzipSync(entrySource).byteLength;
 assert(
-  !entrySource.includes("经营图表渲染失败") &&
-    !entrySource.includes("wg-paper"),
+  !entryText.includes("经营图表渲染失败") &&
+    !entryText.includes("wg-paper"),
   "ECharts runtime markers leaked into the initial entry chunk",
 );
 assert(
   gzipBytes < budgetBytes,
   `chart graph gzip ${gzipBytes} bytes exceeds ${budgetBytes} bytes`,
 );
+assert(
+  entryGzipBytes < entryBaselineGzipBytes + entryGrowthBudgetBytes,
+  `entry gzip ${entryGzipBytes} bytes exceeds motion growth budget ` +
+    `${entryBaselineGzipBytes + entryGrowthBudgetBytes} bytes`,
+);
 
 console.log(
-  `chart bundle verified: ${chartFiles.join(", ")} raw=${rawBytes} gzip=${gzipBytes}`,
+  `bundle verified: entry gzip=${entryGzipBytes}; ` +
+    `charts=${chartFiles.join(", ")} raw=${rawBytes} gzip=${gzipBytes}`,
 );
 
 function requireChunk(key) {
