@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   advanceRunProjection,
+  effectiveRunStatus,
   mergeRunProjections,
   type RunProjection,
 } from "./overview-run-projection";
@@ -95,5 +96,28 @@ describe("overview run projections", () => {
         status: "completed",
       }),
     ).toEqual(current);
+  });
+
+  it("prefers a live projection over the overview snapshot", () => {
+    const current = projection({
+      runID: "run-current",
+      status: "awaiting_approval",
+      lastSeq: 8,
+    });
+
+    expect(
+      effectiveRunStatus({
+        waybillID,
+        snapshotStatus: "investigating",
+        projections: new Map([[waybillID, current]]),
+      }),
+    ).toBe("awaiting_approval");
+    expect(
+      effectiveRunStatus({
+        waybillID,
+        snapshotStatus: "investigating",
+        projections: new Map(),
+      }),
+    ).toBe("investigating");
   });
 });

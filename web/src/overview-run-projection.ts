@@ -52,3 +52,15 @@ export function advanceRunProjection(
     lastSeq: update.seq,
   };
 }
+
+export function effectiveRunStatus({
+  waybillID,
+  snapshotStatus,
+  projections,
+}: {
+  waybillID: WaybillID;
+  snapshotStatus: RunStatus | undefined;
+  projections: ReadonlyMap<WaybillID, RunProjection>;
+}): RunStatus | undefined {
+  return projections.get(waybillID)?.status ?? snapshotStatus;
+}
