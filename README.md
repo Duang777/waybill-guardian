@@ -26,19 +26,116 @@
 
 ## 给评委
 
-延误、破损或丢件发生后，waybill-guardian 读取运单、轨迹、司机和天气，整理归因，并给出改派、赔付或短信方案。写操作在人工确认前不会执行。确认之后，服务按幂等键回写，并把全过程写入可以校验、可以回放的审计日志。
+延误、破损或丢件发生后，waybill-guardian 自动读取运单、轨迹、司机和天气，整理归因，并提出改派、赔付或通知方案。系统在人工确认前不会执行写操作。确认之后，服务按幂等键回写平台，并把全过程写入可校验、可回放的审计日志。
 
-调度员少做的是在几个系统之间来回查证据。人仍然决定是否改派、是否赔付、是否发通知。复核时按审计序号重放。
+<p align="center">
+  <a href="https://github.com/Duang777/waybill-guardian/releases/download/demo-v1.0.0/waybill-guardian-demo-1920-zh.mp4"><strong>观看 60 秒中文配音演示</strong></a>
+  ·
+  <a href="docs/demo-script.md">查看讲稿与镜头清单</a>
+</p>
 
-经营总览按下文口径计算时效挽回、成本影响、人力节省、异常闭环率、平均处置时长和审批通过率。时效与成本只统计最新 run 已完成且同一 run 已执行人工审批写操作的运单，金额和时效值仍是仿真字段给出的执行后估算。外部数据缺少完整影响记录时，两项 KPI 显示 `unavailable`，服务不会补值。单运单页面的三项风险分由 [`internal/guardian/assessment.go`](internal/guardian/assessment.go) 的 `deriveAssessment` 计算，并限制在 0 到 100。运单状态的比较不区分大小写。状态不是 `delivered` 时，ETA 分先取 20，每个异常点再加 15，再加上停留小时乘以 8 后四舍五入。路况分是连续驾驶小时乘以 5 后四舍五入，疲劳预警再加 30。天气分取各段预警的最大值。`none`、`normal`、`green` 和空值为 0，`low`、`blue`、`yellow` 为 30，`medium` 和 `orange` 为 60，`high`、`red` 和 `critical` 为 90，其余为 20。内置样例因此显示 ETA 83、路况 75、天气 0。
+<p align="center">
+  <img alt="1920 像素宽的全国公路港经营总览。页面同时显示六项 KPI、72 港网络、异常队列、三张经营图表和经营简报。" src="docs/assets/overview-console.png" width="960">
+</p>
 
-`./scripts/demo.sh`、`npm run record:demo` 和容器默认使用 `AGENT_MODE=online`。在线模型先调用四个只读工具，再输出结构化提案和写工具调用。服务端校验提案 schema、候选承运商、写参数和每条证据引用；校验失败时只允许修复一次，第二次失败转人工复核。模型模式、模型名、API 风格、调用时延和 token 用量写入审计时间线。
+### 处置边界
 
-`AGENT_MODE=online` 支持 OpenAI Responses API 和 OpenAI-compatible Chat Completions API。仓库不保存模型密钥。当前自动验收使用本地 compatible fake，已覆盖两种 API 风格和三张不同异常运单；本提交尚未取得可用于真实国产模型验收的凭据，因此不宣称已完成真实服务联调。CI 和无凭据演示显式使用 `AGENT_MODE=offline`，界面会标记“离线回放模式”。`AGENT_MODE=demo` 保留为 `offline` 的兼容别名。
+| 环节 | 系统行为 | 人工边界 | 可验证记录 |
+|---|---|---|---|
+| 调查 | 自动调用四个只读工具 | 不需要逐系统查询 | 工具参数、返回摘要和证据引用 |
+| 提案 | 模型输出结构化归因、候选方案和写工具参数 | 审批人查看影响和备选方案 | 模型模式、时延、token 和提案版本 |
+| 执行 | 服务端生成 `effect_id` 和幂等键 | 确认、驳回或等待审批过期 | 人工决定、平台回执和重试状态 |
+| 复核 | SSE 推送实时事件，审计日志支持游标回放 | 按事件序号复查过程 | `seq`、`prev_hash` 和 `hash` |
 
-默认 `PLATFORM=mock` 只加载内置运单 `YD2026101001`，数据在 [`internal/tools/testdata/demo.json`](internal/tools/testdata/demo.json)。`PLATFORM=file` 在启动时加载一份 JSON 或 CSV v1，支持可选的公路港、车辆和线路网络。页面可以选择文件中的运单并启动处置。文件模式下的写操作仍走内存中的 fixture 写入运行时，短信不会真正发出。
+### 可核验的价值口径
 
-首页是全国公路港经营总览，显示网络、KPI、异常队列、三张经营图表和带统计引用的经营简报，并支持一次启动 5 个独立 run。三张图分别展示当前异常构成、当前处置状态和高异常占比线路，不用快照数据伪造历史趋势。全国视图是用于演示网络关系的抽象港网，不是测绘底图，也不绘制行政边界。点击运单进入单运单工作台，每个 run 仍保留独立审批和 SSE 时间线。1560×800、1600×900 和 1920×1080 下，总览把港网、队列、图表和经营简报收进一屏；单运单工作台按“六阶段运行带、地图与证据账本、全宽人工决策闸、审计抽屉”组织为异常案件桌案。审批操作无需滚动整页即可执行。
+本仓库不把仿真结果写成生产收益。经营总览只显示接口能够证明的当前事实，并按以下公式计算：
+
+| 指标 | 假设或事实 | 结果 |
+|---|---|---|
+| 单次完整调查的人力节省估算 | 4 个证据步骤，每步默认按 `EVIDENCE_STEP_MINUTES=8` 分钟计算 | `4 × 8 / 60 = 0.53` 人时 |
+| 72 张异常运单的证据采集量 | 假设 72 个公路港各有 1 张异常运单，且四个步骤全部成功 | `72 × 4 × 8 / 60 = 38.4` 人时 |
+| 已实现时效挽回和成本影响 | 只统计人工确认后执行成功，且有完整 `impact` 记录的最新 run | 数据不完整时返回 `unavailable`，不补默认值 |
+
+前两项衡量的是按配置折算的人工证据采集量，不是 Agent 的运行时间，也不是已经取得的生产收益。审批、处置和复核仍需要人工。完整 KPI 公式见[经营总览和 KPI](#经营总览和-kpi)。
+
+## 架构
+
+```mermaid
+flowchart TD
+  browser["经营总览与单运单工作台"]
+  guardian["HTTP + guardian 用例协调"]
+  agent["hastekit Agent"]
+  readtools["四个只读工具"]
+  sources["mock / JSON / CSV / 外部读源"]
+  approval["持久化人工审批"]
+  effects["effect 身份与幂等执行"]
+  writetools["三个写工具"]
+  platform["内存运行时 / TMS adapter"]
+  audit["append-only 审计与哈希链"]
+
+  browser -->|启动或决定| guardian
+  guardian -->|启动或恢复| agent
+  agent --> readtools
+  readtools --> sources
+  sources --> readtools
+  readtools --> agent
+  agent -->|暂停并提交方案| approval
+  guardian -->|持久化人工决定| approval
+  approval -->|决定已落盘| guardian
+  agent -->|已批准的写调用| effects
+  effects --> writetools
+  writetools --> platform
+  guardian --> audit
+  approval --> audit
+  effects --> audit
+  audit -->|SSE replay + live| browser
+```
+
+```mermaid
+sequenceDiagram
+  participant O as 审批人
+  participant W as Web
+  participant G as guardian
+  participant A as Agent
+  participant P as Platform
+  participant D as Audit
+
+  O->>W: 启动处置
+  W->>G: POST run
+  G->>A: 调查并生成提案
+  A-->>G: 提案与写工具调用
+  G->>D: 记录审批批次并暂停
+  G-->>W: pending
+  O->>W: 确认或驳回
+  W->>G: 提交人工决定
+  G->>D: 先持久化决定
+  alt 确认
+    G->>A: 恢复同一 thread
+    A->>G: 执行写工具
+    G->>P: 按 effect 身份幂等写入
+    P-->>G: 返回平台回执
+    G->>D: 记录执行结果
+  else 驳回或过期
+    G->>A: 携带原因恢复
+    A-->>G: 提交备选方案或结束
+  end
+  D-->>W: SSE 回放和实时事件
+```
+
+`cmd/server` 提供 HTTP 和 SSE。`internal/guardian` 协调 Agent、审批、幂等和恢复。Agent 运行时是 hastekit `agent-sdk-go` v0.0.24。工具契约位于 [`contract.yaml`](contract.yaml)。
+
+四个只读工具自动执行。三个写工具在执行前暂停，等待人工决定。审批从 `pending` 开始，之后进入 `confirmed`、`rejected` 或 `expired`。执行结果可以是 `executed`、`partially_failed`、`failed` 或 `reconciliation_required`。
+
+审计默认按 run 写入 append-only JSONL。`STORAGE=postgres` 时，业务投影、审计和 outbox 在同一事务中提交。浏览器使用 `Last-Event-ID` 从断点继续接收 SSE。
+
+### 用官方数据替换仿真数据
+
+1. 按 [`data/templates/waybills-v1.json`](data/templates/waybills-v1.json) 或 [`data/templates/waybills-v1.csv`](data/templates/waybills-v1.csv) 映射运单、轨迹、司机、天气和可选网络实体。
+2. 运行 `go run ./cmd/dataimport validate --data <文件路径>`。校验器在服务启动前检查引用、坐标和时间顺序。
+3. 使用 `PLATFORM=file DATA_FILE=<文件路径> AGENT_MODE=offline ./scripts/demo.sh` 启动只读数据演示。生产写入需要实现 `internal/platform` adapter；当前 `PLATFORM=real` 只提供改派 HTTP 沙箱，不是生产 TMS。
+
+字段说明和错误规则见 [`docs/file-data-source-design.md`](docs/file-data-source-design.md)。真实平台边界见 [`docs/RFC-002.md`](docs/RFC-002.md)。
 
 <p align="center">
   <img alt="桌面宽度下，内置样例停在人工审批。六阶段运行带位于地图上方，证据账本紧邻地图，全宽人工决策闸展示改派方案和待执行动作，底部审计记录保持折叠。展示分是 ETA 83、路况 75、天气 0。" src="docs/assets/console-approval.png" width="840">
@@ -48,41 +145,8 @@
   <img alt="手机宽度下，同一次脚本演示在确认后显示处置完成，按钮是重新处置。" src="docs/assets/console-completed-mobile.png" width="280">
 </p>
 
-上面两张图来自 `AGENT_MODE=offline npm run verify:e2e`。未配置高德时，页面直接使用不含行政边界的本地轨迹示意。人工决策闸中的归因句子由 `ScenarioModel` 根据工具结果生成。
-
-## 架构
-
-```mermaid
-flowchart TD
-  incident["异常运单"]
-  agent["hastekit Agent"]
-  readtools["四个只读工具"]
-  datasource["内置样例或数据文件"]
-  approval["人工审批"]
-  writetools["写工具"]
-  platformbox["内存写入或改派沙箱"]
-  auditlog["审计日志"]
-
-  incident --> agent
-  agent --> readtools
-  readtools --> datasource
-  readtools --> agent
-  agent --> approval
-  approval --> writetools
-  writetools --> platformbox
-  agent --> auditlog
-  writetools --> auditlog
-```
-
-`cmd/server` 提供 HTTP 和 SSE。`internal/guardian` 串起 Agent、审批、幂等和恢复。Agent 运行时是 hastekit `agent-sdk-go` v0.0.24。
-
-四个只读工具是 `tms.get_waybill`、`tms.get_tracking`、`tms.get_driver`、`ext.get_road_weather`。它们自动执行。三个写工具是 `tms.reassign`、`tms.create_claim`、`notify.send_sms`。它们在执行前暂停，等人工决定。契约在 [`contract.yaml`](contract.yaml)。
-
-默认 `PLATFORM=mock` 时，读和写都走内置样例。短信不会真正发出。`PLATFORM=file` 要求 `STORAGE=jsonl`、`AUTH_MODE=local` 和 `DATA_FILE`。服务在监听端口前用 `filestore.Load` 读入整份文件，读路径使用这份文件，写路径使用同一份读数据上的内存 fixture 写入运行时。运行中不会热更新，换文件要重启。`PLATFORM=real` 必须同时使用 PostgreSQL 和 JWT。读路径仍是内置样例 `fixture-v1`。写路径只有 `tms.reassign`，发到 HTTP 沙箱 `tms-reassign-sandbox-v1`。这个 profile 不注册赔付和短信。它用来验证网络写入和对账。它不是生产 TMS。
-
-审计默认是每个 run 一份 append-only JSONL，带 `seq`、`prev_hash` 和 `hash`。`STORAGE=postgres` 时，业务投影、审计和 outbox 在同一事务里提交。时间线用 SSE，客户端可以用 `Last-Event-ID` 续传。
-
-审批从 `pending` 开始。确认后是 `confirmed`，驳回是 `rejected`，超时是 `expired`。写操作全部成功后是 `executed`。部分成功是 `partially_failed`，全部失败是 `failed`。结果还不能确定时是 `reconciliation_required`。
+总览截图来自 `AGENT_MODE=offline npm run verify:overview`，工作台截图来自
+`AGENT_MODE=offline npm run verify:e2e`。未配置高德时，页面使用不含行政边界的本地轨迹示意。
 
 ## 能力
 
@@ -139,7 +203,11 @@ AGENT_MODE=offline ./scripts/demo.sh
 5. 展开 **完整审计记录**，用回放控件从第一条事件再看一遍，然后点 **实时** 回到末尾。
 6. 如果驳回首选承运商，Agent 会继续处理人工决定。离线 `ScenarioModel` 会改提蜀道联运，`npm run verify:e2e` 覆盖了确认三次和驳回一次。
 
-带中文字幕、没有音轨的录像：
+已发布的 [1920×1080 中文配音版](https://github.com/Duang777/waybill-guardian/releases/download/demo-v1.0.0/waybill-guardian-demo-1920-zh.mp4)
+带画面内字幕和系统合成音轨。配音稿在 [`docs/demo-script.md`](docs/demo-script.md#60-秒配音稿)，
+没有使用克隆声音。
+
+生成带中文字幕、没有音轨的源录像：
 
 ```bash
 cd web
@@ -152,7 +220,8 @@ npm run record:demo
 RECORD_RESOLUTION=1920x1080 npm run record:demo
 ```
 
-`RECORD_RESOLUTION` 只接受 `1600x900` 和 `1920x1080`。输出目录被 git 忽略，正式配音还不在仓库里。可用 `RECORD_OUTPUT`、`RECORD_BACKEND_PORT` 和 `RECORD_WEB_PORT` 改输出路径和端口。
+`RECORD_RESOLUTION` 只接受 `1600x900` 和 `1920x1080`。输出目录被 git 忽略。可用
+`RECORD_OUTPUT`、`RECORD_BACKEND_PORT` 和 `RECORD_WEB_PORT` 改输出路径和端口。
 
 ## 快速开始
 
@@ -502,7 +571,7 @@ hastekit `agent-sdk-go` v0.0.24 以 Go module 引入，许可证是 Apache-2.0�
 | [64](https://github.com/Duang777/waybill-guardian/issues/64) | 已完成。非 GET 请求的跨站检查和 JSON `Content-Type` 校验 |
 | [65](https://github.com/Duang777/waybill-guardian/issues/65) | 已完成。单容器镜像和 Docker Compose |
 | [67](https://github.com/Duang777/waybill-guardian/issues/67) | 已完成。GitHub Actions |
-| [68](https://github.com/Duang777/waybill-guardian/issues/68) | 仍开放。本页已有架构图、KPI 口径、演示入口和文件校验命令，正式配音视频仍未完成 |
+| [68](https://github.com/Duang777/waybill-guardian/issues/68) | 已完成仓库侧内容。README 包含评审入口、架构闭环、价值口径、数据替换步骤和 60 秒中文配音演示 |
 | [77](https://github.com/Duang777/waybill-guardian/issues/77) | 已完成初赛范围。全国港网、证据联动、录屏布局和移动端已交付。Issue 70、72、74、76 保持独立 P2 |
 
 生产化处置链路见 [issue 44](https://github.com/Duang777/waybill-guardian/issues/44)。

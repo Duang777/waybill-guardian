@@ -26,63 +26,128 @@ This repository is an entry in the 传化集团 and 动势科技 architect conte
 
 ## For judges
 
-After a delay, damage, or loss, waybill-guardian reads the waybill, tracking, driver, and weather, writes an attribution, and proposes reassignment, a claim, or SMS. Write actions do not run before a person confirms them. After confirmation, the server executes them under an idempotency key and appends a replayable audit log.
-
-The agent collects waybill, tracking, driver, and weather evidence before the person decides whether to reassign, open a claim, or send a notice. Reviewers replay the audit by sequence number.
-
-The overview calculates time recovered, cost impact, labor saved, anomaly closure rate, average handling time, and approval rate from the documented formulas below. The simulated data provides reproducible ETA and cost-impact fields for anomalous waybills. If external data omits a complete impact record, the two affected KPIs show `unavailable`. The service does not fill missing values. The three scores on the waybill page come from `deriveAssessment` in [`internal/guardian/assessment.go`](internal/guardian/assessment.go), clamped to 0 through 100. Status matching ignores case. When it is not `delivered`, the ETA score starts at 20, adds 15 for each anomaly point, then adds stop hours times 8, rounded. The road score is continuous driving hours times 5, rounded, plus 30 when the fatigue alert is set. The weather score is the highest segment alert. `none`, `normal`, `green`, and an empty value are 0. `low`, `blue`, and `yellow` are 30. `medium` and `orange` are 60. `high`, `red`, and `critical` are 90. Any other value is 20. The embedded fixture therefore shows ETA 83, road 75, and weather 0.
-
-`./scripts/demo.sh`, `npm run record:demo`, and the container use `AGENT_MODE=online` by default. The online model calls the four read tools before it returns a structured proposal and write-tool calls. The server checks the proposal schema, candidate carriers, write arguments, and every evidence reference. It allows one repair after a validation failure, then sends a second failure to manual review. The audit records the inference mode, model, API style, latency, and token usage.
-
-`AGENT_MODE=online` supports the OpenAI Responses API and OpenAI-compatible Chat Completions APIs. The repository stores no model credentials. Automated acceptance uses a local compatible fake and covers both API styles across three different anomalous waybills. This change has not been tested against a live domestic model because no provider credential was available, so the repository does not claim that acceptance. CI and credential-free demos explicitly use `AGENT_MODE=offline`, and the UI labels them as offline replay. `AGENT_MODE=demo` remains an alias for `offline`.
-
-`PLATFORM=mock` loads only the embedded waybill `YD2026101001` from [`internal/tools/testdata/demo.json`](internal/tools/testdata/demo.json). `PLATFORM=file` loads one JSON or CSV v1 file at startup and supports optional highway-port, vehicle, and route network entities. The page can select a waybill from that file and start a run. Writes in file mode stay on the in-memory fixture write runtime, and SMS is not actually sent.
-
-The home page is a nationwide highway-port overview with the network, KPIs, three operating charts, the anomaly queue, and cited operating briefs. The charts show the current anomaly composition, current disposition state, and routes with high anomaly rates. They do not turn snapshot data into synthetic history. The nationwide view is an abstract network diagram for demonstration, not a survey map, and it does not draw administrative boundaries. It can start five independent runs in one batch. Selecting a waybill opens its workbench; every run keeps its own approval and SSE timeline. At 1560 by 800, 1600 by 900, and 1920 by 1080, the overview fits the network, queue, charts, and operating briefs in one viewport. The waybill workbench follows four layers: the six-stage run strip, the map and evidence ledger, the full-width human decision gate, and the audit drawer. The operator can approve a proposal without scrolling the whole page.
+After a delay, damage, or loss, waybill-guardian reads the waybill, tracking, driver, and weather data. It then attributes the incident and proposes reassignment, a claim, or a notification. The system does not run a write action before a person confirms it. After confirmation, the server writes under an idempotency key and appends the full process to a verifiable, replayable audit log.
 
 <p align="center">
-  <img alt="Desktop width. The embedded fixture is waiting for approval. The waybill selector shows Hangzhou to Chengdu, YD2026101001, and the button reads 重新处置. The proposal reassigns to 川行快运 and notifies the shipper and driver. The map is the local track. Display scores are ETA 83, road 75, weather 0." src="docs/assets/console-approval.png" width="840">
+  <a href="https://github.com/Duang777/waybill-guardian/releases/download/demo-v1.0.0/waybill-guardian-demo-1920-zh.mp4"><strong>Watch the 60-second narrated demo</strong></a>
+  ·
+  <a href="docs/demo-script.md">Read the script and shot list</a>
+</p>
+
+<p align="center">
+  <img alt="Nationwide highway-port operating overview at 1920 pixels wide. The page shows six KPIs, the 72-port network, the anomaly queue, three operating charts, and an operating brief." src="docs/assets/overview-console.png" width="960">
+</p>
+
+### Disposition boundaries
+
+| Phase | System behavior | Human boundary | Verifiable record |
+|---|---|---|---|
+| Investigation | Calls four read-only tools | No manual lookup across four systems | Tool arguments, result summaries, and evidence references |
+| Proposal | Returns structured attribution, alternatives, and write arguments | A reviewer checks the impact and alternatives | Inference mode, latency, token use, and proposal version |
+| Execution | Generates the `effect_id` and idempotency key on the server | A reviewer confirms, rejects, or lets the approval expire | Human decision, platform receipt, and retry state |
+| Review | Streams live events over SSE and replays the audit from a cursor | A reviewer inspects events by sequence number | `seq`, `prev_hash`, and `hash` |
+
+### Verifiable value model
+
+This repository does not present simulated output as a production result. The overview shows only facts that the API can prove, using these formulas:
+
+| Metric | Assumption or fact | Result |
+|---|---|---|
+| Estimated labor saved for one complete investigation | Four evidence steps at the default `EVIDENCE_STEP_MINUTES=8` | `4 × 8 / 60 = 0.53` person-hours |
+| Evidence workload for 72 anomalous waybills | One anomalous waybill per highway port and all four steps succeed | `72 × 4 × 8 / 60 = 38.4` person-hours |
+| Realized time recovery and cost impact | Includes only the latest run with a confirmed and executed approval and a complete `impact` record | Returns `unavailable` when data is incomplete instead of filling a default |
+
+The first two rows estimate manual evidence-collection effort from configuration. They do not measure agent runtime or claim a realized production result. Approval, disposition, and review still require a person. See [Operating overview and KPIs](#operating-overview-and-kpis) for every formula.
+
+## Architecture
+
+```mermaid
+flowchart TD
+  browser["Operating overview and waybill workbench"]
+  guardian["HTTP + guardian use-case coordination"]
+  agent["hastekit Agent"]
+  readtools["Four read tools"]
+  sources["mock / JSON / CSV / external reads"]
+  approval["Persistent human approval"]
+  effects["Effect identity and idempotent execution"]
+  writetools["Three write tools"]
+  platform["In-memory runtime / TMS adapter"]
+  audit["Append-only audit and hash chain"]
+
+  browser -->|Start or decide| guardian
+  guardian -->|Start or resume| agent
+  agent --> readtools
+  readtools --> sources
+  sources --> readtools
+  readtools --> agent
+  agent -->|Pause with a proposal| approval
+  guardian -->|Persist the human decision| approval
+  approval -->|Decision persisted| guardian
+  agent -->|Approved write calls| effects
+  effects --> writetools
+  writetools --> platform
+  guardian --> audit
+  approval --> audit
+  effects --> audit
+  audit -->|SSE replay + live| browser
+```
+
+```mermaid
+sequenceDiagram
+  participant O as Reviewer
+  participant W as Web
+  participant G as guardian
+  participant A as Agent
+  participant P as Platform
+  participant D as Audit
+
+  O->>W: Start disposition
+  W->>G: POST run
+  G->>A: Investigate and propose
+  A-->>G: Proposal and write calls
+  G->>D: Record approval batch and pause
+  G-->>W: pending
+  O->>W: Confirm or reject
+  W->>G: Submit human decision
+  G->>D: Persist the decision first
+  alt Confirmed
+    G->>A: Resume the same thread
+    A->>G: Execute write tools
+    G->>P: Write idempotently by effect identity
+    P-->>G: Return platform receipt
+    G->>D: Record execution result
+  else Rejected or expired
+    G->>A: Resume with the reason
+    A-->>G: Propose an alternative or finish
+  end
+  D-->>W: SSE replay and live events
+```
+
+`cmd/server` serves HTTP and SSE. `internal/guardian` coordinates the agent, approval, idempotency, and recovery. The agent runtime is hastekit `agent-sdk-go` v0.0.24. [`contract.yaml`](contract.yaml) defines the tool contract.
+
+The four read tools run automatically. The three write tools pause before execution and wait for a human decision. Approval starts at `pending`, then moves to `confirmed`, `rejected`, or `expired`. Execution can finish as `executed`, `partially_failed`, `failed`, or `reconciliation_required`.
+
+The default audit stores one append-only JSONL file per run. With `STORAGE=postgres`, the business projection, audit, and outbox commit in one transaction. The browser uses `Last-Event-ID` to resume SSE from its last event.
+
+### Replace the simulated data with official data
+
+1. Map waybills, tracking, drivers, weather, and optional network entities to [`data/templates/waybills-v1.json`](data/templates/waybills-v1.json) or [`data/templates/waybills-v1.csv`](data/templates/waybills-v1.csv).
+2. Run `go run ./cmd/dataimport validate --data <file-path>`. The validator checks references, coordinates, and timestamp order before the service starts.
+3. Start the read-data demo with `PLATFORM=file DATA_FILE=<file-path> AGENT_MODE=offline ./scripts/demo.sh`. Production writes require an `internal/platform` adapter. The current `PLATFORM=real` profile is a reassignment HTTP sandbox, not a production TMS.
+
+See [`docs/file-data-source-design.md`](docs/file-data-source-design.md) for fields and errors. See [`docs/RFC-002.md`](docs/RFC-002.md) for the production platform boundary.
+
+<p align="center">
+  <img alt="Desktop width. The embedded fixture is waiting for approval. The waybill selector shows Hangzhou to Chengdu, YD2026101001, and the proposal reassigns to 川行快运. The map is the local track. Display scores are ETA 83, road 75, and weather 0." src="docs/assets/console-approval.png" width="840">
 </p>
 
 <p align="center">
   <img alt="Phone width. The same scripted demo shows 处置完成 after confirmation, and the button reads 重新处置." src="docs/assets/console-completed-mobile.png" width="280">
 </p>
 
-Both screenshots come from `AGENT_MODE=offline npm run verify:e2e`, with no Amap key, so the map is the local track. `ScenarioModel` derives the approval sentence from tool results.
-
-## Architecture
-
-```mermaid
-flowchart TD
-  incident["Abnormal waybill"]
-  agent["hastekit Agent"]
-  readtools["Four read tools"]
-  datasource["Fixture or data file"]
-  approval["Human approval"]
-  writetools["Write tools"]
-  platformbox["Memory write or reassign sandbox"]
-  auditlog["Audit log"]
-
-  incident --> agent
-  agent --> readtools
-  readtools --> datasource
-  readtools --> agent
-  agent --> approval
-  approval --> writetools
-  writetools --> platformbox
-  agent --> auditlog
-  writetools --> auditlog
-```
-
-`cmd/server` serves HTTP and SSE. `internal/guardian` connects the agent, approval, idempotency, and recovery. The agent runtime is hastekit `agent-sdk-go` v0.0.24.
-
-The four read tools are `tms.get_waybill`, `tms.get_tracking`, `tms.get_driver`, and `ext.get_road_weather`. They run automatically. The three write tools are `tms.reassign`, `tms.create_claim`, and `notify.send_sms`. They pause until a person decides. The contract is [`contract.yaml`](contract.yaml).
-
-With `PLATFORM=mock`, reads and writes use the embedded fixture. SMS is not actually sent. `PLATFORM=file` requires `STORAGE=jsonl`, `AUTH_MODE=local`, and `DATA_FILE`. Before it listens, the server loads the whole file with `filestore.Load`. Reads use that file. Writes use the in-memory fixture write runtime over the same read data. The process does not reload the file while it runs. Replacing the file requires a restart. `PLATFORM=real` starts only with PostgreSQL and JWT. Reads stay on the embedded fixture `fixture-v1`. The only write is `tms.reassign`, sent to the HTTP sandbox `tms-reassign-sandbox-v1`. That profile does not register claims or SMS. It exercises a network write and reconciliation. It is not a production TMS.
-
-The default audit is one append-only JSONL file per run, with `seq`, `prev_hash`, and `hash`. With `STORAGE=postgres`, the business projection, audit, and outbox commit in one transaction. The timeline is SSE. Clients resume with `Last-Event-ID`.
-
-Approval starts at `pending`. Confirm moves it to `confirmed`, reject to `rejected`, and timeout to `expired`. All writes succeeding moves it to `executed`. A partial success is `partially_failed`. A total failure is `failed`. An outcome that is not yet known is `reconciliation_required`.
+The overview screenshot comes from `AGENT_MODE=offline npm run verify:overview`. The workbench
+screenshots come from `AGENT_MODE=offline npm run verify:e2e`. With no Amap key, the page uses the
+local track without administrative boundaries.
 
 ## Features
 
@@ -139,7 +204,12 @@ Open <http://127.0.0.1:5173> for the operating overview. Select anomalous waybil
 5. Use the replay control to watch from the first audit event, then click **实时** to return to the live end.
 6. If the first carrier is rejected, the agent continues from the human decision. The offline `ScenarioModel` proposes 蜀道联运, and `npm run verify:e2e` covers three confirmations and one rejection.
 
-A subtitled recording with no audio track:
+The published
+[1920 by 1080 narrated version](https://github.com/Duang777/waybill-guardian/releases/download/demo-v1.0.0/waybill-guardian-demo-1920-zh.mp4)
+has on-screen Chinese captions and a system-generated Chinese voice track. The
+[voiceover script](docs/demo-script.md#60-秒配音稿) uses no cloned voice.
+
+To generate the subtitled source recording without an audio track:
 
 ```bash
 cd web
@@ -152,7 +222,9 @@ The recording script inherits the model settings above and defaults to `online`.
 RECORD_RESOLUTION=1920x1080 npm run record:demo
 ```
 
-`RECORD_RESOLUTION` accepts only `1600x900` and `1920x1080`. The output directory is gitignored, and a dubbed narration is not in the repository. `RECORD_OUTPUT`, `RECORD_BACKEND_PORT`, and `RECORD_WEB_PORT` change the output path and ports.
+`RECORD_RESOLUTION` accepts only `1600x900` and `1920x1080`. The output directory is
+gitignored. `RECORD_OUTPUT`, `RECORD_BACKEND_PORT`, and `RECORD_WEB_PORT` change the output path
+and ports.
 
 ## Quick start
 
@@ -504,7 +576,7 @@ These three projects were used to compare interaction and domain splits. None of
 | [64](https://github.com/Duang777/waybill-guardian/issues/64) | Complete. Cross-origin checks for non-GET requests and JSON `Content-Type` validation |
 | [65](https://github.com/Duang777/waybill-guardian/issues/65) | Complete. Single-container image and Docker Compose |
 | [67](https://github.com/Duang777/waybill-guardian/issues/67) | Complete. GitHub Actions |
-| [68](https://github.com/Duang777/waybill-guardian/issues/68) | Still open. This page has the diagram, KPI formulas, demo entry, and file checks. A dubbed video is still open |
+| [68](https://github.com/Duang777/waybill-guardian/issues/68) | Repository work complete. The README has the judge entry, architecture flow, value model, data replacement steps, and a 60-second narrated demo |
 | [77](https://github.com/Duang777/waybill-guardian/issues/77) | Contest scope complete. The port network, evidence linking, recording layouts, and mobile are shipped. Issues 70, 72, 74, and 76 remain independent P2 work |
 
 The production handling path is [issue 44](https://github.com/Duang777/waybill-guardian/issues/44).
