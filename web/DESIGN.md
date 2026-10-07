@@ -140,15 +140,35 @@ The approval boundary has no outer shadow or inset card margin; its sticky actio
 the decision edge on narrow screens. The light point inspector uses rules instead of
 elevation. No blur or glass effect is used.
 
-## 7. Do and don't
+## 7. Motion and feedback
+
+The application mounts one strict `LazyMotion` boundary with `domAnimation` and a
+`MotionConfig` that respects the user's reduced-motion preference. Shared interaction
+tokens are 120 ms for press feedback, 180 ms for event or selection feedback, and 240 ms
+for status changes. They all use `cubic-bezier(0.16, 1, 0.3, 1)`.
+
+Live audit rows enter only when SSE appends an event to the same run at the live edge.
+Initial hydration, replay seeking, and returning from replay do not trigger entry motion.
+Approval feedback follows the decision intent across the run refresh so confirmed,
+executed, and rejected states remain perceptible without delaying the authoritative state.
+Selecting a route point fades its fixed-size fact rail into place.
+
+Motion may change only transform, opacity, or color. It must not animate layout properties,
+loop for decoration, or hold stale business state while an exit animation finishes. The
+reduced-motion listener removes translation and scale keyframes immediately while retaining
+short opacity and color feedback. `npm run verify:motion` checks these contracts in Chrome
+and the production bundle gate limits entry growth to less than 25 KB gzip.
+
+## 8. Do and don't
 
 - Do keep evidence and proposed effects visible without opening another surface.
 - Do keep the complete event log collapsed until the operator asks for it.
 - Do link the selected route point to its timestamp and speed.
 - Do use coral only for an unresolved incident or approval.
 - Do keep event sequence numbers aligned and readable.
-- Do animate only phase changes, approval arrival, and audit drawer disclosure. Use the
-  shared `cubic-bezier(0.16, 1, 0.3, 1)` response curve and honor reduced motion.
+- Do animate only meaningful phase changes, live event arrival, approval status, route-point
+  selection, and audit drawer disclosure. Use the shared response curve and honor reduced
+  motion.
 - Do keep the 3D network useful as a static frame under reduced motion.
 - Do retain the SVG network as an automatic WebGL/error fallback.
 - Do use segmented views when a dense operational list has stable, mutually exclusive modes.
@@ -161,7 +181,7 @@ elevation. No blur or glass effect is used.
   waybill workbench.
 - Don't animate layout properties.
 
-## 8. Responsive behavior
+## 9. Responsive behavior
 
 At 1560 px and wider, with at least 800 px of viewport height, the CEO overview and waybill
 workbench fit their complete decision surface into one viewport. The workbench uses a
@@ -183,7 +203,7 @@ At 640 px the workbench header wraps, route metadata becomes a two-column grid, 
 controls keep 40 px hit areas. Both pages must remain usable at 375 px and 320 px without
 horizontal scrolling.
 
-## 9. Agent prompt guide
+## 10. Agent prompt guide
 
 - "Create a flush operations panel on `oklch(1 0 0)` with 1 px
   `oklch(0.91 0.009 220)` dividers, 4 px radius, and no shadow."

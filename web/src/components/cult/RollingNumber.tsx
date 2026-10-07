@@ -1,5 +1,5 @@
 import {
-  motion,
+  m,
   useReducedMotion,
   useSpring,
   useTransform,
@@ -51,8 +51,8 @@ export function RollingNumber({
   }
 
   return (
-    <motion.span className={classes} aria-label={label}>
+    <m.span className={classes} aria-label={label}>
       {display}
-    </motion.span>
+    </m.span>
   );
 }

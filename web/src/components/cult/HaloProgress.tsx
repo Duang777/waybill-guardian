@@ -1,4 +1,4 @@
-import { motion, useReducedMotion } from "motion/react";
+import { m, useReducedMotion } from "motion/react";
 import type { ReactNode } from "react";
 import { RollingNumber } from "./RollingNumber";
 import styles from "./cult.module.css";
@@ -75,7 +75,7 @@ export function HaloProgress({
       )}
       <div className={styles.progressRim} aria-hidden="true">
         <div className={styles.progressTrack}>
-          <motion.span
+          <m.span
             className={styles.progressIndicator}
             initial={false}
             animate={{ scaleX: progress }}

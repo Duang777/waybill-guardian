@@ -1,9 +1,4 @@
-import {
-  motion,
-  useReducedMotion,
-  type HTMLMotionProps,
-} from "motion/react";
-import type { ReactNode } from "react";
+import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import styles from "./cult.module.css";
 
 export type HaloBadgeTone =
@@ -13,12 +8,14 @@ export type HaloBadgeTone =
   | "warning"
   | "danger";
 
-export type HaloBadgeProps = Omit<HTMLMotionProps<"span">, "children"> & {
+export type HaloBadgeProps = Omit<
+  ComponentPropsWithoutRef<"span">,
+  "children"
+> & {
   children: ReactNode;
   tone?: HaloBadgeTone;
   live?: boolean;
   tabularNums?: boolean;
-  layout?: boolean;
 };
 
 const toneClasses = {
@@ -35,13 +32,10 @@ export function HaloBadge({
   tone = "neutral",
   live = false,
   tabularNums = false,
-  layout = true,
   ...props
 }: HaloBadgeProps) {
-  const reduceMotion = useReducedMotion() ?? false;
-
   return (
-    <motion.span
+    <span
       {...props}
       className={[
         styles.haloBadge,
@@ -52,8 +46,6 @@ export function HaloBadge({
         .filter(Boolean)
         .join(" ")}
       data-slot="halo-badge"
-      layout={layout && !reduceMotion}
-      transition={{ type: "spring", bounce: 0, duration: 0.32 }}
     >
       <span className={styles.haloBadgeBody}>
         {live && (
@@ -61,6 +53,6 @@ export function HaloBadge({
         )}
         <span>{children}</span>
       </span>
-    </motion.span>
+    </span>
   );
 }

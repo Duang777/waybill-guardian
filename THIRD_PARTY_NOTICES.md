@@ -36,7 +36,7 @@ provider fallback middleware，但当前实现没有配置 fallback。
 | `@amap/amap-jsapi-loader` | `1.0.1` | MIT | 按需加载高德 JS API |
 | `maplibre-gl` | `6.12.0` | BSD-3-Clause | 在未配置高德 key 时渲染可交互的矢量地图、轨迹和点位 |
 | `lucide-react` | `1.50.0` | ISC | 界面图标 |
-| `motion` | `14.0.0` | MIT | Cult UI 适配组件的数字、进度和布局过渡 |
+| `motion` | `14.0.0` | MIT | 数字、进度、实时事件、审批状态和轨迹选点反馈 |
 | `zod` | `4.6.5` | MIT | 浏览器端 API 边界校验 |
 
 ECharts 的 NOTICE 原文保存在
