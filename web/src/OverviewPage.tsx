@@ -33,6 +33,7 @@ import {
 } from "./components/cult";
 import { HubNetwork } from "./components/HubNetwork";
 import styles from "./overview.module.css";
+import { overviewWorkbenchHref } from "./workbench-route";
 
 type OverviewResource =
   | { kind: "loading" }
@@ -139,13 +140,15 @@ export function OverviewPage() {
     () =>
       anomalies.map((item, index) => {
         const projection = runProjections.get(item.waybill_id);
-        const projectionIsCurrent =
-          projection !== undefined &&
-          (item.run_id === undefined || item.run_id === projection.runID);
         return {
           item,
           rank: index + 1,
-          status: projectionIsCurrent ? projection.status : item.run_status,
+          status: projection?.status ?? item.run_status,
+          href: overviewWorkbenchHref(
+            item.waybill_id,
+            projection?.runID,
+            item.run_id,
+          ),
         };
       }),
     [anomalies, runProjections],
@@ -370,6 +373,12 @@ export function OverviewPage() {
                     hubs={resource.overview.hubs}
                     routes={resource.overview.routes}
                     anomalies={resource.overview.anomalies}
+                    runIDs={new Map(
+                      [...runProjections].map(([waybillID, projection]) => [
+                        waybillID,
+                        projection.runID,
+                      ]),
+                    )}
                     dataMode={resource.overview.data_mode}
                     totals={resource.overview.totals}
                   />
@@ -450,7 +459,7 @@ export function OverviewPage() {
                         当前视图暂无任务
                       </div>
                     ) : (
-                      visibleQueueEntries.map(({ item, rank, status }) => (
+                      visibleQueueEntries.map(({ item, rank, status, href }) => (
                         <article className={styles.queueItem} key={item.waybill_id}>
                           <label className={styles.queueCheck}>
                             <input
@@ -468,7 +477,7 @@ export function OverviewPage() {
                           </span>
                           <div className={styles.queueBody}>
                             <div className={styles.queueTitle}>
-                              <a href={`/waybills/${encodeURIComponent(item.waybill_id)}`}>
+                              <a href={href}>
                                 {item.origin} → {item.destination}
                               </a>
                               <span className={styles.riskScore}>
@@ -488,7 +497,7 @@ export function OverviewPage() {
                           </div>
                           <TextureLink
                             className={styles.drilldown}
-                            href={`/waybills/${encodeURIComponent(item.waybill_id)}`}
+                            href={href}
                             variant="icon"
                             size="icon"
                             aria-label={`查看运单 ${item.waybill_id}`}

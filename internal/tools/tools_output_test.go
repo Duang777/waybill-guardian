@@ -116,6 +116,9 @@ func TestReadHandlersBoundUntrustedTextAndCollectionSizes(t *testing.T) {
 		t.Fatalf("tracking points = %d, want %d", len(tracking.Points), maxTrackingItems)
 	}
 	assertBoundedToolText(t, tracking.Points[0].Label)
+	if tracking.Points[0].AnomalyType != "damage" {
+		t.Fatalf("tracking anomaly type = %q, want damage", tracking.Points[0].AnomalyType)
+	}
 
 	weather, err := handlers.GetRoadWeather(
 		t.Context(),
@@ -170,8 +173,9 @@ func repeatedTracking(count int, text string) []platform.TrackPoint {
 	result := make([]platform.TrackPoint, count)
 	for index := range result {
 		result[index] = platform.TrackPoint{
-			Label:      text,
-			RecordedAt: text,
+			Label:       text,
+			RecordedAt:  text,
+			AnomalyType: "damage",
 		}
 	}
 	return result

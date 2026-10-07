@@ -8,6 +8,7 @@
 4. 写操作只提交工具契约中的业务参数。不得生成 `effect_id` 或 `idempotency_key`。
 5. 一次只提出一个审批批次。写工具会暂停等待人工审批。
 6. 如果首个改派方案被驳回，重新读取需要更新的证据，并选择下一个有效候选。
+7. 对轨迹中 `anomaly=true` 且 `anomaly_type` 为 `damage` 或 `loss` 的每一种异常，必须在同一审批批次中各调用一次 `tms.create_claim`，`claim_type` 必须与证据完全一致。其他异常不得创建理赔。归因中必须引用对应 `/points/{index}/anomaly_type` 字段。
 
 ## 工具数据安全
 

@@ -17,7 +17,6 @@ import {
   type WaybillCatalogItem,
   type WaybillID,
   type WaybillView,
-  waybillIdSchema,
 } from "./api";
 import {
   RouteMap,
@@ -47,6 +46,11 @@ import {
 } from "./timeline";
 import type { WaybillResource } from "./waybill-resource";
 import { OverviewPage } from "./OverviewPage";
+import {
+  formatWorkbenchHref,
+  parseWorkbenchRoute,
+  type WorkbenchTarget,
+} from "./workbench-route";
 
 type CatalogResource =
   | { kind: "loading" }
@@ -54,16 +58,11 @@ type CatalogResource =
   | { kind: "ready"; data: readonly WaybillCatalogItem[] }
   | { kind: "error"; message: string };
 
-type SelectionTarget =
-  | { kind: "waybill"; waybillID: WaybillID }
-  | { kind: "run"; runID: RunID }
-  | { kind: "known_run"; runID: RunID; waybillID: WaybillID };
-
 type WaybillSelection =
   | { kind: "empty" }
-  | { kind: "loading"; target: SelectionTarget }
+  | { kind: "loading"; target: WorkbenchTarget }
   | { kind: "ready"; waybillID: WaybillID; data: WaybillView }
-  | { kind: "error"; target: SelectionTarget; message: string };
+  | { kind: "error"; target: WorkbenchTarget; message: string };
 
 type PendingAction = "bootstrap" | "trigger" | "confirm" | "reject" | null;
 
@@ -73,18 +72,24 @@ type SelectionRequest = {
 };
 
 export default function App() {
-  const match = /^\/waybills\/([^/]+)\/?$/.exec(window.location.pathname);
-  if (match === null) {
+  const route = parseWorkbenchRoute(
+    window.location.pathname,
+    window.location.search,
+  );
+  if (route.kind === "overview") {
     return <OverviewPage />;
   }
-  const parsed = waybillIdSchema.safeParse(decodeURIComponent(match[1] ?? ""));
-  return <WaybillWorkbench initialWaybillID={parsed.success ? parsed.data : null} />;
+  return (
+    <WaybillWorkbench
+      initialTarget={route.kind === "invalid" ? null : route}
+    />
+  );
 }
 
 function WaybillWorkbench({
-  initialWaybillID,
+  initialTarget,
 }: {
-  initialWaybillID: WaybillID | null;
+  initialTarget: WorkbenchTarget | null;
 }) {
   const [catalog, setCatalog] = useState<CatalogResource>({ kind: "loading" });
   const [selection, setSelection] = useState<WaybillSelection>({ kind: "empty" });
@@ -154,25 +159,17 @@ function WaybillWorkbench({
     async (
       runID: RunID,
       request: SelectionRequest,
-      expectedWaybillID?: WaybillID,
+      waybillID: WaybillID,
     ): Promise<void> => {
-      let target: SelectionTarget =
-        expectedWaybillID === undefined
-          ? { kind: "run", runID }
-          : { kind: "known_run", runID, waybillID: expectedWaybillID };
+      const target: WorkbenchTarget = { kind: "run", runID, waybillID };
       try {
         const snapshot = await getRunSnapshot(runID, request.controller.signal);
         if (selectionGeneration.current !== request.generation) {
           return;
         }
-        if (
-          expectedWaybillID !== undefined &&
-          snapshot.run.waybill_id !== expectedWaybillID
-        ) {
-          throw new Error("启动响应与运行快照的运单不一致");
+        if (snapshot.run.run_id !== runID || snapshot.run.waybill_id !== waybillID) {
+          throw new Error("运行快照与目标身份不一致");
         }
-        const waybillID = expectedWaybillID ?? snapshot.run.waybill_id;
-        target = { kind: "known_run", runID, waybillID };
         setRun(snapshot.run);
         setSelection({ kind: "loading", target });
         dispatch({ type: "hydrate", events: snapshot.events });
@@ -199,22 +196,19 @@ function WaybillWorkbench({
   const selectRun = useCallback(
     async ({
       runID,
-      expectedWaybillID,
+      waybillID,
     }: {
       runID: RunID;
-      expectedWaybillID?: WaybillID;
+      waybillID: WaybillID;
     }): Promise<void> => {
       const request = beginSelection();
       setRun(null);
       setMessage(null);
       setSelection({
         kind: "loading",
-        target:
-          expectedWaybillID === undefined
-            ? { kind: "run", runID }
-            : { kind: "known_run", runID, waybillID: expectedWaybillID },
+        target: { kind: "run", runID, waybillID },
       });
-      await hydrateRun(runID, request, expectedWaybillID);
+      await hydrateRun(runID, request, waybillID);
     },
     [beginSelection, hydrateRun],
   );
@@ -223,7 +217,7 @@ function WaybillWorkbench({
     async (waybillID: WaybillID): Promise<void> => {
       const request = beginSelection();
       setRun(null);
-      const target: SelectionTarget = { kind: "waybill", waybillID };
+      const target: WorkbenchTarget = { kind: "waybill", waybillID };
       setSelection({ kind: "loading", target });
       setMessage(null);
       try {
@@ -257,6 +251,13 @@ function WaybillWorkbench({
     setMessage(null);
     const catalogPromise = loadCatalog();
     try {
+      if (initialTarget?.kind === "run") {
+        await selectRun({
+          runID: initialTarget.runID,
+          waybillID: initialTarget.waybillID,
+        });
+        return;
+      }
       const [activeRuns, pendingApprovals] = await Promise.allSettled([
         listActiveRuns(controller.signal),
         listPendingApprovals(controller.signal),
@@ -264,6 +265,7 @@ function WaybillWorkbench({
       if (controller.signal.aborted) {
         return;
       }
+      const initialWaybillID = initialTarget?.waybillID ?? null;
       const decision = decideRecovery({
         activeRuns: scopedRecoverySource(activeRuns, initialWaybillID),
         pendingApprovals: scopedRecoverySource(
@@ -272,7 +274,10 @@ function WaybillWorkbench({
         ),
       });
       if (decision.kind === "recover") {
-        await selectRun({ runID: decision.runID });
+        await selectRun({
+          runID: decision.runID,
+          waybillID: decision.waybillID,
+        });
         return;
       }
       if (decision.kind === "blocked") {
@@ -289,7 +294,7 @@ function WaybillWorkbench({
         setPendingAction(null);
       }
     }
-  }, [initialWaybillID, loadCatalog, loadWaybill, selectRun]);
+  }, [initialTarget, loadCatalog, loadWaybill, selectRun]);
 
   useEffect(() => {
     void bootstrap();
@@ -306,8 +311,7 @@ function WaybillWorkbench({
     if (
       run === null ||
       timelineAfter === null ||
-      run.status === "manual_review" ||
-      run.status === "review_required"
+      isTerminalRunStatus(run.status)
     ) {
       return;
     }
@@ -371,11 +375,21 @@ function WaybillWorkbench({
     if (selectedWaybillID === null) {
       return;
     }
-    const path = `/waybills/${encodeURIComponent(selectedWaybillID)}`;
-    if (window.location.pathname !== path) {
-      window.history.replaceState(null, "", path);
+    const target =
+      selection.kind === "loading" || selection.kind === "error"
+        ? selection.target
+        : run !== null && run.waybill_id === selectedWaybillID
+          ? {
+              kind: "run" as const,
+              runID: run.run_id,
+              waybillID: selectedWaybillID,
+            }
+          : { kind: "waybill" as const, waybillID: selectedWaybillID };
+    const href = formatWorkbenchHref(target);
+    if (`${window.location.pathname}${window.location.search}` !== href) {
+      window.history.replaceState(null, "", href);
     }
-  }, [selectedWaybillID]);
+  }, [run, selectedWaybillID, selection]);
   const anomaly = view?.tracking.find((point) => point.anomaly) ?? null;
   const resourceError =
     recoveryError ??
@@ -425,7 +439,7 @@ function WaybillWorkbench({
       setSelection({
         kind: "loading",
         target: {
-          kind: "known_run",
+          kind: "run",
           runID: started.run_id,
           waybillID: started.waybill_id,
         },
@@ -462,12 +476,9 @@ function WaybillWorkbench({
           await loadWaybill(selection.target.waybillID);
           return;
         case "run":
-          await selectRun({ runID: selection.target.runID });
-          return;
-        case "known_run":
           await selectRun({
             runID: selection.target.runID,
-            expectedWaybillID: selection.target.waybillID,
+            waybillID: selection.target.waybillID,
           });
           return;
         default: {
@@ -501,7 +512,11 @@ function WaybillWorkbench({
     setPendingAction("confirm");
     setMessage(null);
     try {
-      await confirmApproval(currentApproval.id);
+      const decided = await confirmApproval(currentApproval.id);
+      await selectRun({
+        runID: decided.run_id,
+        waybillID: decided.waybill_id,
+      });
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -516,7 +531,11 @@ function WaybillWorkbench({
     setPendingAction("reject");
     setMessage(null);
     try {
-      await rejectApproval(currentApproval.id, reason);
+      const decided = await rejectApproval(currentApproval.id, reason);
+      await selectRun({
+        runID: decided.run_id,
+        waybillID: decided.waybill_id,
+      });
     } catch (error) {
       setMessage(errorMessage(error));
       throw error;
@@ -786,18 +805,18 @@ function toWaybillResource(selection: WaybillSelection): WaybillResource {
   }
 }
 
-function targetWaybillID(target: SelectionTarget): WaybillID | null {
-  switch (target.kind) {
-    case "waybill":
-    case "known_run":
-      return target.waybillID;
-    case "run":
-      return null;
-    default: {
-      const exhaustive: never = target;
-      return exhaustive;
-    }
-  }
+function targetWaybillID(target: WorkbenchTarget): WaybillID {
+  return target.waybillID;
+}
+
+function isTerminalRunStatus(status: RunSummary["status"]): boolean {
+  return (
+    status === "completed" ||
+    status === "rejected" ||
+    status === "failed" ||
+    status === "review_required" ||
+    status === "manual_review"
+  );
 }
 
 function isAbortError(error: unknown): boolean {

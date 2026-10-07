@@ -4,7 +4,9 @@ import {
   confirmApproval,
   getKPIs,
   listWaybills,
+  openTimeline,
   overviewSchema,
+  runIdSchema,
   startBatch,
   startRun,
   waybillIdSchema,
@@ -126,6 +128,41 @@ describe("waybill API", () => {
     expect(requestInit?.method).toBe("POST");
     expect(requestInit?.headers).toEqual({ "Content-Type": "application/json" });
     expect(requestInit?.body).toBe("{}");
+  });
+
+  it("closes the timeline after delivering a terminal event", () => {
+    let source: FakeEventSource | undefined;
+    class StubEventSource extends FakeEventSource {
+      constructor() {
+        super();
+        source = this;
+      }
+    }
+    vi.stubGlobal("EventSource", StubEventSource);
+    const onEvent = vi.fn();
+    const onConnectionChange = vi.fn();
+
+    openTimeline(runIdSchema.parse("run-terminal"), 8, {
+      onEvent,
+      onConnectionChange,
+      onError: vi.fn(),
+    });
+    source?.emit("run_completed", {
+      schema_version: 1,
+      event_id: "event-terminal",
+      seq: 9,
+      ts: "2026-10-11T13:06:00Z",
+      run_id: "run-terminal",
+      actor: "system",
+      type: "run_completed",
+      payload: { status: "completed" },
+      prev_hash: "a".repeat(64),
+      hash: "b".repeat(64),
+    });
+
+    expect(onEvent).toHaveBeenCalledOnce();
+    expect(source?.closed).toBe(true);
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
   });
 
   it("parses sourced approval evidence and its proposal reference", () => {
@@ -480,4 +517,28 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+class FakeEventSource {
+  readonly listeners = new Map<string, EventListener[]>();
+  closed = false;
+  onopen: ((event: Event) => void) | null = null;
+  onerror: ((event: Event) => void) | null = null;
+
+  addEventListener(type: string, listener: EventListener): void {
+    const listeners = this.listeners.get(type) ?? [];
+    listeners.push(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  emit(type: string, payload: unknown): void {
+    const event = new MessageEvent(type, { data: JSON.stringify(payload) });
+    for (const listener of this.listeners.get(type) ?? []) {
+      listener(event);
+    }
+  }
+
+  close(): void {
+    this.closed = true;
+  }
 }

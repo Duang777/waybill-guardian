@@ -21,27 +21,18 @@ import (
 	"github.com/hastekit/agent-sdk-go/pkg/agents/agentstate"
 )
 
-func TestOnlineCompatibleAPIsPauseThreeDifferentWaybills(t *testing.T) {
+func TestOnlineCompatibleAPIsPauseDelayDamageAndLossWaybills(t *testing.T) {
 	loaded, err := filestore.Load("../../data/simulated/waybills-v1.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	summaries, err := loaded.Reads.Catalog.ListWaybills(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	waybillIDs := make([]domain.WaybillID, 0, 3)
-	for _, summary := range summaries {
-		if summary.AnomalyLabel == "" {
-			continue
-		}
-		waybillIDs = append(waybillIDs, summary.WaybillID)
-		if len(waybillIDs) == 3 {
-			break
-		}
-	}
-	if len(waybillIDs) != 3 {
-		t.Fatalf("anomalous waybills = %d, want at least 3", len(waybillIDs))
+	cases := []struct {
+		waybillID domain.WaybillID
+		writes    int
+	}{
+		{waybillID: "YD2026100001", writes: 3},
+		{waybillID: "YD2026100007", writes: 4},
+		{waybillID: "YD2026100013", writes: 4},
 	}
 
 	for _, apiStyle := range []string{APIStyleResponses, APIStyleChatCompletions} {
@@ -84,7 +75,8 @@ func TestOnlineCompatibleAPIsPauseThreeDifferentWaybills(t *testing.T) {
 			}
 			defer engine.Close()
 
-			for index, waybillID := range waybillIDs {
+			for index, test := range cases {
+				waybillID := test.waybillID
 				runID := domain.RunID(fmt.Sprintf("run-%s-%d", apiStyle, index))
 				outcome, err := engine.Start(t.Context(), domain.RunContext{
 					RunID:       runID,
@@ -101,8 +93,13 @@ func TestOnlineCompatibleAPIsPauseThreeDifferentWaybills(t *testing.T) {
 				if outcome.Proposal == nil || outcome.Proposal.Digest == "" {
 					t.Fatalf("%s proposal = %+v", waybillID, outcome.Proposal)
 				}
-				if len(outcome.Interrupts) != 3 {
-					t.Fatalf("%s interrupts = %d, want 3", waybillID, len(outcome.Interrupts))
+				if len(outcome.Interrupts) != test.writes {
+					t.Fatalf(
+						"%s interrupts = %d, want %d",
+						waybillID,
+						len(outcome.Interrupts),
+						test.writes,
+					)
 				}
 				for _, interrupt := range outcome.Interrupts {
 					var arguments struct {
@@ -397,6 +394,10 @@ func nextCompatibleOutput(state compatibleRequestState) (compatibleOutput, error
 	if err := json.Unmarshal(state.results["tms_get_driver"], &driver); err != nil {
 		return compatibleOutput{}, fmt.Errorf("decode driver result: %w", err)
 	}
+	var tracking guardtools.GetTrackingOutput
+	if err := json.Unmarshal(state.results["tms_get_tracking"], &tracking); err != nil {
+		return compatibleOutput{}, fmt.Errorf("decode tracking result: %w", err)
+	}
 	selected := waybill.CandidateCarriers[0]
 	alternatives := make([]proposal.Alternative, 0, len(waybill.CandidateCarriers))
 	for _, carrier := range waybill.CandidateCarriers {
@@ -433,24 +434,45 @@ func nextCompatibleOutput(state compatibleRequestState) (compatibleOutput, error
 	if err != nil {
 		return compatibleOutput{}, err
 	}
+	calls := []compatibleToolCall{
+		compatibleWriteCall(state.waybillID, "tms_reassign", guardtools.ReassignInput{
+			WaybillID: string(state.waybillID),
+			CarrierID: string(selected.ID),
+		}),
+	}
+	seenClaims := make(map[string]bool)
+	for _, point := range tracking.Points {
+		if !point.Anomaly ||
+			(point.AnomalyType != "damage" && point.AnomalyType != "loss") ||
+			seenClaims[point.AnomalyType] {
+			continue
+		}
+		seenClaims[point.AnomalyType] = true
+		calls = append(calls, compatibleWriteCall(
+			state.waybillID,
+			"tms_create_claim_"+point.AnomalyType,
+			guardtools.CreateClaimInput{
+				WaybillID: string(state.waybillID),
+				ClaimType: point.AnomalyType,
+			},
+		))
+	}
+	calls = append(
+		calls,
+		compatibleWriteCall(state.waybillID, "notify_send_sms", guardtools.SendSMSInput{
+			WaybillID: string(state.waybillID),
+			Recipient: guardtools.RecipientShipper,
+			CarrierID: string(selected.ID),
+		}),
+		compatibleWriteCall(state.waybillID, "notify_send_sms_driver", guardtools.SendSMSInput{
+			WaybillID: string(state.waybillID),
+			Recipient: guardtools.RecipientDriver,
+			CarrierID: string(selected.ID),
+		}),
+	)
 	return compatibleOutput{
-		text: string(rawProposal),
-		calls: []compatibleToolCall{
-			compatibleWriteCall(state.waybillID, "tms_reassign", guardtools.ReassignInput{
-				WaybillID: string(state.waybillID),
-				CarrierID: string(selected.ID),
-			}),
-			compatibleWriteCall(state.waybillID, "notify_send_sms", guardtools.SendSMSInput{
-				WaybillID: string(state.waybillID),
-				Recipient: guardtools.RecipientShipper,
-				CarrierID: string(selected.ID),
-			}),
-			compatibleWriteCall(state.waybillID, "notify_send_sms_driver", guardtools.SendSMSInput{
-				WaybillID: string(state.waybillID),
-				Recipient: guardtools.RecipientDriver,
-				CarrierID: string(selected.ID),
-			}),
-		},
+		text:  string(rawProposal),
+		calls: calls,
 	}, nil
 }
 
@@ -474,6 +496,9 @@ func compatibleWriteCall(
 	name := idSuffix
 	if idSuffix == "notify_send_sms_driver" {
 		name = "notify_send_sms"
+	}
+	if strings.HasPrefix(idSuffix, "tms_create_claim_") {
+		name = "tms_create_claim"
 	}
 	return compatibleToolCall{
 		id:        compatibleCallID(waybillID, idSuffix),

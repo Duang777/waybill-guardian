@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const runIdSchema = z.string().min(1).brand<"RunID">();
+export const runIdSchema = z.string().min(1).brand<"RunID">();
 const approvalIdSchema = z.string().min(1).brand<"ApprovalID">();
 const effectIdSchema = z.string().min(1).brand<"EffectID">();
 export const waybillIdSchema = z.string().regex(/^YD\d{10}$/).brand<"WaybillID">();
@@ -757,6 +757,15 @@ export function openTimeline(
   const source = new EventSource(
     `/api/runs/${encodeURIComponent(runID)}/timeline?${query.toString()}`,
   );
+  let closed = false;
+  const close = (): void => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    source.close();
+    handlers.onConnectionChange(false);
+  };
   const receive = (message: Event): void => {
     if (!(message instanceof MessageEvent) || typeof message.data !== "string") {
       return;
@@ -766,6 +775,9 @@ export function openTimeline(
       const event = auditEventSchema.parse(raw);
       handlers.onEvent(event);
       handlers.onConnectionChange(true);
+      if (terminalAuditEventTypes.has(event.type)) {
+        close();
+      }
     } catch (error) {
       handlers.onError(error instanceof Error ? error.message : "时间线事件无法解析");
     }
@@ -777,5 +789,12 @@ export function openTimeline(
   source.onerror = () => {
     handlers.onConnectionChange(false);
   };
-  return () => source.close();
+  return close;
 }
+
+const terminalAuditEventTypes = new Set<AuditEventType>([
+  "run_completed",
+  "run_rejected",
+  "run_failed",
+  "run_review_required",
+]);

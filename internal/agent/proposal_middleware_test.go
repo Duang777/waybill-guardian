@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -284,10 +285,139 @@ func TestProposalBoundaryRejectsSMSCarrierOutsidePreferredAlternative(t *testing
 		}},
 	}
 
-	err = boundary.validateWriteAlignment(response, accepted)
+	err = boundary.validateWriteAlignment(t.Context(), "run-sms-alignment", response, accepted)
 	if err == nil ||
 		!strings.Contains(err.Error(), `must match first proposal alternative "CARRIER-SW-42"`) {
 		t.Fatalf("validateWriteAlignment error = %v", err)
+	}
+}
+
+func TestProposalBoundaryAlignsClaimsWithLatestTrackingEvidence(t *testing.T) {
+	tests := []struct {
+		name        string
+		anomalyType string
+		claims      []guardtools.CreateClaimInput
+		wantError   string
+	}{
+		{
+			name:        "matching damage claim",
+			anomalyType: "damage",
+			claims: []guardtools.CreateClaimInput{{
+				WaybillID: "YD2026101001",
+				ClaimType: "damage",
+			}},
+		},
+		{
+			name:        "missing damage claim",
+			anomalyType: "damage",
+			wantError:   "missing required claim",
+		},
+		{
+			name:        "wrong claim type",
+			anomalyType: "damage",
+			claims: []guardtools.CreateClaimInput{{
+				WaybillID: "YD2026101001",
+				ClaimType: "loss",
+			}},
+			wantError: "unexpected claim",
+		},
+		{
+			name:        "wrong waybill",
+			anomalyType: "damage",
+			claims: []guardtools.CreateClaimInput{{
+				WaybillID: "YD2026101002",
+				ClaimType: "damage",
+			}},
+			wantError: "claim waybill",
+		},
+		{
+			name:        "duplicate claim",
+			anomalyType: "damage",
+			claims: []guardtools.CreateClaimInput{
+				{WaybillID: "YD2026101001", ClaimType: "damage"},
+				{WaybillID: "YD2026101001", ClaimType: "damage"},
+			},
+			wantError: "duplicate claim",
+		},
+		{
+			name:        "extra claim without claim-bearing evidence",
+			anomalyType: "delay",
+			claims: []guardtools.CreateClaimInput{{
+				WaybillID: "YD2026101001",
+				ClaimType: "damage",
+			}},
+			wantError: "unexpected claim",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runID := domain.RunID("run-claim-" + strings.ReplaceAll(test.name, " ", "-"))
+			store, registry, _ := proposalBoundaryFixture(t, runID)
+			appendBoundaryToolResult(
+				t,
+				store,
+				runID,
+				"call-tracking-latest",
+				domain.ActionGetTracking,
+				map[string]any{
+					"points": []any{
+						map[string]any{
+							"label":        "异常节点",
+							"anomaly":      true,
+							"anomaly_type": test.anomalyType,
+						},
+					},
+				},
+			)
+			boundary, err := NewProposalBoundary(
+				store,
+				registry,
+				InferenceDescriptor{Mode: ModeOffline},
+				time.Now,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := proposalResponse(t, registry, validBoundaryProposal(t))
+			claimWire, ok := registry.ActiveWireName(domain.ActionCreateClaim)
+			if !ok {
+				t.Fatal("create claim tool is not active")
+			}
+			for index, claim := range test.claims {
+				arguments, err := json.Marshal(claim)
+				if err != nil {
+					t.Fatal(err)
+				}
+				response.Output = append(response.Output, responses.OutputMessageUnion{
+					OfFunctionCall: &responses.FunctionCallMessage{
+						ID:        fmt.Sprintf("fc-claim-%d", index),
+						CallID:    fmt.Sprintf("call-claim-%d", index),
+						Name:      claimWire,
+						Arguments: string(arguments),
+					},
+				})
+			}
+			accepted := proposal.Accepted{Alternatives: []proposal.Alternative{{
+				CarrierID: "CARRIER-SW-42",
+				Reason:    "preferred",
+			}}}
+
+			err = boundary.validateWriteAlignment(
+				t.Context(),
+				runID,
+				response,
+				accepted,
+			)
+			if test.wantError == "" {
+				if err != nil {
+					t.Fatalf("validateWriteAlignment error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("validateWriteAlignment error = %v, want %q", err, test.wantError)
+			}
+		})
 	}
 }
 

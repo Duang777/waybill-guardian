@@ -1,4 +1,9 @@
-import type { PendingApprovalSummary, RunID, RunSummary } from "./api";
+import type {
+  PendingApprovalSummary,
+  RunID,
+  RunSummary,
+  WaybillID,
+} from "./api";
 
 export type RecoverySource<T> =
   | { kind: "ready"; data: readonly T[] }
@@ -10,7 +15,7 @@ type RecoveryCandidates = {
 };
 
 export type RecoveryDecision =
-  | { kind: "recover"; runID: RunID }
+  | { kind: "recover"; runID: RunID; waybillID: WaybillID }
   | { kind: "select_waybill" }
   | { kind: "blocked"; message: string };
 
@@ -18,13 +23,17 @@ export function decideRecovery({
   pendingApprovals,
   activeRuns,
 }: RecoveryCandidates): RecoveryDecision {
-  const runID =
+  const candidate =
     (pendingApprovals.kind === "ready"
-      ? pendingApprovals.data[0]?.run_id
+      ? pendingApprovals.data[0]
       : undefined) ??
-    (activeRuns.kind === "ready" ? activeRuns.data[0]?.run_id : undefined);
-  if (runID !== undefined) {
-    return { kind: "recover", runID };
+    (activeRuns.kind === "ready" ? activeRuns.data[0] : undefined);
+  if (candidate !== undefined) {
+    return {
+      kind: "recover",
+      runID: candidate.run_id,
+      waybillID: candidate.waybill_id,
+    };
   }
 
   const failures = [pendingApprovals, activeRuns]
