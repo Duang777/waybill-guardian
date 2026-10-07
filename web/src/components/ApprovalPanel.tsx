@@ -7,6 +7,7 @@ import {
   RotateCcw,
   Send,
   TriangleAlert,
+  WifiOff,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -27,7 +28,7 @@ type ApprovalPanelProps = {
   proposal: Proposal | null;
   runStatus: RunStatus | null;
   view: WaybillView | null;
-  busy: boolean;
+  decisionState: ApprovalDecisionState;
   embedded?: boolean;
   showEvidence?: boolean;
   onEvidenceSelect: (selection: EvidenceSelection) => void;
@@ -35,12 +36,17 @@ type ApprovalPanelProps = {
   onReject: (reason: string) => Promise<void>;
 };
 
+export type ApprovalDecisionState =
+  | { kind: "ready" }
+  | { kind: "busy" }
+  | { kind: "unavailable"; reason: string };
+
 export function ApprovalPanel({
   approval,
   proposal,
   runStatus,
   view,
-  busy,
+  decisionState,
   embedded = false,
   showEvidence = true,
   onEvidenceSelect,
@@ -98,6 +104,8 @@ export function ApprovalPanel({
   }
 
   const isPending = approval.status === "pending";
+  const busy = decisionState.kind === "busy";
+  const decisionDisabled = decisionState.kind !== "ready";
   const selectedCarrierID = carrierID(approval);
   const primaryCarrier = carrierName(approval, view);
 
@@ -276,10 +284,16 @@ export function ApprovalPanel({
 
         {isPending && !rejecting && (
           <div className={styles.approvalActions}>
+            {decisionState.kind === "unavailable" && (
+              <div className={styles.approvalUnavailable} role="status">
+                <WifiOff aria-hidden="true" size={15} />
+                {decisionState.reason}
+              </div>
+            )}
             <TextureButton
               type="button"
               variant="secondary"
-              disabled={busy}
+              disabled={decisionDisabled}
               onClick={() => setRejecting(true)}
             >
               <X aria-hidden="true" size={16} />
@@ -288,7 +302,7 @@ export function ApprovalPanel({
             <TextureButton
               type="button"
               variant="primary"
-              disabled={busy}
+              disabled={decisionDisabled}
               onClick={() => void onConfirm()}
             >
               <Check aria-hidden="true" size={17} />
@@ -305,13 +319,19 @@ export function ApprovalPanel({
               void submitReject();
             }}
           >
+            {decisionState.kind === "unavailable" && (
+              <div className={styles.approvalUnavailable} role="status">
+                <WifiOff aria-hidden="true" size={15} />
+                {decisionState.reason}
+              </div>
+            )}
             <label htmlFor="reject-reason">驳回原因</label>
             <textarea
               id="reject-reason"
               value={reason}
               rows={3}
               placeholder="例如：首选承运商当前无可用车辆"
-              disabled={busy}
+              disabled={decisionDisabled}
               onChange={(event) => setReason(event.target.value)}
             />
             <div className={styles.rejectActions}>
@@ -319,7 +339,7 @@ export function ApprovalPanel({
                 type="button"
                 variant="minimal"
                 size="sm"
-                disabled={busy}
+                disabled={decisionDisabled}
                 onClick={() => setRejecting(false)}
               >
                 取消
@@ -328,7 +348,7 @@ export function ApprovalPanel({
                 type="submit"
                 variant="destructive"
                 size="sm"
-                disabled={busy || reason.trim().length === 0}
+                disabled={decisionDisabled || reason.trim().length === 0}
               >
                 确认驳回
               </TextureButton>

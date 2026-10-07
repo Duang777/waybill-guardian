@@ -98,9 +98,9 @@ try {
       if (targetRequests !== 1) {
         return response;
       }
-      const originalJSON = response.json.bind(response);
-      response.json = async () => {
-        const data = await originalJSON();
+      const originalText = response.text.bind(response);
+      response.text = async () => {
+        const data = await originalText();
         window.__staleWaybillJSONReady = true;
         await new Promise((release) => {
           window.__releaseStaleWaybillJSON = release;

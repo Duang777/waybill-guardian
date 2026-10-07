@@ -79,6 +79,16 @@ try {
     headless: true,
   });
   const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+  await page.addInitScript(() => {
+    window.__waybillCLS = 0;
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (!entry.hadRecentInput) {
+          window.__waybillCLS += entry.value;
+        }
+      }
+    }).observe({ type: "layout-shift", buffered: true });
+  });
   let batchPayload = null;
   page.on("request", (request) => {
     if (request.method() === "POST" && request.url().endsWith("/api/runs:batch")) {
@@ -116,6 +126,13 @@ try {
   await page
     .getByText("窗口内尚无人工审批决定", { exact: true })
     .waitFor();
+  const cumulativeLayoutShift = await page.evaluate(
+    () => window.__waybillCLS ?? Number.POSITIVE_INFINITY,
+  );
+  assert(
+    cumulativeLayoutShift < 0.1,
+    `overview CLS was ${cumulativeLayoutShift.toFixed(4)}, want < 0.1`,
+  );
   const kpiFontSizes = await page
     .locator('section[aria-label="24 小时经营指标"] article strong:not([class])')
     .evaluateAll((elements) =>
@@ -467,7 +484,7 @@ try {
   const initialQueueSize = await queueItems.count();
   assert(initialQueueSize > 5, "risk queue did not render enough anomalies");
   await riskQueue.getByRole("radio", { name: "处置中", exact: true }).check();
-  await riskQueue.getByText("当前视图暂无任务", { exact: true }).waitFor();
+  await riskQueue.getByText("当前筛选没有任务", { exact: true }).waitFor();
   assert(
     (await queueItems.count()) === 0,
     "active queue view rendered unassigned anomalies",
@@ -765,6 +782,7 @@ try {
     JSON.stringify(
       {
         first_visible_ms: Math.round(visibleInMilliseconds),
+        cumulative_layout_shift: Number(cumulativeLayoutShift.toFixed(4)),
         hubs: sceneCounts.hubs,
         routes: sceneCounts.routes,
         markers: sceneCounts.markers,

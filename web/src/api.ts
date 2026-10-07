@@ -686,7 +686,19 @@ async function request<T>(
   init?: RequestInit,
 ): Promise<T> {
   const response = await fetch(path, init);
-  const raw: unknown = await response.json();
+  const body = await response.text();
+  let raw: unknown;
+  try {
+    raw = JSON.parse(body);
+  } catch {
+    throw new APIError(
+      response.ok
+        ? "服务返回的内容不是有效 JSON"
+        : `请求失败，HTTP ${response.status}，且响应不是有效 JSON`,
+      "invalid_json",
+      response.status,
+    );
+  }
   if (!response.ok) {
     const problem = problemSchema.safeParse(raw);
     if (problem.success) {
@@ -698,7 +710,16 @@ async function request<T>(
     }
     throw new APIError(`请求失败，HTTP ${response.status}`, "invalid_response", response.status);
   }
-  return schema.parse(raw);
+  const parsed = schema.safeParse(raw);
+  if (!parsed.success) {
+    const detail = parsed.error.issues[0]?.message ?? "未知字段错误";
+    throw new APIError(
+      `服务返回的数据不符合前端契约：${detail}`,
+      "invalid_contract",
+      response.status,
+    );
+  }
+  return parsed.data;
 }
 
 export function getWaybill(id: WaybillID, signal?: AbortSignal): Promise<WaybillView> {
@@ -777,9 +798,15 @@ export function rejectApproval(id: ApprovalID, reason: string): Promise<Approval
   });
 }
 
+export type TimelineConnectionState =
+  | "connecting"
+  | "online"
+  | "reconnecting"
+  | "closed";
+
 type TimelineHandlers = {
   onEvent: (event: AuditEvent) => void;
-  onConnectionChange: (connected: boolean) => void;
+  onConnectionChange: (state: TimelineConnectionState) => void;
   onError: (message: string) => void;
 };
 
@@ -792,6 +819,7 @@ export function openTimeline(
   const source = new EventSource(
     `/api/runs/${encodeURIComponent(runID)}/timeline?${query.toString()}`,
   );
+  handlers.onConnectionChange("connecting");
   let closed = false;
   const close = (): void => {
     if (closed) {
@@ -799,7 +827,7 @@ export function openTimeline(
     }
     closed = true;
     source.close();
-    handlers.onConnectionChange(false);
+    handlers.onConnectionChange("closed");
   };
   const receive = (message: Event): void => {
     if (!(message instanceof MessageEvent) || typeof message.data !== "string") {
@@ -809,7 +837,7 @@ export function openTimeline(
       const raw: unknown = JSON.parse(message.data);
       const event = auditEventSchema.parse(raw);
       handlers.onEvent(event);
-      handlers.onConnectionChange(true);
+      handlers.onConnectionChange("online");
       if (terminalAuditEventTypes.has(event.type)) {
         close();
       }
@@ -820,9 +848,11 @@ export function openTimeline(
   for (const type of auditEventTypeSchema.options) {
     source.addEventListener(type, receive);
   }
-  source.onopen = () => handlers.onConnectionChange(true);
+  source.onopen = () => handlers.onConnectionChange("online");
   source.onerror = () => {
-    handlers.onConnectionChange(false);
+    if (!closed) {
+      handlers.onConnectionChange("reconnecting");
+    }
   };
   return close;
 }

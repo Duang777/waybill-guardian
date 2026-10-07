@@ -40,7 +40,7 @@ describe("ApprovalPanel", () => {
         proposal={null}
         runStatus="review_required"
         view={null}
-        busy={false}
+        decisionState={{ kind: "ready" }}
         onEvidenceSelect={() => undefined}
         onConfirm={() => Promise.resolve()}
         onReject={() => Promise.resolve()}
@@ -95,7 +95,7 @@ describe("ApprovalPanel", () => {
         proposal={null}
         runStatus="awaiting_approval"
         view={null}
-        busy={false}
+        decisionState={{ kind: "ready" }}
         onEvidenceSelect={() => undefined}
         onConfirm={() => Promise.resolve()}
         onReject={() => Promise.resolve()}
@@ -105,6 +105,25 @@ describe("ApprovalPanel", () => {
     expect(markup).toContain("定位证据：异常停留，审计事件 9");
     expect(markup).toContain('aria-live="polite"');
     expect(markup).toContain("剩余 ");
+
+    const disconnectedMarkup = renderToStaticMarkup(
+      <ApprovalPanel
+        approval={approval}
+        proposal={null}
+        runStatus="awaiting_approval"
+        view={null}
+        decisionState={{
+          kind: "unavailable",
+          reason: "实时审计连接尚未恢复，系统已暂时锁定审批操作。",
+        }}
+        onEvidenceSelect={() => undefined}
+        onConfirm={() => Promise.resolve()}
+        onReject={() => Promise.resolve()}
+      />,
+    );
+
+    expect(disconnectedMarkup).toContain("暂时锁定审批操作");
+    expect(disconnectedMarkup.match(/disabled=""/g)).toHaveLength(2);
   });
 
   it("shows an expired approval as a terminal state without decision actions", () => {
@@ -143,7 +162,7 @@ describe("ApprovalPanel", () => {
         proposal={null}
         runStatus="rejected"
         view={null}
-        busy={false}
+        decisionState={{ kind: "ready" }}
         onEvidenceSelect={() => undefined}
         onConfirm={() => Promise.resolve()}
         onReject={() => Promise.resolve()}
