@@ -38,7 +38,7 @@ The overview calculates time recovered, cost impact, labor saved, anomaly closur
 
 `PLATFORM=mock` loads only the embedded waybill `YD2026101001` from [`internal/tools/testdata/demo.json`](internal/tools/testdata/demo.json). `PLATFORM=file` loads one JSON or CSV v1 file at startup and supports optional highway-port, vehicle, and route network entities. The page can select a waybill from that file and start a run. Writes in file mode stay on the in-memory fixture write runtime, and SMS is not actually sent.
 
-The home page is a nationwide highway-port overview with the network, KPIs, anomaly queue, and cited operating briefs. The nationwide view is an abstract network diagram for demonstration, not a survey map, and it does not draw administrative boundaries. It can start five independent runs in one batch. Selecting a waybill opens its workbench; every run keeps its own approval and SSE timeline. At 1600 by 900 and 1920 by 1080, the overview fits the network, queue, and operating briefs in one viewport. The waybill workbench uses three columns for map evidence, audit timeline, and approval so the operator can act without scrolling the page. The current UI is still not the black and orange command center in [issue 77](https://github.com/Duang777/waybill-guardian/issues/77).
+The home page is a nationwide highway-port overview with the network, KPIs, anomaly queue, and cited operating briefs. The nationwide view is an abstract network diagram for demonstration, not a survey map, and it does not draw administrative boundaries. It can start five independent runs in one batch. Selecting a waybill opens its workbench; every run keeps its own approval and SSE timeline. At 1600 by 900 and 1920 by 1080, the overview fits the network, queue, and operating briefs in one viewport. The waybill workbench follows four layers: the six-stage run strip, the map and evidence ledger, the full-width human decision gate, and the audit drawer. The operator can approve a proposal without scrolling the whole page.
 
 <p align="center">
   <img alt="Desktop width. The embedded fixture is waiting for approval. The waybill selector shows Hangzhou to Chengdu, YD2026101001, and the button reads 重新处置. The proposal reassigns to 川行快运 and notifies the shipper and driver. The map is the local track. Display scores are ETA 83, road 75, weather 0." src="docs/assets/console-approval.png" width="840">
@@ -107,10 +107,10 @@ The status describes the code in this repository.
 | File import | Shipped | `PLATFORM=file` loads JSON or CSV v1 at startup, and the page can select a waybill from the file. Writes stay on the in-memory fixture runtime. See closed [issue 60](https://github.com/Duang777/waybill-guardian/issues/60) and [`docs/file-data-source-design.md`](docs/file-data-source-design.md). |
 | Highway-port overview | Shipped | The home page shows the 72-port network, KPIs, anomaly queue, operating briefs, and batch start with per-run approval. See [issue 61](https://github.com/Duang777/waybill-guardian/issues/61). |
 | Apache-2.0 and dependency manifests | Shipped | The root has `LICENSE`. Transitive dependency manifests are in [`docs/licenses/`](docs/licenses/). |
-| CSRF checks on non-GET requests | Planned | [Issue 64](https://github.com/Duang777/waybill-guardian/issues/64) |
+| CSRF checks on non-GET requests | Shipped | Go's `CrossOriginProtection` checks `Sec-Fetch-Site` and `Origin`. JSON write endpoints check `Content-Type`. See closed [issue 64](https://github.com/Duang777/waybill-guardian/issues/64). |
 | Docker Compose | Shipped | One container serves the frontend and API, with an optional PostgreSQL 17 profile. |
 | GitHub Actions | Shipped | Pull requests and `main` run Go, Web, PostgreSQL, license, and image checks. |
-| Command-center visual design | Planned | [Issue 77](https://github.com/Duang777/waybill-guardian/issues/77), including issues 69 through 76. |
+| White industrial network and evidence linking | Shipped | The contest scope covers the nationwide port network, evidence navigation, recording layouts, and mobile. See closed [issue 77](https://github.com/Duang777/waybill-guardian/issues/77). |
 
 ## Demo
 
@@ -496,11 +496,11 @@ These three projects were used to compare interaction and domain splits. None of
 | [60](https://github.com/Duang777/waybill-guardian/issues/60) | Closed. Load JSON or CSV v1 at startup and select a waybill on the page |
 | [61](https://github.com/Duang777/waybill-guardian/issues/61) | Complete. Highway-port overview, KPIs, anomaly queue, and batch start |
 | [62](https://github.com/Duang777/waybill-guardian/issues/62) | Complete. Apache-2.0, transitive dependency manifests, and `.mailmap` |
-| [64](https://github.com/Duang777/waybill-guardian/issues/64) | CSRF checks for non-GET requests |
+| [64](https://github.com/Duang777/waybill-guardian/issues/64) | Complete. Cross-origin checks for non-GET requests and JSON `Content-Type` validation |
 | [65](https://github.com/Duang777/waybill-guardian/issues/65) | Complete. Single-container image and Docker Compose |
 | [67](https://github.com/Duang777/waybill-guardian/issues/67) | Complete. GitHub Actions |
 | [68](https://github.com/Duang777/waybill-guardian/issues/68) | Still open. This page has the diagram, KPI formulas, demo entry, and file checks. A dubbed video is still open |
-| [77](https://github.com/Duang777/waybill-guardian/issues/77) | Frontend visual work, including issues 69 through 76 |
+| [77](https://github.com/Duang777/waybill-guardian/issues/77) | Contest scope complete. The port network, evidence linking, recording layouts, and mobile are shipped. Issues 70, 72, 74, and 76 remain independent P2 work |
 
 The production handling path is [issue 44](https://github.com/Duang777/waybill-guardian/issues/44).
 
