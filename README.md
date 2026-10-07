@@ -48,7 +48,7 @@
   <img alt="手机宽度下，同一次脚本演示在确认后显示处置完成，按钮是重新处置。" src="docs/assets/console-completed-mobile.png" width="280">
 </p>
 
-上面两张图来自 `AGENT_MODE=offline npm run verify:e2e`。桌面图使用 MapLibre 浅色矢量路网；加载失败时页面自动改用本地轨迹。人工决策闸中的归因句子由 `ScenarioModel` 根据工具结果生成。
+上面两张图来自 `AGENT_MODE=offline npm run verify:e2e`。未配置高德时，页面直接使用不含行政边界的本地轨迹示意。人工决策闸中的归因句子由 `ScenarioModel` 根据工具结果生成。
 
 ## 架构
 
@@ -426,7 +426,11 @@ VITE_AMAP_KEY=replace-me
 VITE_AMAP_SECURITY_JS_CODE=replace-me
 ```
 
-`VITE_API_TARGET` 是 Vite 开发代理的 API 地址，默认 `http://127.0.0.1:8080`。`demo.sh` 会把它设成当前 API。
+未配置高德时，工作台默认使用本地轨迹示意，不请求外部底图。仅本地开发需要
+OpenFreeMap 时，可设置 `VITE_VECTOR_MAP=openfreemap`。公开演示不要使用该选项。
+
+`VITE_API_TARGET` 是 Vite 开发代理的 API 地址，默认 `http://127.0.0.1:8080`。`demo.sh`
+会把它设成当前 API。
 
 ### 删除 Agent history
 

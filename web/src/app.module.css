@@ -165,6 +165,38 @@
   background: oklch(0.982 0.004 95);
 }
 
+.routeError {
+  display: grid;
+  min-height: calc(100vh - 58px);
+  align-content: center;
+  justify-items: start;
+  gap: 10px;
+  padding: 40px clamp(24px, 8vw, 120px);
+  background: oklch(0.982 0.004 95);
+}
+
+.routeError > svg {
+  color: oklch(0.58 0.2 28);
+}
+
+.routeError h1 {
+  max-width: 16ch;
+  margin: 4px 0 0;
+  font-family: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+  font-size: 38px;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: 0;
+  text-wrap: balance;
+}
+
+.routeError p {
+  margin: 0 0 12px;
+  color: oklch(0.44 0.014 255);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
 .summaryStrip {
   display: grid;
   grid-template-columns: minmax(0, 1.65fr) minmax(440px, 0.85fr);

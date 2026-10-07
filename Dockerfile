@@ -7,8 +7,10 @@ COPY web/ ./
 
 ARG AMAP_BROWSER_ID=""
 ARG AMAP_BROWSER_CODE=""
+ARG VITE_VECTOR_MAP=""
 RUN VITE_AMAP_KEY="${AMAP_BROWSER_ID}" \
     VITE_AMAP_SECURITY_JS_CODE="${AMAP_BROWSER_CODE}" \
+    VITE_VECTOR_MAP="${VITE_VECTOR_MAP}" \
     npm run build
 RUN npx --yes license-checker-rseidelsohn@4.4.2 \
     --production \

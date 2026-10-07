@@ -78,9 +78,9 @@ breakpoint and never scale with viewport width.
   with a short vertical translation and opacity transition instead of appearing instantly.
 - Inputs and range controls use the signal color for active state and a visible focus ring.
 - Icon-only buttons use Lucide icons, tooltips, and accessible labels.
-- The waybill route uses MapLibre with an OpenFreeMap light vector style when no AMap key is
-  configured. The local SVG fallback uses a pale coordinate field and the same evidence
-  ledger. Evidence must never obscure the route.
+- The waybill route uses AMap when its key is configured. Without that key, the route uses
+  the local SVG coordinate field and draws no administrative boundaries. OpenFreeMap is an
+  explicit development option. Evidence must never obscure the route.
 
 ## 5. Layout principles
 

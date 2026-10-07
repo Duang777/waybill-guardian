@@ -18,9 +18,12 @@ export function parseWorkbenchRoute(
   pathname: string,
   search: string,
 ): AppRoute {
+  if (pathname === "/") {
+    return { kind: "overview" };
+  }
   const match = /^\/waybills\/([^/]+)\/?$/.exec(pathname);
   if (match === null) {
-    return { kind: "overview" };
+    return { kind: "invalid" };
   }
   let decodedWaybillID: string;
   try {

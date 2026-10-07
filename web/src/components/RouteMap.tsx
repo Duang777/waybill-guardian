@@ -37,13 +37,14 @@ export type RoutePointFocusRequest = {
   pointIndex: number;
 };
 
-type MapProvider = "amap" | "vector";
+export type RouteMapProvider = "amap" | "vector";
 
 type MapMode =
-  | { kind: "loading"; provider: MapProvider }
+  | { kind: "local" }
+  | { kind: "loading"; provider: RouteMapProvider }
   | { kind: "amap" }
   | { kind: "vector" }
-  | { kind: "fallback"; provider: MapProvider; reason: string };
+  | { kind: "fallback"; provider: RouteMapProvider; reason: string };
 
 type MapController =
   | {
@@ -76,6 +77,27 @@ type CanvasPoint = {
   y: number;
 };
 
+export function routeMapProvider(
+  amapConfigured: boolean,
+  vectorMap: string | undefined,
+): RouteMapProvider | null {
+  if (amapConfigured) {
+    return "amap";
+  }
+  return vectorMap?.trim().toLowerCase() === "openfreemap"
+    ? "vector"
+    : null;
+}
+
+function configuredRouteMapProvider(): RouteMapProvider | null {
+  return routeMapProvider(hasAMapKey(), import.meta.env.VITE_VECTOR_MAP);
+}
+
+function initialMapMode(): MapMode {
+  const provider = configuredRouteMapProvider();
+  return provider === null ? { kind: "local" } : { kind: "loading", provider };
+}
+
 export function RouteMap({
   points,
   origin,
@@ -94,11 +116,7 @@ export function RouteMap({
     selection.points === points && selection.index < points.length
       ? selection.index
       : preferredIndex;
-  const [mode, setMode] = useState<MapMode>(
-    hasAMapKey()
-      ? { kind: "loading", provider: "amap" }
-      : { kind: "loading", provider: "vector" },
-  );
+  const [mode, setMode] = useState<MapMode>(() => initialMapMode());
   const selected = points[selectedIndex] ?? null;
   const projected = useMemo(() => projectPoints(points), [points]);
 
@@ -107,10 +125,14 @@ export function RouteMap({
     if (element === null || points.length === 0) {
       return;
     }
-    const provider: MapProvider = hasAMapKey() ? "amap" : "vector";
+    const provider = configuredRouteMapProvider();
     let disposed = false;
     let controller: MapController | null = null;
     mapController.current = null;
+    if (provider === null) {
+      setMode({ kind: "local" });
+      return;
+    }
     setMode({ kind: "loading", provider });
 
     const initialize =
@@ -215,10 +237,13 @@ export function RouteMap({
             <span>矢量路网</span>
           </div>
         )}
-        {mode.kind === "fallback" && (
-          <div className={styles.mapNotice} title={mode.reason}>
+        {(mode.kind === "local" || mode.kind === "fallback") && (
+          <div
+            className={styles.mapNotice}
+            title={mode.kind === "fallback" ? mode.reason : "本地示意坐标，不是测绘底图"}
+          >
             <Compass aria-hidden="true" size={14} />
-            <span>本地测绘模式</span>
+            <span>本地轨迹示意</span>
           </div>
         )}
         {selected !== null && (
@@ -257,11 +282,7 @@ export function RouteMap({
             </div>
             <div>
               <dt>节点状态</dt>
-              <dd>
-                {selected.stop_hours === undefined
-                  ? "正常通行"
-                  : `停留 ${selected.stop_hours} 小时`}
-              </dd>
+              <dd>{routePointStatus(points, selectedIndex)}</dd>
             </div>
           </dl>
           <div className={styles.pointInspectorStatus}>
@@ -654,11 +675,32 @@ function routeProgressIndex(points: readonly TrackPoint[]): number {
   return anomaly >= 0 ? anomaly : Math.max(0, points.length - 1);
 }
 
-function mapProviderLabel(provider: MapProvider): string {
+export function routePointStatus(
+  points: readonly TrackPoint[],
+  index: number,
+): string {
+  const point = points[index];
+  if (point === undefined) {
+    return "";
+  }
+  if (point.stop_hours !== undefined) {
+    return `停留 ${point.stop_hours} 小时`;
+  }
+  const anomalyIndex = points.findIndex((candidate) => candidate.anomaly);
+  if (anomalyIndex >= 0 && index > anomalyIndex) {
+    return "异常后待确认";
+  }
+  if (point.anomaly) {
+    return "异常节点";
+  }
+  return point.speed_kph === 0 ? "到发节点" : "正常通行";
+}
+
+function mapProviderLabel(provider: RouteMapProvider): string {
   return provider === "amap" ? "高德地图" : "矢量路网";
 }
 
-function mapLoadingLabel(provider: MapProvider): string {
+function mapLoadingLabel(provider: RouteMapProvider): string {
   return provider === "amap" ? "正在连接高德地图" : "正在加载矢量路网";
 }
 

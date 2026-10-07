@@ -5,6 +5,8 @@ import {
   buildRouteLineFeature,
   buildRoutePointCollection,
   buildSmoothRoutePath,
+  routeMapProvider,
+  routePointStatus,
   RouteMap,
 } from "./RouteMap";
 
@@ -74,9 +76,22 @@ describe("RouteMap", () => {
     expect(markup).not.toContain("<polyline");
     expect(markup).toContain("N 35.2000°");
     expect(markup).toContain("E 119.3000°");
-    expect(markup).toContain("正在加载矢量路网");
+    expect(markup).toContain("本地轨迹示意");
+    expect(markup).not.toContain("正在加载矢量路网");
     expect(markup).not.toContain("N 31.23°");
     expect(markup).not.toContain("E 121.47°");
+  });
+
+  it("labels points after an anomaly as unconfirmed instead of normal traffic", () => {
+    expect(routePointStatus(points, 3)).toBe("异常后待确认");
+    expect(routePointStatus(points, 1)).toBe("正常通行");
+  });
+
+  it("uses the local view unless AMap or OpenFreeMap is explicit", () => {
+    expect(routeMapProvider(false, undefined)).toBeNull();
+    expect(routeMapProvider(false, "")).toBeNull();
+    expect(routeMapProvider(false, "openfreemap")).toBe("vector");
+    expect(routeMapProvider(true, undefined)).toBe("amap");
   });
 });
 

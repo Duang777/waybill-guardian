@@ -79,17 +79,49 @@ export default function App() {
   if (route.kind === "overview") {
     return <OverviewPage />;
   }
+  if (route.kind === "invalid") {
+    return <InvalidRoutePage />;
+  }
+  return <WaybillWorkbench initialTarget={route} />;
+}
+
+export function InvalidRoutePage() {
   return (
-    <WaybillWorkbench
-      initialTarget={route.kind === "invalid" ? null : route}
-    />
+    <>
+      <a className={styles.skipLink} href="#main-content">
+        跳到主要内容
+      </a>
+      <div className={styles.appShell}>
+        <header className={styles.topbar}>
+          <div className={styles.brand}>
+            <span className={styles.brandMark} aria-hidden="true">
+              WG
+            </span>
+            <div>
+              <strong>Waybill Guardian</strong>
+              <span>异常运单处置控制台</span>
+            </div>
+          </div>
+        </header>
+        <main id="main-content" className={styles.routeError}>
+          <AlertOctagon aria-hidden="true" size={28} />
+          <span className={styles.eyebrow}>Invalid route</span>
+          <h1>无法打开运单工作台</h1>
+          <p>URL 中的运单或任务标识无效。</p>
+          <TextureLink href="/" variant="primary">
+            <ArrowLeft aria-hidden="true" size={16} />
+            返回全国经营总览
+          </TextureLink>
+        </main>
+      </div>
+    </>
   );
 }
 
 function WaybillWorkbench({
   initialTarget,
 }: {
-  initialTarget: WorkbenchTarget | null;
+  initialTarget: WorkbenchTarget;
 }) {
   const [catalog, setCatalog] = useState<CatalogResource>({ kind: "loading" });
   const [selection, setSelection] = useState<WaybillSelection>({ kind: "empty" });
@@ -251,7 +283,7 @@ function WaybillWorkbench({
     setMessage(null);
     const catalogPromise = loadCatalog();
     try {
-      if (initialTarget?.kind === "run") {
+      if (initialTarget.kind === "run") {
         await selectRun({
           runID: initialTarget.runID,
           waybillID: initialTarget.waybillID,
@@ -265,7 +297,7 @@ function WaybillWorkbench({
       if (controller.signal.aborted) {
         return;
       }
-      const initialWaybillID = initialTarget?.waybillID ?? null;
+      const initialWaybillID = initialTarget.waybillID;
       const decision = decideRecovery({
         activeRuns: scopedRecoverySource(activeRuns, initialWaybillID),
         pendingApprovals: scopedRecoverySource(

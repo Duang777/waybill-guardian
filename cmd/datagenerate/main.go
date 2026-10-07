@@ -333,21 +333,34 @@ func buildTrackingRecords(
 	lastIndex := len(coordinates) - 1
 	anomalyIndex := lastIndex / 2
 	duration := time.Duration(route.StandardHours) * time.Hour
+	stopDelay := time.Duration(stopHours * float64(time.Hour))
 	records := make([]trackingRecord, 0, len(coordinates))
 	for index, coordinate := range coordinates {
 		isAnomaly := anomalous && index == anomalyIndex
+		afterAnomaly := anomalous && index > anomalyIndex
+		recordedAt := start.Add(
+			duration * time.Duration(index) / time.Duration(lastIndex),
+		)
+		if afterAnomaly {
+			recordedAt = recordedAt.Add(stopDelay)
+		}
 		pointAnomalyType := ""
 		if isAnomaly {
 			pointAnomalyType = anomalyType
 		}
 		records = append(records, trackingRecord{
-			WaybillID:   waybillID,
-			Sequence:    index + 1,
-			Label:       trackingPointLabel(origin, destination, index, lastIndex),
-			RecordedAt:  start.Add(duration * time.Duration(index) / time.Duration(lastIndex)).Format(time.RFC3339),
-			Longitude:   coordinate.Longitude,
-			Latitude:    coordinate.Latitude,
-			SpeedKPH:    trackingPointSpeed(routeIndex, index, lastIndex, isAnomaly),
+			WaybillID:  waybillID,
+			Sequence:   index + 1,
+			Label:      trackingPointLabel(origin, destination, index, lastIndex),
+			RecordedAt: recordedAt.Format(time.RFC3339),
+			Longitude:  coordinate.Longitude,
+			Latitude:   coordinate.Latitude,
+			SpeedKPH: trackingPointSpeed(
+				routeIndex,
+				index,
+				lastIndex,
+				isAnomaly || afterAnomaly,
+			),
 			StopHours:   optionalStop(isAnomaly, stopHours),
 			Anomaly:     isAnomaly,
 			AnomalyType: pointAnomalyType,
@@ -366,6 +379,9 @@ func buildRouteCoordinates(
 	scaledLongitudeDelta := (destination.Longitude - origin.Longitude) * longitudeScale
 	latitudeDelta := destination.Latitude - origin.Latitude
 	directDistance := math.Hypot(scaledLongitudeDelta, latitudeDelta)
+	if directDistance < 0.000_001 || math.Abs(longitudeScale) < 0.000_001 {
+		return buildLinearRouteCoordinates(origin, destination)
+	}
 	normalLongitude := -latitudeDelta / directDistance
 	normalLatitude := scaledLongitudeDelta / directDistance
 	amplitude := math.Min(
@@ -403,6 +419,27 @@ func buildRouteCoordinates(
 		return alternate
 	}
 	return preferred
+}
+
+func buildLinearRouteCoordinates(
+	origin hubRecord,
+	destination hubRecord,
+) []routeCoordinate {
+	coordinates := make([]routeCoordinate, 0, trackingPointCount)
+	for index := range trackingPointCount {
+		progress := float64(index) / float64(trackingPointCount-1)
+		coordinates = append(coordinates, routeCoordinate{
+			Longitude: roundCoordinate(
+				origin.Longitude +
+					(destination.Longitude-origin.Longitude)*progress,
+			),
+			Latitude: roundCoordinate(
+				origin.Latitude +
+					(destination.Latitude-origin.Latitude)*progress,
+			),
+		})
+	}
+	return coordinates
 }
 
 func buildRouteCandidate(
@@ -491,9 +528,9 @@ func trackingPointSpeed(
 	routeIndex int,
 	index int,
 	lastIndex int,
-	anomalous bool,
+	stopped bool,
 ) int {
-	if index == 0 || index == lastIndex || anomalous {
+	if index == 0 || index == lastIndex || stopped {
 		return 0
 	}
 	return 62 + (routeIndex+index*3)%11
