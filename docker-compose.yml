@@ -5,6 +5,7 @@ services:
       args:
         AMAP_BROWSER_CODE: ${VITE_AMAP_SECURITY_JS_CODE:-}
         AMAP_BROWSER_ID: ${VITE_AMAP_KEY:-}
+        VITE_VECTOR_MAP: ${VITE_VECTOR_MAP:-}
     environment:
       AGENT_MODE: ${AGENT_MODE:-online}
       ALLOW_NON_LOOPBACK_LOCAL: "true"

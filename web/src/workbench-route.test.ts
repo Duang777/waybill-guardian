@@ -45,6 +45,7 @@ describe("workbench route", () => {
 
   it("routes non-workbench paths to the overview", () => {
     expect(parseWorkbenchRoute("/", "")).toEqual({ kind: "overview" });
+    expect(parseWorkbenchRoute("/not-a-route", "")).toEqual({ kind: "invalid" });
   });
 
   it("prefers a newer local run projection over a stale overview snapshot", () => {

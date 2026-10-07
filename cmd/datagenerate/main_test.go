@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/Duang777/waybill-guardian/internal/platform/filestore"
 )
@@ -118,12 +119,14 @@ func TestGenerateBuildsDetailedNonLinearTrackingRoutes(t *testing.T) {
 		}
 
 		anomalies := 0
+		anomalyIndex := -1
 		for index, point := range points {
 			if point.Sequence != index+1 {
 				t.Fatalf("%s sequence[%d] = %d", waybill.WaybillID, index, point.Sequence)
 			}
 			if point.Anomaly {
 				anomalies++
+				anomalyIndex = index
 			}
 		}
 		wantAnomalies := 0
@@ -132,6 +135,41 @@ func TestGenerateBuildsDetailedNonLinearTrackingRoutes(t *testing.T) {
 		}
 		if anomalies != wantAnomalies {
 			t.Fatalf("%s anomaly points = %d, want %d", waybill.WaybillID, anomalies, wantAnomalies)
+		}
+		if anomalyIndex >= 0 {
+			anomaly := points[anomalyIndex]
+			if anomaly.StopHours == nil {
+				t.Fatalf("%s anomaly has no stop duration", waybill.WaybillID)
+			}
+			anomalyTime, err := time.Parse(time.RFC3339, anomaly.RecordedAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, point := range points[anomalyIndex+1:] {
+				if point.SpeedKPH != 0 {
+					t.Fatalf(
+						"%s resumed at %s with speed %d after anomaly",
+						waybill.WaybillID,
+						point.Label,
+						point.SpeedKPH,
+					)
+				}
+			}
+			lastTime, err := time.Parse(time.RFC3339, last.RecordedAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			minimumArrival := anomalyTime.Add(
+				time.Duration(*anomaly.StopHours * float64(time.Hour)),
+			)
+			if lastTime.Before(minimumArrival) {
+				t.Fatalf(
+					"%s arrival = %s, want no earlier than %s",
+					waybill.WaybillID,
+					lastTime,
+					minimumArrival,
+				)
+			}
 		}
 	}
 }
@@ -160,6 +198,29 @@ func TestBuildRouteCoordinatesFollowsPopulatedInlandCorridor(t *testing.T) {
 			midpoint.Longitude,
 			directMidpointLongitude,
 		)
+	}
+}
+
+func TestBuildRouteCoordinatesHandlesCoincidentEndpoints(t *testing.T) {
+	hub := hubRecord{
+		Name:      "同城公路港",
+		City:      "杭州",
+		Longitude: 120.1551,
+		Latitude:  30.2741,
+	}
+
+	coordinates := buildRouteCoordinates(hub, hub, 3)
+
+	if len(coordinates) != trackingPointCount {
+		t.Fatalf("coordinates = %d, want %d", len(coordinates), trackingPointCount)
+	}
+	for index, coordinate := range coordinates {
+		if math.IsNaN(coordinate.Longitude) ||
+			math.IsInf(coordinate.Longitude, 0) ||
+			math.IsNaN(coordinate.Latitude) ||
+			math.IsInf(coordinate.Latitude, 0) {
+			t.Fatalf("coordinate[%d] is not finite: %+v", index, coordinate)
+		}
 	}
 }
 

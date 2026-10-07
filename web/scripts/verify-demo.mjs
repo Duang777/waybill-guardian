@@ -73,13 +73,29 @@ try {
   });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   let triggerRequests = 0;
+  let openFreeMapRequests = 0;
   page.on("request", (request) => {
     if (request.method() === "POST" && request.url().endsWith("/api/runs")) {
       triggerRequests += 1;
     }
+    if (new URL(request.url()).hostname === "tiles.openfreemap.org") {
+      openFreeMapRequests += 1;
+    }
   });
   await page.goto(`${webURL}/waybills/YD2026101001`, { waitUntil: "networkidle" });
   await page.getByText("精密电子元件", { exact: true }).waitFor();
+  await page.getByText("本地轨迹示意", { exact: true }).waitFor();
+  assert(openFreeMapRequests === 0, "default workbench requested OpenFreeMap");
+  await page
+    .getByRole("button", {
+      name: "查看成都分拨中心轨迹点",
+      exact: true,
+    })
+    .click();
+  await page
+    .getByLabel("轨迹点详情")
+    .getByText("异常后待确认", { exact: true })
+    .waitFor();
 
   const runs = [];
   const timelinePattern = "**/api/runs/*/timeline?*";
@@ -393,12 +409,35 @@ try {
     .getByText("转人工跟进", { exact: true })
     .waitFor();
 
+  await page.goto(`${webURL}/waybills/not-a-waybill`, {
+    waitUntil: "networkidle",
+  });
+  await page
+    .getByRole("heading", { name: "无法打开运单工作台", exact: true })
+    .waitFor();
+  assert(
+    await page
+      .getByRole("link", { name: "返回全国经营总览", exact: true })
+      .isVisible(),
+    "invalid workbench route has no return path",
+  );
+  await page.setViewportSize({ width: 320, height: 800 });
+  assert(
+    !(await hasHorizontalOverflow(page)),
+    "invalid route page overflows at 320px",
+  );
+  await page.screenshot({
+    path: join(artifactDir, "invalid-route-320.png"),
+  });
+
   console.log(JSON.stringify({
     runs,
     rejection: {
       eventCount: rejectionEventCount,
       alternative: "蜀道联运",
     },
+    default_route_map: "local",
+    invalid_route: "explained",
     screenshots: [
       join(artifactDir, "workbench-pending-1600.png"),
       join(artifactDir, "workbench-pending-1920.png"),
@@ -409,6 +448,7 @@ try {
       join(artifactDir, "mobile-decision-dock-320.png"),
       join(artifactDir, "mobile-alternative.png"),
       join(artifactDir, "mobile-route.png"),
+      join(artifactDir, "invalid-route-320.png"),
     ],
   }, null, 2));
 } finally {
