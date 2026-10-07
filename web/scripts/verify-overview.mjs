@@ -97,8 +97,8 @@ try {
     `overview became visible after ${Math.round(visibleInMilliseconds)}ms`,
   );
   assert(
-    (await page.locator('section[aria-label="24 小时经营指标"] article').count()) === 4,
-    "overview did not render four primary KPIs",
+    (await page.locator('section[aria-label="24 小时经营指标"] article').count()) === 6,
+    "overview did not render six operating KPIs",
   );
   assert(
     (await page.getByText("暂无已审批执行", { exact: true }).count()) === 2,
@@ -110,8 +110,14 @@ try {
   await page
     .getByText("67 条异常待闭环", { exact: true })
     .waitFor();
+  await page
+    .getByText("窗口内尚无闭环 run", { exact: true })
+    .waitFor();
+  await page
+    .getByText("窗口内尚无人工审批决定", { exact: true })
+    .waitFor();
   const kpiFontSizes = await page
-    .locator('section[aria-label="24 小时经营指标"] article strong')
+    .locator('section[aria-label="24 小时经营指标"] article strong:not([class])')
     .evaluateAll((elements) =>
       elements.map((element) => Number.parseFloat(getComputedStyle(element).fontSize)),
     );
@@ -747,6 +753,13 @@ try {
     .locator('[aria-label="运单状态摘要"]')
     .getByText("处置完成", { exact: true })
     .waitFor();
+  const liveRuns = await verifyOverviewRunSync(
+    browser,
+    webURL,
+    backendURL,
+    overviewBody.anomalies,
+    new Set([...activeWaybillIDs, claimAnomaly.waybill_id]),
+  );
 
   console.log(
     JSON.stringify(
@@ -783,12 +796,14 @@ try {
         reduced_motion: "static",
         webgl_fallback: "svg",
         queue_views: 3,
-        primary_kpis: 4,
+        primary_kpis: 6,
         batch_runs: 5,
         independent_approvals: 5,
         approvals_left_pending: 4,
         claim_waybill: claimAnomaly.waybill_id,
         claim_type: claimAnomaly.type,
+        restored_active_run: liveRuns.restored.run_id,
+        discovered_external_run: liveRuns.discovered.run_id,
         map_drilldown_waybill: drilldownWaybillID,
         responsive_widths: [1920, 1600, 1440, 1280, 375, 320],
       },
@@ -1232,6 +1247,107 @@ async function clippedText(page, selector) {
       )
       .map((element) => element.textContent?.trim() ?? selector),
   );
+}
+
+async function verifyOverviewRunSync(
+  browser,
+  webURL,
+  backendURL,
+  anomalies,
+  excludedWaybillIDs,
+) {
+  const candidates = anomalies.filter(
+    (item) => !excludedWaybillIDs.has(item.waybill_id),
+  );
+  assert(candidates.length >= 2, "not enough anomalies for live run sync");
+
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  try {
+    const restored = await startExternalRun(
+      page,
+      backendURL,
+      candidates[0].waybill_id,
+    );
+    await page.goto(webURL, { waitUntil: "networkidle" });
+    await assertProjectedRun(page, restored, "待审批");
+
+    const approval = await waitForRunApproval(page, backendURL, restored.run_id);
+    const confirmResponse = await page.request.post(
+      `${backendURL}/api/approvals/${encodeURIComponent(approval.id)}/confirm`,
+      { data: {} },
+    );
+    assert(
+      confirmResponse.ok(),
+      `external run confirmation returned ${confirmResponse.status()}`,
+    );
+    await assertProjectedRun(page, restored, "已闭环");
+    await page.reload({ waitUntil: "networkidle" });
+    await assertProjectedRun(page, restored, "已闭环");
+
+    const discovered = await startExternalRun(
+      page,
+      backendURL,
+      candidates[1].waybill_id,
+    );
+    await assertProjectedRun(page, discovered, "待审批");
+    return { restored, discovered };
+  } finally {
+    await page.close();
+  }
+}
+
+async function startExternalRun(page, backendURL, waybillID) {
+  const response = await page.request.post(`${backendURL}/api/runs`, {
+    data: { waybill_id: waybillID },
+  });
+  assert(
+    response.status() === 202,
+    `external run for ${waybillID} returned ${response.status()}`,
+  );
+  const run = await response.json();
+  assert(
+    run.waybill_id === waybillID && typeof run.run_id === "string",
+    `external run changed identity: ${JSON.stringify(run)}`,
+  );
+  return run;
+}
+
+async function assertProjectedRun(page, run, statusLabel) {
+  const row = page
+    .locator('[aria-labelledby="queue-heading"] article')
+    .filter({ hasText: run.waybill_id });
+  await row
+    .getByText(statusLabel, { exact: true })
+    .waitFor({ timeout: 20_000 });
+  const href = await row
+    .getByRole("link", {
+      name: `查看运单 ${run.waybill_id}`,
+      exact: true,
+    })
+    .getAttribute("href");
+  const target = new URL(href, page.url());
+  assert(
+    target.pathname === `/waybills/${run.waybill_id}` &&
+      target.searchParams.get("run") === run.run_id,
+    `overview projected ${run.waybill_id} to ${href}, want run ${run.run_id}`,
+  );
+}
+
+async function waitForRunApproval(page, backendURL, runID) {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const response = await page.request.get(
+      `${backendURL}/api/approvals?status=pending`,
+    );
+    assert(response.ok(), `pending approvals returned ${response.status()}`);
+    const body = await response.json();
+    const approval = body.approvals?.find((item) => item.run_id === runID);
+    if (approval !== undefined) {
+      return approval;
+    }
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`timed out waiting for approval for run ${runID}`);
 }
 
 async function waitForPendingApprovals(page, backendURL, expectedCount) {

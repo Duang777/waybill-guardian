@@ -85,7 +85,7 @@ breakpoint and never scale with viewport width.
 ## 5. Layout principles
 
 Use a 4 px base spacing scale. The CEO overview starts with an editorial masthead beside a
-four-segment KPI index, followed by a dominant nationwide 3D network, a narrow risk queue,
+six-segment KPI index, followed by a dominant nationwide 3D network, a narrow risk queue,
 and a read-only brief. The waybill workbench starts with a compact route, shipment, and risk
 index. Below it, the incident dossier stacks a run-stage band, a two-column evidence
 workspace, a full-width decision dock, and the audit drawer. The geographic map owns most of

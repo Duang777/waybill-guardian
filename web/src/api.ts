@@ -199,6 +199,17 @@ export const overviewSchema = z
 
 export type Overview = z.infer<typeof overviewSchema>;
 
+export const operatingKPIKeys = [
+  "time_recovered_hours",
+  "cost_impact_cny",
+  "labor_saved_hours",
+  "anomaly_closure_rate_pct",
+  "average_handling_minutes",
+  "approval_rate_pct",
+] as const;
+
+export type OperatingKPIKey = (typeof operatingKPIKeys)[number];
+
 const kpiMetricSchema = z
   .object({
     key: z.string().min(1),
@@ -213,6 +224,30 @@ const kpiMetricSchema = z
 
 export type KPIMetric = z.infer<typeof kpiMetricSchema>;
 
+const kpiMetricsSchema = z.array(kpiMetricSchema).superRefine((metrics, context) => {
+  const indexes = new Map<string, number>();
+  metrics.forEach((metric, index) => {
+    const previous = indexes.get(metric.key);
+    if (previous !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message: `duplicate KPI ${metric.key}`,
+        path: [index, "key"],
+      });
+      return;
+    }
+    indexes.set(metric.key, index);
+  });
+  for (const key of operatingKPIKeys) {
+    if (!indexes.has(key)) {
+      context.addIssue({
+        code: "custom",
+        message: `missing required KPI ${key}`,
+      });
+    }
+  }
+});
+
 export const kpiReportSchema = z
   .object({
     window: z.string().min(1),
@@ -222,7 +257,7 @@ export const kpiReportSchema = z
         evidence_step_minutes: z.number().positive(),
       })
       .strict(),
-    metrics: z.array(kpiMetricSchema).min(4),
+    metrics: kpiMetricsSchema,
   })
   .strict();
 
