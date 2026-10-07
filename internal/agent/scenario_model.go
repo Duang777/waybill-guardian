@@ -22,6 +22,13 @@ type ScenarioModel struct {
 	delay    time.Duration
 }
 
+type claimType string
+
+const (
+	claimTypeDamage claimType = "damage"
+	claimTypeLoss   claimType = "loss"
+)
+
 func NewScenarioModel(registry *guardtools.Registry, delay time.Duration) *ScenarioModel {
 	return &ScenarioModel{registry: registry, delay: delay}
 }
@@ -126,6 +133,8 @@ func (m *ScenarioModel) NewStreamingResponses(
 		return nil, fmt.Errorf("waybill has no candidate carriers")
 	}
 
+	claimWire, claimActive := m.registry.ActiveWireName(domain.ActionCreateClaim)
+	requiredClaims := requiredClaimTypes(tracking)
 	smsWire, smsActive := m.registry.ActiveWireName(domain.ActionSendSMS)
 	reassignCalls := state.calls[reassignWire]
 	if reassignCalls == 0 {
@@ -160,6 +169,9 @@ func (m *ScenarioModel) NewStreamingResponses(
 		return textResponse("候选改派方案均被驳回，本次处置结束并转人工跟进。"), nil
 	}
 	if state.hasSuccessfulResult(reassignWire) {
+		if claimActive && !state.hasSuccessfulClaims(claimWire, requiredClaims) {
+			return textResponse("写操作未全部成功，本次处置转人工检查。"), nil
+		}
 		if !smsActive {
 			return textResponse("改派已完成，处置过程已写入审计时间线。"), nil
 		}
@@ -233,6 +245,23 @@ func formatNumber(value float64) string {
 	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.2f", value), "0"), ".")
 }
 
+func requiredClaimTypes(tracking guardtools.GetTrackingOutput) []claimType {
+	seen := make(map[claimType]bool, 2)
+	result := make([]claimType, 0, 2)
+	for _, point := range tracking.Points {
+		if !point.Anomaly {
+			continue
+		}
+		claim := claimType(point.AnomalyType)
+		if (claim != claimTypeDamage && claim != claimTypeLoss) || seen[claim] {
+			continue
+		}
+		seen[claim] = true
+		result = append(result, claim)
+	}
+	return result
+}
+
 func (m *ScenarioModel) proposal(
 	runContext domain.RunContext,
 	planVersion int,
@@ -269,6 +298,19 @@ func (m *ScenarioModel) proposal(
 	output := []responses.OutputMessageUnion{
 		assistantText(string(rawProposal)),
 		toolCall(runContext.RunID, reassignWire, planVersion, reassign),
+	}
+	if claimWire, active := m.registry.ActiveWireName(domain.ActionCreateClaim); active {
+		for _, claim := range requiredClaimTypes(tracking) {
+			output = append(output, toolCall(
+				runContext.RunID,
+				claimWire,
+				planVersion,
+				guardtools.CreateClaimInput{
+					WaybillID: string(runContext.WaybillID),
+					ClaimType: string(claim),
+				},
+			))
+		}
 	}
 	smsWire, smsActive := m.registry.ActiveWireName(domain.ActionSendSMS)
 	if !smsActive {
@@ -341,6 +383,13 @@ func offlineProposal(
 				state.latestCallID(trackingWire),
 				fmt.Sprintf("/points/%d/stop_hours", index),
 				point.StopHours,
+			))
+		}
+		if point.AnomalyType != "" {
+			refs = append(refs, evidenceRef(
+				state.latestCallID(trackingWire),
+				fmt.Sprintf("/points/%d/anomaly_type", index),
+				point.AnomalyType,
 			))
 		}
 		attribution = append(attribution, proposal.AttributionDraft{
@@ -523,6 +572,28 @@ func (s conversationState) successfulResultCount(name string) int {
 		}
 	}
 	return count
+}
+
+func (s conversationState) hasSuccessfulClaims(
+	name string,
+	required []claimType,
+) bool {
+	remaining := make(map[claimType]bool, len(required))
+	for _, claim := range required {
+		remaining[claim] = true
+	}
+	for _, result := range s.results[name] {
+		if strings.Contains(result.output, "declined") ||
+			strings.Contains(result.output, "failed") {
+			continue
+		}
+		var output guardtools.CreateClaimOutput
+		if err := json.Unmarshal([]byte(result.output), &output); err != nil {
+			continue
+		}
+		delete(remaining, claimType(output.ClaimType))
+	}
+	return len(remaining) == 0
 }
 
 func parseRunContext(values map[string]any) (domain.RunContext, error) {

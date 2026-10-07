@@ -1,0 +1,6 @@
+ts	phase	decision	why	evidence	result
+2026-10-07T06:37:41Z	frame	先盘点前端、后端与产品承诺，再决定实现范围	宽泛请求需要先转换成可验证缺口，避免把已完成功能重复开发	AGENTS.md, README.md, web/scripts/	open
+2026-10-07T06:39:45Z	frame	采用高严谨度并行盘点	范围跨前端、数据生成、CI 和存储稳定性	open issues 102,112,113; agent audits	inventory in progress
+2026-10-07T06:41:06Z	inventory	收敛为四个实现波次	优先修复用户可见断链，再补数据语义和工程门禁	agent audits; issues 102,112,113	14 gaps classified, 4 external blockers excluded
+2026-10-07T07:18:00Z	design	波次一采用证据驱动理赔与精确 run 快照恢复	复用既有审批、幂等和终态快照，不扩散事故类型到存储或新增端点	.audit/wave-one-grounding.md; three architecture candidates; cross-judge	candidate 3 base, private claim policy and stale-projection tests grafted
+2026-10-07T07:08:58Z	implement	完成证据驱动理赔、精确 run URL、审批断线收敛和终态断流	保持审批批次不可变并以审计快照为回放真相	go test ./...; 82 Vitest tests; npm build; verify:e2e; verify:file-e2e; verify:overview	delay=3 writes, damage/loss=4 writes; exact completed/rejected reload and projected run links verified

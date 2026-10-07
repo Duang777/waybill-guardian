@@ -82,6 +82,8 @@ try {
   await page.getByText("精密电子元件", { exact: true }).waitFor();
 
   const runs = [];
+  const timelinePattern = "**/api/runs/*/timeline?*";
+  let completedRunHref = null;
   for (let index = 0; index < 3; index += 1) {
     const buttonName = index === 0 ? "启动处置" : "重新处置";
     await page.getByRole("button", { name: buttonName, exact: true }).click();
@@ -92,6 +94,26 @@ try {
     await page.getByText("离线规则推理", { exact: true }).waitFor();
     await page.getByText("候选方案", { exact: true }).waitFor();
     await page.getByText("置信度 86%", { exact: true }).waitFor();
+    const pendingRunHref = page.url();
+    assert(
+      /^http:\/\/127\.0\.0\.1:\d+\/waybills\/YD2026101001\?run=.+/.test(
+        pendingRunHref,
+      ),
+      `pending run URL is not exact: ${pendingRunHref}`,
+    );
+
+    if (index === 1) {
+      assert(completedRunHref !== null, "completed run URL was not retained");
+      await page.goto(completedRunHref, { waitUntil: "networkidle" });
+      await page
+        .locator('[aria-label="运单状态摘要"]')
+        .getByText("处置完成", { exact: true })
+        .waitFor();
+      assert(page.url() === completedRunHref, "older terminal run URL was replaced");
+      await page.goto(pendingRunHref, { waitUntil: "networkidle" });
+      await page.getByText("待确认", { exact: true }).waitFor();
+      assert(page.url() === pendingRunHref, "newer active run URL was replaced");
+    }
 
     if (index === 0) {
       await verifyWideWorkbench(page, 1600, 900);
@@ -187,6 +209,11 @@ try {
       await page.getByText("改派至川行快运", { exact: true }).waitFor();
       await page.getByText("待确认", { exact: true }).waitFor();
       assert(triggerRequests === 1, `backend restart triggered ${triggerRequests} demo runs`);
+
+      await page.route(timelinePattern, (route) => route.abort("failed"));
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.getByText("改派至川行快运", { exact: true }).waitFor();
+      await page.getByText("待确认", { exact: true }).waitFor();
     }
 
     await page.getByRole("button", { name: "确认并执行", exact: true }).click();
@@ -195,6 +222,20 @@ try {
       .locator('[aria-label="运单状态摘要"]')
       .getByText("处置完成", { exact: true })
       .waitFor();
+    assert(
+      page.url() === pendingRunHref,
+      `approval changed exact run URL: ${page.url()}`,
+    );
+    if (index === 0) {
+      await page.reload({ waitUntil: "networkidle" });
+      await page
+        .locator('[aria-label="运单状态摘要"]')
+        .getByText("处置完成", { exact: true })
+        .waitFor();
+      assert(triggerRequests === 1, "completed reload started another run");
+      completedRunHref = page.url();
+      await page.unroute(timelinePattern);
+    }
     await expandPhase(page, "attribution");
     await expandPhase(page, "proposal");
     const eventCount = await auditEventCount(page);
@@ -335,6 +376,22 @@ try {
   await page.screenshot({
     path: join(artifactDir, "mobile-route.png"),
   });
+  const rejectedRunHref = page.url();
+  await page.getByRole("button", { name: "驳回方案", exact: true }).click();
+  await page.getByLabel("驳回原因").fill("备选承运商同样无可用车辆");
+  await page.getByRole("button", { name: "确认驳回", exact: true }).click();
+  await page.getByText("方案已驳回", { exact: true }).waitFor();
+  await page
+    .locator('[aria-label="运单状态摘要"]')
+    .getByText("转人工跟进", { exact: true })
+    .waitFor();
+  assert(page.url() === rejectedRunHref, "rejection changed exact run URL");
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByText("方案已驳回", { exact: true }).waitFor();
+  await page
+    .locator('[aria-label="运单状态摘要"]')
+    .getByText("转人工跟进", { exact: true })
+    .waitFor();
 
   console.log(JSON.stringify({
     runs,

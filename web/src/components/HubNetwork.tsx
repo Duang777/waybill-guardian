@@ -23,9 +23,11 @@ import type {
   AnomalyOverview,
   HubOverview,
   Overview,
+  RunID,
   RouteOverview,
   WaybillID,
 } from "../api";
+import { overviewWorkbenchHref } from "../workbench-route";
 import type {
   FacilityCameraPreset,
   FacilitySceneSelection,
@@ -52,6 +54,7 @@ type HubNetworkProps = {
   hubs: readonly HubOverview[];
   routes: readonly RouteOverview[];
   anomalies: readonly AnomalyOverview[];
+  runIDs: ReadonlyMap<WaybillID, RunID>;
   dataMode: Overview["data_mode"];
   totals: Overview["totals"];
 };
@@ -69,6 +72,7 @@ export function HubNetwork({
   hubs,
   routes,
   anomalies,
+  runIDs,
   dataMode,
   totals,
 }: HubNetworkProps) {
@@ -179,9 +183,21 @@ export function HubNetwork({
     setSceneFailed(true);
   }, []);
 
-  const openWaybill = useCallback((waybillID: WaybillID) => {
-    window.location.assign(`/waybills/${encodeURIComponent(waybillID)}`);
-  }, []);
+  const openWaybill = useCallback(
+    (waybillID: WaybillID) => {
+      const snapshotRunID = anomalies.find(
+        (item) => item.waybill_id === waybillID,
+      )?.run_id;
+      window.location.assign(
+        overviewWorkbenchHref(
+          waybillID,
+          runIDs.get(waybillID),
+          snapshotRunID,
+        ),
+      );
+    },
+    [anomalies, runIDs],
+  );
 
   useEffect(() => {
     const nextTopRisk = topRisk?.waybill_id;
@@ -521,7 +537,11 @@ export function HubNetwork({
                 <span>{runStatusLabel(selectedAnomaly.run_status)}</span>
               </p>
               <a
-                href={`/waybills/${encodeURIComponent(selectedAnomaly.waybill_id)}`}
+                href={overviewWorkbenchHref(
+                  selectedAnomaly.waybill_id,
+                  runIDs.get(selectedAnomaly.waybill_id),
+                  selectedAnomaly.run_id,
+                )}
                 aria-label={`下钻 ${selectedHub.name} 的高风险运单 ${selectedAnomaly.waybill_id}`}
               >
                 运单、司机与证据

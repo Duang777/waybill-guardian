@@ -570,11 +570,19 @@ try {
     "batch response did not preserve the five requested waybills",
   );
   for (const run of acceptedRuns) {
-    await page
+    const row = page
       .locator("article")
-      .filter({ hasText: run.waybill_id })
-      .getByText("待审批", { exact: true })
-      .waitFor();
+      .filter({ hasText: run.waybill_id });
+    await row.getByText("待审批", { exact: true }).waitFor();
+    const rowHref = await row
+      .getByRole("link", { name: `查看运单 ${run.waybill_id}`, exact: true })
+      .getAttribute("href");
+    const rowURL = new URL(rowHref, webURL);
+    assert(
+      rowURL.pathname === `/waybills/${run.waybill_id}` &&
+        rowURL.searchParams.get("run") === run.run_id,
+      `queue drilldown did not retain run identity: ${rowHref}`,
+    );
   }
   await riskQueue.getByRole("radio", { name: "处置中", exact: true }).check();
   assert(
@@ -636,11 +644,21 @@ try {
     .waitFor();
 
   const href = await mapDrilldown.getAttribute("href");
+  const drilldownURL = new URL(href, webURL);
   assert(
-    typeof href === "string" && /^\/waybills\/YD\d{10}$/.test(href),
+    typeof href === "string" &&
+      /^\/waybills\/YD\d{10}$/.test(drilldownURL.pathname),
     `invalid map drilldown URL: ${href}`,
   );
-  const drilldownWaybillID = href.split("/").at(-1);
+  const drilldownWaybillID = drilldownURL.pathname.split("/").at(-1);
+  const drilldownRun = acceptedRuns.find(
+    (run) => run.waybill_id === drilldownWaybillID,
+  );
+  assert(
+    drilldownRun !== undefined &&
+      drilldownURL.searchParams.get("run") === drilldownRun.run_id,
+    `map drilldown did not prefer the local run projection: ${href}`,
+  );
   const waybillResponse = await page.request.get(
     `${backendURL}/api/waybills/${encodeURIComponent(drilldownWaybillID)}`,
   );
@@ -679,7 +697,7 @@ try {
   await mapDrilldown.click();
   await page.waitForURL(`${webURL}${href}`);
   assert(
-    new URL(page.url()).pathname === href,
+    `${new URL(page.url()).pathname}${new URL(page.url()).search}` === href,
     `map drilldown opened ${page.url()}, want ${href}`,
   );
   await page.getByRole("heading", { name: "运输轨迹证据", exact: true }).waitFor();
@@ -702,6 +720,33 @@ try {
     await page.getByRole("link", { name: "返回全国经营总览", exact: true }).isVisible(),
     "workbench does not provide a return path to the overview",
   );
+
+  const activeWaybillIDs = new Set(acceptedRuns.map((run) => run.waybill_id));
+  const claimAnomaly = overviewBody.anomalies.find(
+    (item) =>
+      (item.type === "damage" || item.type === "loss") &&
+      !activeWaybillIDs.has(item.waybill_id),
+  );
+  assert(claimAnomaly !== undefined, "no independent claim anomaly was available");
+  await page.goto(`${webURL}/waybills/${claimAnomaly.waybill_id}`, {
+    waitUntil: "networkidle",
+  });
+  await page.getByRole("button", { name: "启动处置", exact: true }).click();
+  await page.getByText("创建理赔单", { exact: true }).waitFor();
+  await page
+    .getByLabel("人工决策区")
+    .getByText(claimAnomaly.type, { exact: true })
+    .waitFor();
+  const claimRunURL = new URL(page.url());
+  assert(
+    claimRunURL.searchParams.has("run"),
+    `claim workbench has no exact run URL: ${page.url()}`,
+  );
+  await page.getByRole("button", { name: "确认并执行", exact: true }).click();
+  await page
+    .locator('[aria-label="运单状态摘要"]')
+    .getByText("处置完成", { exact: true })
+    .waitFor();
 
   console.log(
     JSON.stringify(
@@ -742,6 +787,8 @@ try {
         batch_runs: 5,
         independent_approvals: 5,
         approvals_left_pending: 4,
+        claim_waybill: claimAnomaly.waybill_id,
+        claim_type: claimAnomaly.type,
         map_drilldown_waybill: drilldownWaybillID,
         responsive_widths: [1920, 1600, 1440, 1280, 375, 320],
       },

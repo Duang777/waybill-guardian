@@ -314,7 +314,7 @@ func (m *ProposalBoundary) compileResponse(
 	if err != nil {
 		return proposal.Accepted{}, err
 	}
-	if err := m.validateWriteAlignment(response, accepted); err != nil {
+	if err := m.validateWriteAlignment(ctx, runID, response, accepted); err != nil {
 		return proposal.Accepted{}, err
 	}
 	return accepted, nil
@@ -337,11 +337,14 @@ func (m *ProposalBoundary) hasWriteCall(response *responses.Response) bool {
 }
 
 func (m *ProposalBoundary) validateWriteAlignment(
+	ctx context.Context,
+	runID domain.RunID,
 	response *responses.Response,
 	accepted proposal.Accepted,
 ) error {
 	hasReassign := false
 	var carrierIDs []string
+	var claims []guardtools.CreateClaimInput
 	for _, item := range response.Output {
 		if item.OfFunctionCall == nil {
 			continue
@@ -375,27 +378,125 @@ func (m *ProposalBoundary) validateWriteAlignment(
 				return err
 			}
 			carrierID = input.CarrierID
+		case domain.ActionCreateClaim:
+			var input guardtools.CreateClaimInput
+			if err := json.Unmarshal(write.Arguments, &input); err != nil {
+				return err
+			}
+			claims = append(claims, input)
 		}
 		if carrierID != "" {
 			carrierIDs = append(carrierIDs, carrierID)
 		}
 	}
-	if len(carrierIDs) == 0 {
+	if len(carrierIDs) > 0 {
+		if len(accepted.Alternatives) == 0 {
+			return errors.New("carrier-bearing write calls require a proposal alternative")
+		}
+		preferredCarrier := accepted.Alternatives[0].CarrierID
+		for _, carrierID := range carrierIDs {
+			if carrierID == preferredCarrier {
+				continue
+			}
+			return fmt.Errorf(
+				"write call carrier %q must match first proposal alternative %q",
+				carrierID,
+				preferredCarrier,
+			)
+		}
+	}
+	if !m.registry.IsActiveAction(domain.ActionCreateClaim) {
 		return nil
 	}
-	if len(accepted.Alternatives) == 0 {
-		return errors.New("carrier-bearing write calls require a proposal alternative")
+	evidence, err := m.latestClaimEvidence(ctx, runID)
+	if err != nil {
+		return err
 	}
-	preferredCarrier := accepted.Alternatives[0].CarrierID
-	for _, carrierID := range carrierIDs {
-		if carrierID == preferredCarrier {
+	return validateClaimAlignment(evidence.waybillID, evidence.tracking, claims)
+}
+
+type claimEvidence struct {
+	waybillID domain.WaybillID
+	tracking  guardtools.GetTrackingOutput
+}
+
+func (m *ProposalBoundary) latestClaimEvidence(
+	ctx context.Context,
+	runID domain.RunID,
+) (claimEvidence, error) {
+	events, err := m.journal.Replay(ctx, runID, 0)
+	if err != nil {
+		return claimEvidence{}, fmt.Errorf("replay claim evidence: %w", err)
+	}
+	var result claimEvidence
+	var hasWaybill, hasTracking bool
+	for _, event := range events {
+		if event.Type != audit.EventToolResult {
 			continue
 		}
-		return fmt.Errorf(
-			"write call carrier %q must match first proposal alternative %q",
-			carrierID,
-			preferredCarrier,
-		)
+		var payload struct {
+			Action domain.Action   `json:"action"`
+			Result json.RawMessage `json:"result"`
+			Error  string          `json:"error"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return claimEvidence{}, fmt.Errorf("decode claim evidence event: %w", err)
+		}
+		if payload.Error != "" || len(payload.Result) == 0 {
+			continue
+		}
+		switch payload.Action {
+		case domain.ActionGetWaybill:
+			var waybill guardtools.GetWaybillOutput
+			if err := json.Unmarshal(payload.Result, &waybill); err != nil {
+				return claimEvidence{}, fmt.Errorf("decode waybill claim evidence: %w", err)
+			}
+			result.waybillID = waybill.WaybillID
+			hasWaybill = true
+		case domain.ActionGetTracking:
+			if err := json.Unmarshal(payload.Result, &result.tracking); err != nil {
+				return claimEvidence{}, fmt.Errorf("decode tracking claim evidence: %w", err)
+			}
+			hasTracking = true
+		}
+	}
+	if !hasWaybill || !hasTracking {
+		return claimEvidence{}, errors.New("claim alignment requires current waybill and tracking evidence")
+	}
+	return result, nil
+}
+
+func validateClaimAlignment(
+	waybillID domain.WaybillID,
+	tracking guardtools.GetTrackingOutput,
+	claims []guardtools.CreateClaimInput,
+) error {
+	required := make(map[claimType]bool, 2)
+	for _, claim := range requiredClaimTypes(tracking) {
+		required[claim] = true
+	}
+	seen := make(map[claimType]bool, len(claims))
+	for _, input := range claims {
+		if input.WaybillID != string(waybillID) {
+			return fmt.Errorf(
+				"claim waybill %q must match evidence waybill %q",
+				input.WaybillID,
+				waybillID,
+			)
+		}
+		claim := claimType(input.ClaimType)
+		if seen[claim] {
+			return fmt.Errorf("duplicate claim %q", claim)
+		}
+		seen[claim] = true
+		if !required[claim] {
+			return fmt.Errorf("unexpected claim %q", claim)
+		}
+	}
+	for claim := range required {
+		if !seen[claim] {
+			return fmt.Errorf("missing required claim %q", claim)
+		}
 	}
 	return nil
 }

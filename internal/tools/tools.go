@@ -66,11 +66,12 @@ type GetTrackingInput struct {
 }
 
 type TrackingEvidence struct {
-	Label      string  `json:"label"`
-	RecordedAt string  `json:"recorded_at"`
-	SpeedKPH   int     `json:"speed_kph"`
-	StopHours  float64 `json:"stop_hours,omitempty"`
-	Anomaly    bool    `json:"anomaly"`
+	Label       string  `json:"label"`
+	RecordedAt  string  `json:"recorded_at"`
+	SpeedKPH    int     `json:"speed_kph"`
+	StopHours   float64 `json:"stop_hours,omitempty"`
+	Anomaly     bool    `json:"anomaly"`
+	AnomalyType string  `json:"anomaly_type,omitempty"`
 }
 
 type GetTrackingOutput struct {
@@ -204,11 +205,12 @@ func (h *Handlers) GetTracking(ctx context.Context, in GetTrackingInput) (GetTra
 	evidence := make([]TrackingEvidence, 0, pointCount)
 	for _, point := range points[:pointCount] {
 		evidence = append(evidence, TrackingEvidence{
-			Label:      boundedToolText(point.Label),
-			RecordedAt: boundedToolText(point.RecordedAt),
-			SpeedKPH:   point.SpeedKPH,
-			StopHours:  point.StopHours,
-			Anomaly:    point.Anomaly,
+			Label:       boundedToolText(point.Label),
+			RecordedAt:  boundedToolText(point.RecordedAt),
+			SpeedKPH:    point.SpeedKPH,
+			StopHours:   point.StopHours,
+			Anomaly:     point.Anomaly,
+			AnomalyType: boundedToolText(point.AnomalyType),
 		})
 	}
 	return GetTrackingOutput{Points: evidence}, nil

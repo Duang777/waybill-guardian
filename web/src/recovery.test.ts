@@ -30,7 +30,11 @@ describe("decideRecovery", () => {
         pendingApprovals: { kind: "ready", data: [pendingApproval] },
         activeRuns: { kind: "ready", data: [activeRun] },
       }),
-    ).toEqual({ kind: "recover", runID: pendingApproval.run_id });
+    ).toEqual({
+      kind: "recover",
+      runID: pendingApproval.run_id,
+      waybillID: pendingApproval.waybill_id,
+    });
   });
 
   it("uses an active run when the pending-approval query fails", () => {
@@ -39,7 +43,11 @@ describe("decideRecovery", () => {
         pendingApprovals: { kind: "error", message: "approvals unavailable" },
         activeRuns: { kind: "ready", data: [activeRun] },
       }),
-    ).toEqual({ kind: "recover", runID: activeRun.run_id });
+    ).toEqual({
+      kind: "recover",
+      runID: activeRun.run_id,
+      waybillID: activeRun.waybill_id,
+    });
   });
 
   it("blocks a new selection when a failed query could hide a run", () => {
