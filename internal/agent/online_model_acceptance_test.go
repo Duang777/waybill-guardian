@@ -3,25 +3,22 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"net/http/httptest"
-	"regexp"
-	"strings"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/Duang777/waybill-guardian/internal/approval"
 	"github.com/Duang777/waybill-guardian/internal/audit"
 	"github.com/Duang777/waybill-guardian/internal/domain"
+	"github.com/Duang777/waybill-guardian/internal/idempotency"
+	"github.com/Duang777/waybill-guardian/internal/platform"
 	"github.com/Duang777/waybill-guardian/internal/platform/filestore"
-	"github.com/Duang777/waybill-guardian/internal/proposal"
 	guardtools "github.com/Duang777/waybill-guardian/internal/tools"
 	"github.com/hastekit/agent-sdk-go/pkg/agents"
 	"github.com/hastekit/agent-sdk-go/pkg/agents/agentstate"
 )
 
-func TestOnlineCompatibleAPIsPauseDelayDamageAndLossWaybills(t *testing.T) {
+func TestOnlineCompatibleAPIsPauseResumeDelayDamageAndLossWaybills(t *testing.T) {
 	loaded, err := filestore.Load("../../data/simulated/waybills-v1.json")
 	if err != nil {
 		t.Fatal(err)
@@ -37,92 +34,394 @@ func TestOnlineCompatibleAPIsPauseDelayDamageAndLossWaybills(t *testing.T) {
 
 	for _, apiStyle := range []string{APIStyleResponses, APIStyleChatCompletions} {
 		t.Run(apiStyle, func(t *testing.T) {
-			fake := newCompatibleModelServer()
-			server := httptest.NewServer(fake)
-			defer server.Close()
-
-			journal, err := audit.Open(t.TempDir()+"/audit", time.Now)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer journal.Close()
-			handlers, err := guardtools.NewHandlers(loaded.Reads)
-			if err != nil {
-				t.Fatal(err)
-			}
-			registry, err := guardtools.NewRegistry(handlers)
-			if err != nil {
-				t.Fatal(err)
-			}
-			engine, err := NewEngine(
-				t.TempDir()+"/history",
-				registry,
-				[]agents.Middleware{
-					NewAuditMiddleware(journal),
-					NewReadBindingMiddleware(loaded.Reads),
-				},
-				0,
-				ModelConfig{
-					Mode:     ModeOnline,
-					APIStyle: apiStyle,
-					BaseURL:  server.URL + "/v1",
-					APIKey:   "test-key",
-					Model:    "compatible-model",
-				},
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer engine.Close()
-
 			for index, test := range cases {
-				waybillID := test.waybillID
-				runID := domain.RunID(fmt.Sprintf("run-%s-%d", apiStyle, index))
-				outcome, err := engine.Start(t.Context(), domain.RunContext{
-					RunID:       runID,
-					IncidentID:  domain.IncidentID("incident-" + string(waybillID)),
-					WaybillID:   waybillID,
-					PlanVersion: 1,
-				})
-				if err != nil {
-					t.Fatalf("start %s: %v", waybillID, err)
-				}
-				if outcome.Status != agentstate.RunStatusPaused {
-					t.Fatalf("%s status = %q, want paused", waybillID, outcome.Status)
-				}
-				if outcome.Proposal == nil || outcome.Proposal.Digest == "" {
-					t.Fatalf("%s proposal = %+v", waybillID, outcome.Proposal)
-				}
-				if len(outcome.Interrupts) != test.writes {
-					t.Fatalf(
-						"%s interrupts = %d, want %d",
-						waybillID,
-						len(outcome.Interrupts),
-						test.writes,
-					)
-				}
-				for _, interrupt := range outcome.Interrupts {
-					var arguments struct {
-						WaybillID string `json:"waybill_id"`
-					}
-					if err := json.Unmarshal(interrupt.Arguments, &arguments); err != nil {
+				t.Run(string(test.waybillID), func(t *testing.T) {
+					dataDir := t.TempDir()
+					fake := newCompatibleModelServer(apiStyle)
+					server := httptest.NewServer(fake)
+					defer server.Close()
+
+					journal, err := audit.Open(dataDir+"/audit", time.Now)
+					if err != nil {
 						t.Fatal(err)
 					}
-					if arguments.WaybillID != string(waybillID) {
+					defer journal.Close()
+					approvals, err := approval.NewStore(journal, time.Now)
+					if err != nil {
+						t.Fatal(err)
+					}
+					fixture, err := guardtools.NewFixtureWriteRuntime(loaded.Reads)
+					if err != nil {
+						t.Fatal(err)
+					}
+					observedRuntime := newObservedWriteRuntime(fixture)
+					effects, err := idempotency.NewStore(
+						journal,
+						idempotency.StoreConfig{Runtime: observedRuntime},
+					)
+					if err != nil {
+						t.Fatal(err)
+					}
+					handlers, err := guardtools.NewHandlers(loaded.Reads)
+					if err != nil {
+						t.Fatal(err)
+					}
+					registry, err := guardtools.NewRegistry(handlers)
+					if err != nil {
+						t.Fatal(err)
+					}
+					engine, err := NewEngine(
+						dataDir+"/history",
+						registry,
+						[]agents.Middleware{
+							NewAuditMiddleware(journal),
+							NewReadBindingMiddleware(loaded.Reads),
+							NewWriteEffectMiddleware(approvals, effects, registry),
+						},
+						0,
+						ModelConfig{
+							Mode:     ModeOnline,
+							APIStyle: apiStyle,
+							BaseURL:  server.URL + "/v1",
+							APIKey:   "test-key",
+							Model:    "compatible-model",
+						},
+					)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer engine.Close()
+
+					runContext := domain.RunContext{
+						RunID: domain.RunID(fmt.Sprintf(
+							"run-%s-%d",
+							apiStyle,
+							index,
+						)),
+						IncidentID:  domain.IncidentID("incident-" + string(test.waybillID)),
+						WaybillID:   test.waybillID,
+						PlanVersion: 1,
+					}
+					paused, err := engine.Start(t.Context(), runContext)
+					if err != nil {
+						t.Fatalf("start %s: %v", test.waybillID, err)
+					}
+					assertOnlineAcceptancePaused(
+						t,
+						paused,
+						test.waybillID,
+						test.writes,
+					)
+					assertOnlineAcceptanceNoWrites(t, fixture, observedRuntime)
+					assertOnlineAcceptanceAudit(t, journal, runContext.RunID, 5, nil)
+					if requests := fake.requestCount(test.waybillID); requests != 5 {
 						t.Fatalf(
-							"%s write %s targets %q",
-							waybillID,
-							interrupt.WireName,
-							arguments.WaybillID,
+							"%s model requests before approval = %d, want 5",
+							test.waybillID,
+							requests,
 						)
 					}
-				}
-				assertOnlineAcceptanceAudit(t, journal, runID)
-				if requests := fake.requestCount(waybillID); requests != 5 {
-					t.Fatalf("%s model requests = %d, want 5", waybillID, requests)
-				}
+
+					confirmed := confirmOnlineAcceptanceApproval(
+						t,
+						approvals,
+						registry,
+						runContext,
+						paused,
+					)
+					completed, err := engine.Resume(
+						t.Context(),
+						runContext,
+						paused.SDKRunID,
+						paused.Interrupts,
+						true,
+					)
+					if err != nil {
+						t.Fatalf("resume %s: %v", test.waybillID, err)
+					}
+					if completed.Status != agentstate.RunStatusCompleted {
+						t.Fatalf(
+							"%s resumed status = %q, want completed; text=%q",
+							test.waybillID,
+							completed.Status,
+							completed.Text,
+						)
+					}
+					if completed.Text != compatibleTerminalText {
+						t.Fatalf(
+							"%s completed text = %q, want %q",
+							test.waybillID,
+							completed.Text,
+							compatibleTerminalText,
+						)
+					}
+					if requests := fake.requestCount(test.waybillID); requests != 6 {
+						t.Fatalf(
+							"%s model requests after resume = %d, want 6",
+							test.waybillID,
+							requests,
+						)
+					}
+					assertOnlineAcceptanceDispatches(t, observedRuntime, confirmed.Items)
+					assertOnlineAcceptanceWriteCounts(t, fixture, confirmed.Items)
+					assertOnlineAcceptanceAudit(
+						t,
+						journal,
+						runContext.RunID,
+						6,
+						confirmed.Items,
+					)
+					callIDs := make([]string, 0, len(confirmed.Items))
+					for _, item := range confirmed.Items {
+						callIDs = append(callIDs, item.CallID)
+					}
+					if !fake.sawResults(test.waybillID, callIDs) {
+						t.Fatalf(
+							"%s provider did not receive every write result: %v",
+							test.waybillID,
+							callIDs,
+						)
+					}
+				})
 			}
 		})
+	}
+}
+
+func assertOnlineAcceptancePaused(
+	t *testing.T,
+	outcome Outcome,
+	waybillID domain.WaybillID,
+	expectedWrites int,
+) {
+	t.Helper()
+	if outcome.Status != agentstate.RunStatusPaused {
+		t.Fatalf("%s status = %q, want paused", waybillID, outcome.Status)
+	}
+	if outcome.SDKRunID == "" {
+		t.Fatalf("%s paused outcome has no SDK run ID", waybillID)
+	}
+	if outcome.Proposal == nil || outcome.Proposal.Digest == "" {
+		t.Fatalf("%s proposal = %+v", waybillID, outcome.Proposal)
+	}
+	if len(outcome.Interrupts) != expectedWrites {
+		t.Fatalf(
+			"%s interrupts = %d, want %d",
+			waybillID,
+			len(outcome.Interrupts),
+			expectedWrites,
+		)
+	}
+	callIDs := make(map[string]struct{}, len(outcome.Interrupts))
+	for _, interrupt := range outcome.Interrupts {
+		if interrupt.CallID == "" {
+			t.Fatalf("%s write %s has no call ID", waybillID, interrupt.WireName)
+		}
+		if _, duplicate := callIDs[interrupt.CallID]; duplicate {
+			t.Fatalf("%s has duplicate call ID %q", waybillID, interrupt.CallID)
+		}
+		callIDs[interrupt.CallID] = struct{}{}
+		var arguments struct {
+			WaybillID string `json:"waybill_id"`
+		}
+		if err := json.Unmarshal(interrupt.Arguments, &arguments); err != nil {
+			t.Fatal(err)
+		}
+		if arguments.WaybillID != string(waybillID) {
+			t.Fatalf(
+				"%s write %s targets %q",
+				waybillID,
+				interrupt.WireName,
+				arguments.WaybillID,
+			)
+		}
+	}
+}
+
+func assertOnlineAcceptanceNoWrites(
+	t *testing.T,
+	fixture *guardtools.FixtureWriteRuntime,
+	observed *observedWriteRuntime,
+) {
+	t.Helper()
+	if dispatches := observed.snapshot(); len(dispatches) != 0 {
+		t.Fatalf("platform dispatched %d writes before approval", len(dispatches))
+	}
+	for _, action := range []domain.Action{
+		domain.ActionReassign,
+		domain.ActionCreateClaim,
+		domain.ActionSendSMS,
+	} {
+		if count := fixture.WriteCount(action); count != 0 {
+			t.Fatalf("%s writes before approval = %d", action, count)
+		}
+	}
+}
+
+func confirmOnlineAcceptanceApproval(
+	t *testing.T,
+	approvals *approval.Store,
+	registry *guardtools.Registry,
+	runContext domain.RunContext,
+	outcome Outcome,
+) approval.Approval {
+	t.Helper()
+	items := make([]approval.Item, 0, len(outcome.Interrupts))
+	callIDs := make([]string, 0, len(outcome.Interrupts))
+	for _, interrupt := range outcome.Interrupts {
+		write, err := registry.ParseActiveWrite(interrupt.WireName, interrupt.Arguments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if write.Action != interrupt.Action {
+			t.Fatalf(
+				"interrupt %s action = %q, want %q",
+				interrupt.CallID,
+				interrupt.Action,
+				write.Action,
+			)
+		}
+		if validationErr := write.ValidateRunContext(runContext); validationErr != nil {
+			t.Fatal(validationErr)
+		}
+		if write.LegacyKey != "" {
+			t.Fatalf("interrupt %s supplied an idempotency key", interrupt.CallID)
+		}
+		identity, err := idempotency.Derive(idempotency.DerivationInput{
+			RunContext: runContext,
+			Action:     write.Action,
+			Target:     write.Target,
+			Arguments:  write.Arguments,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		callIDs = append(callIDs, interrupt.CallID)
+		items = append(items, approval.Item{
+			CallID:          interrupt.CallID,
+			Action:          write.Action,
+			WireName:        write.WireName,
+			Params:          write.Arguments,
+			ArgumentsHash:   identity.ArgumentsHash,
+			IdentityVersion: identity.Version,
+			EffectID:        identity.EffectID,
+			IdempotencyKey:  identity.Key,
+		})
+	}
+	approvalID := approval.IDForPlan(
+		runContext.RunID,
+		runContext.PlanVersion,
+		callIDs,
+	)
+	if _, err := approvals.Create(t.Context(), approval.Approval{
+		ID:          approvalID,
+		RunID:       runContext.RunID,
+		SDKRunID:    outcome.SDKRunID,
+		WaybillID:   runContext.WaybillID,
+		PlanVersion: runContext.PlanVersion,
+		Items:       items,
+		Reason:      outcome.Proposal.Summary,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	confirmed, err := approvals.Decide(t.Context(), approvalID, approval.Decision{
+		Kind:      approval.DecisionConfirm,
+		DecidedBy: "online-acceptance-reviewer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if confirmed.Status != approval.StatusConfirmed {
+		t.Fatalf("approval status = %q, want confirmed", confirmed.Status)
+	}
+	return confirmed
+}
+
+func assertOnlineAcceptanceDispatches(
+	t *testing.T,
+	observed *observedWriteRuntime,
+	items []approval.Item,
+) {
+	t.Helper()
+	dispatches := observed.snapshot()
+	if len(dispatches) != len(items) {
+		t.Fatalf("platform dispatches = %d, want %d", len(dispatches), len(items))
+	}
+	byKey := make(map[domain.IdempotencyKey]observedDispatch, len(dispatches))
+	for _, dispatch := range dispatches {
+		if _, duplicate := byKey[dispatch.key]; duplicate {
+			t.Fatalf("platform dispatched key %q more than once", dispatch.key)
+		}
+		byKey[dispatch.key] = dispatch
+	}
+	for _, item := range items {
+		dispatch, ok := byKey[item.IdempotencyKey]
+		if !ok {
+			t.Fatalf(
+				"approved call %s key %q was not dispatched",
+				item.CallID,
+				item.IdempotencyKey,
+			)
+		}
+		if dispatch.request.Action != item.Action ||
+			dispatch.binding.Action != item.Action {
+			t.Fatalf(
+				"call %s dispatched action request=%q binding=%q, want %q",
+				item.CallID,
+				dispatch.request.Action,
+				dispatch.binding.Action,
+				item.Action,
+			)
+		}
+		if dispatch.request.ArgumentsHash != item.ArgumentsHash {
+			t.Fatalf(
+				"call %s arguments hash = %q, want %q",
+				item.CallID,
+				dispatch.request.ArgumentsHash,
+				item.ArgumentsHash,
+			)
+		}
+		if !sameCompatibleJSON(dispatch.request.Arguments, item.Params) {
+			t.Fatalf(
+				"call %s arguments = %s, want %s",
+				item.CallID,
+				dispatch.request.Arguments,
+				item.Params,
+			)
+		}
+		if dispatch.result.Disposition != platform.EffectSucceeded {
+			t.Fatalf(
+				"call %s disposition = %q, want succeeded",
+				item.CallID,
+				dispatch.result.Disposition,
+			)
+		}
+	}
+}
+
+func assertOnlineAcceptanceWriteCounts(
+	t *testing.T,
+	fixture *guardtools.FixtureWriteRuntime,
+	items []approval.Item,
+) {
+	t.Helper()
+	expected := make(map[domain.Action]int)
+	for _, item := range items {
+		expected[item.Action]++
+	}
+	for _, action := range []domain.Action{
+		domain.ActionReassign,
+		domain.ActionCreateClaim,
+		domain.ActionSendSMS,
+	} {
+		if count := fixture.WriteCount(action); count != expected[action] {
+			t.Fatalf(
+				"%s fixture writes = %d, want %d",
+				action,
+				count,
+				expected[action],
+			)
+		}
 	}
 }
 
@@ -130,6 +429,8 @@ func assertOnlineAcceptanceAudit(
 	t *testing.T,
 	journal audit.Journal,
 	runID domain.RunID,
+	expectedModelCalls int,
+	items []approval.Item,
 ) {
 	t.Helper()
 	events, err := journal.Replay(t.Context(), runID, 0)
@@ -137,18 +438,31 @@ func assertOnlineAcceptanceAudit(
 		t.Fatal(err)
 	}
 	readResults := make(map[domain.Action]bool)
+	writeToolResults := make(map[string]int)
+	writeStarted := make(map[string]int)
+	writeExecuted := make(map[string]int)
 	modelCalls := 0
 	for _, event := range events {
 		switch event.Type {
 		case audit.EventToolResult:
 			var payload struct {
+				CallID string        `json:"call_id"`
 				Action domain.Action `json:"action"`
 				Error  string        `json:"error"`
 			}
 			if err := json.Unmarshal(event.Payload, &payload); err != nil {
 				t.Fatal(err)
 			}
-			if payload.Error == "" {
+			if payload.Action.IsWrite() {
+				if payload.Error != "" {
+					t.Fatalf(
+						"write call %s tool result failed: %s",
+						payload.CallID,
+						payload.Error,
+					)
+				}
+				writeToolResults[payload.CallID]++
+			} else if payload.Error == "" {
 				readResults[payload.Action] = true
 			}
 		case audit.EventModelCallFinished:
@@ -163,6 +477,15 @@ func assertOnlineAcceptanceAudit(
 				t.Fatalf("model usage = %+v", payload.Usage)
 			}
 			modelCalls++
+		case audit.EventWriteStarted:
+			callID := auditCallID(t, event)
+			writeStarted[callID]++
+		case audit.EventWriteExecuted:
+			callID := auditCallID(t, event)
+			writeExecuted[callID]++
+		case audit.EventWriteFailed, audit.EventWriteUnknown,
+			audit.EventDuplicateSuppressed:
+			t.Fatalf("run %s has unexpected %s event: %s", runID, event.Type, event.Payload)
 		}
 	}
 	for _, action := range []domain.Action{
@@ -175,437 +498,64 @@ func assertOnlineAcceptanceAudit(
 			t.Fatalf("run %s has no successful %s result", runID, action)
 		}
 	}
-	if modelCalls != 5 {
-		t.Fatalf("run %s model audit events = %d, want 5", runID, modelCalls)
+	if modelCalls != expectedModelCalls {
+		t.Fatalf(
+			"run %s model audit events = %d, want %d",
+			runID,
+			modelCalls,
+			expectedModelCalls,
+		)
 	}
-}
-
-type compatibleModelServer struct {
-	mu       sync.Mutex
-	requests map[domain.WaybillID]int
-}
-
-func newCompatibleModelServer() *compatibleModelServer {
-	return &compatibleModelServer{requests: make(map[domain.WaybillID]int)}
-}
-
-func (s *compatibleModelServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Authorization") != "Bearer test-key" {
-		http.Error(w, "missing test authorization", http.StatusUnauthorized)
+	if len(items) == 0 {
+		if len(writeToolResults) != 0 ||
+			len(writeStarted) != 0 ||
+			len(writeExecuted) != 0 {
+			t.Fatalf(
+				"run %s recorded writes before approval: tool=%v started=%v executed=%v",
+				runID,
+				writeToolResults,
+				writeStarted,
+				writeExecuted,
+			)
+		}
 		return
 	}
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	state, err := decodeCompatibleRequest(body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	output, err := nextCompatibleOutput(state)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	s.mu.Lock()
-	s.requests[state.waybillID]++
-	s.mu.Unlock()
-
-	switch r.URL.Path {
-	case "/v1/responses":
-		writeResponsesStream(w, output)
-	case "/v1/chat/completions":
-		writeChatCompletionsStream(w, output)
-	default:
-		http.NotFound(w, r)
-	}
-}
-
-func (s *compatibleModelServer) requestCount(waybillID domain.WaybillID) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.requests[waybillID]
-}
-
-type compatibleRequestState struct {
-	waybillID domain.WaybillID
-	callIDs   map[string]string
-	results   map[string]json.RawMessage
-}
-
-func decodeCompatibleRequest(body []byte) (compatibleRequestState, error) {
-	var request map[string]any
-	if err := json.Unmarshal(body, &request); err != nil {
-		return compatibleRequestState{}, fmt.Errorf("decode compatible request: %w", err)
-	}
-	items, ok := request["input"].([]any)
-	if !ok {
-		items, ok = request["messages"].([]any)
-	}
-	if !ok {
-		return compatibleRequestState{}, fmt.Errorf("compatible request has no messages")
-	}
-	state := compatibleRequestState{
-		callIDs: make(map[string]string),
-		results: make(map[string]json.RawMessage),
+	if len(writeToolResults) != len(items) ||
+		len(writeStarted) != len(items) ||
+		len(writeExecuted) != len(items) {
+		t.Fatalf(
+			"run %s write audit cardinality: tool=%v started=%v executed=%v",
+			runID,
+			writeToolResults,
+			writeStarted,
+			writeExecuted,
+		)
 	}
 	for _, item := range items {
-		message, ok := item.(map[string]any)
-		if !ok {
-			continue
+		if writeToolResults[item.CallID] != 1 ||
+			writeStarted[item.CallID] != 1 ||
+			writeExecuted[item.CallID] != 1 {
+			t.Fatalf(
+				"call %s audit counts: tool=%d started=%d executed=%d",
+				item.CallID,
+				writeToolResults[item.CallID],
+				writeStarted[item.CallID],
+				writeExecuted[item.CallID],
+			)
 		}
-		if message["role"] == "user" && state.waybillID == "" {
-			state.waybillID = domain.WaybillID(findWaybillID(message["content"]))
-		}
-		if message["type"] == "function_call" {
-			state.callIDs[stringValue(message["name"])] = stringValue(message["call_id"])
-		}
-		if calls, ok := message["tool_calls"].([]any); ok {
-			for _, rawCall := range calls {
-				call, _ := rawCall.(map[string]any)
-				function, _ := call["function"].(map[string]any)
-				state.callIDs[stringValue(function["name"])] = stringValue(call["id"])
-			}
-		}
-	}
-	callNames := make(map[string]string, len(state.callIDs))
-	for name, callID := range state.callIDs {
-		callNames[callID] = name
-	}
-	for _, item := range items {
-		message, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		var callID string
-		var output any
-		switch {
-		case message["type"] == "function_call_output":
-			callID = stringValue(message["call_id"])
-			output = message["output"]
-		case message["role"] == "tool":
-			callID = stringValue(message["tool_call_id"])
-			output = message["content"]
-		}
-		name := callNames[callID]
-		if name == "" {
-			continue
-		}
-		raw, err := compatibleOutputJSON(output)
-		if err != nil {
-			return compatibleRequestState{}, err
-		}
-		state.results[name] = raw
-	}
-	if state.waybillID == "" {
-		return compatibleRequestState{}, fmt.Errorf("user message has no waybill ID")
-	}
-	return state, nil
-}
-
-var waybillIDPattern = regexp.MustCompile(`YD[0-9]+`)
-
-func findWaybillID(value any) string {
-	switch typed := value.(type) {
-	case string:
-		return waybillIDPattern.FindString(typed)
-	case []any:
-		for _, item := range typed {
-			if result := findWaybillID(item); result != "" {
-				return result
-			}
-		}
-	case map[string]any:
-		for _, item := range typed {
-			if result := findWaybillID(item); result != "" {
-				return result
-			}
-		}
-	}
-	return ""
-}
-
-func stringValue(value any) string {
-	result, _ := value.(string)
-	return result
-}
-
-func compatibleOutputJSON(value any) (json.RawMessage, error) {
-	if text, ok := value.(string); ok {
-		return json.RawMessage(text), nil
-	}
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return nil, fmt.Errorf("encode compatible tool output: %w", err)
-	}
-	return raw, nil
-}
-
-type compatibleOutput struct {
-	text  string
-	calls []compatibleToolCall
-}
-
-type compatibleToolCall struct {
-	id        string
-	name      string
-	arguments any
-}
-
-func nextCompatibleOutput(state compatibleRequestState) (compatibleOutput, error) {
-	if _, ok := state.results["tms_get_waybill"]; !ok {
-		return compatibleReadCall(
-			state.waybillID,
-			"tms_get_waybill",
-			guardtools.GetWaybillInput{WaybillID: string(state.waybillID)},
-		), nil
-	}
-	var waybill guardtools.GetWaybillOutput
-	if err := json.Unmarshal(state.results["tms_get_waybill"], &waybill); err != nil {
-		return compatibleOutput{}, fmt.Errorf("decode waybill result: %w", err)
-	}
-	if _, ok := state.results["tms_get_tracking"]; !ok {
-		return compatibleReadCall(
-			state.waybillID,
-			"tms_get_tracking",
-			guardtools.GetTrackingInput{WaybillID: string(state.waybillID)},
-		), nil
-	}
-	if _, ok := state.results["tms_get_driver"]; !ok {
-		return compatibleReadCall(
-			state.waybillID,
-			"tms_get_driver",
-			guardtools.GetDriverInput{DriverID: string(waybill.DriverID)},
-		), nil
-	}
-	if _, ok := state.results["ext_get_road_weather"]; !ok {
-		return compatibleReadCall(
-			state.waybillID,
-			"ext_get_road_weather",
-			guardtools.GetRoadWeatherInput{Route: waybill.Origin + "-" + waybill.Destination},
-		), nil
-	}
-	if len(waybill.CandidateCarriers) == 0 {
-		return compatibleOutput{}, fmt.Errorf("waybill %s has no candidate carriers", state.waybillID)
-	}
-	var driver guardtools.GetDriverOutput
-	if err := json.Unmarshal(state.results["tms_get_driver"], &driver); err != nil {
-		return compatibleOutput{}, fmt.Errorf("decode driver result: %w", err)
-	}
-	var tracking guardtools.GetTrackingOutput
-	if err := json.Unmarshal(state.results["tms_get_tracking"], &tracking); err != nil {
-		return compatibleOutput{}, fmt.Errorf("decode tracking result: %w", err)
-	}
-	selected := waybill.CandidateCarriers[0]
-	alternatives := make([]proposal.Alternative, 0, len(waybill.CandidateCarriers))
-	for _, carrier := range waybill.CandidateCarriers {
-		alternatives = append(alternatives, carrierAlternative(carrier))
-	}
-	draft := proposal.Draft{
-		SchemaVersion: proposal.SchemaVersion,
-		Summary:       fmt.Sprintf("已核验运单证据，建议改派%s。", selected.Name),
-		ConfidenceBPS: 8500,
-		Attribution: []proposal.AttributionDraft{{
-			Factor:        "司机连续驾驶时长需要处置",
-			ConfidenceBPS: 8400,
-			EvidenceRefs: []proposal.EvidenceRef{
-				evidenceRef(
-					state.callIDs["tms_get_driver"],
-					"/continuous_drive_hours",
-					driver.ContinuousDriveHrs,
-				),
-			},
-		}},
-		Alternatives: alternatives,
-		ExpectedImpact: proposal.ExpectedImpactDraft{
-			ETASavedMin: proposal.ImpactMetricDraft{
-				Availability: proposal.AvailabilityUnavailable,
-				Reason:       "当前证据没有改派后的到达时间",
-			},
-			CostDeltaCNY: proposal.ImpactMetricDraft{
-				Availability: proposal.AvailabilityUnavailable,
-				Reason:       "当前证据没有成本字段",
-			},
-		},
-	}
-	rawProposal, err := json.Marshal(draft)
-	if err != nil {
-		return compatibleOutput{}, err
-	}
-	calls := []compatibleToolCall{
-		compatibleWriteCall(state.waybillID, "tms_reassign", guardtools.ReassignInput{
-			WaybillID: string(state.waybillID),
-			CarrierID: string(selected.ID),
-		}),
-	}
-	seenClaims := make(map[string]bool)
-	for _, point := range tracking.Points {
-		if !point.Anomaly ||
-			(point.AnomalyType != "damage" && point.AnomalyType != "loss") ||
-			seenClaims[point.AnomalyType] {
-			continue
-		}
-		seenClaims[point.AnomalyType] = true
-		calls = append(calls, compatibleWriteCall(
-			state.waybillID,
-			"tms_create_claim_"+point.AnomalyType,
-			guardtools.CreateClaimInput{
-				WaybillID: string(state.waybillID),
-				ClaimType: point.AnomalyType,
-			},
-		))
-	}
-	calls = append(
-		calls,
-		compatibleWriteCall(state.waybillID, "notify_send_sms", guardtools.SendSMSInput{
-			WaybillID: string(state.waybillID),
-			Recipient: guardtools.RecipientShipper,
-			CarrierID: string(selected.ID),
-		}),
-		compatibleWriteCall(state.waybillID, "notify_send_sms_driver", guardtools.SendSMSInput{
-			WaybillID: string(state.waybillID),
-			Recipient: guardtools.RecipientDriver,
-			CarrierID: string(selected.ID),
-		}),
-	)
-	return compatibleOutput{
-		text:  string(rawProposal),
-		calls: calls,
-	}, nil
-}
-
-func compatibleReadCall(
-	waybillID domain.WaybillID,
-	name string,
-	arguments any,
-) compatibleOutput {
-	return compatibleOutput{calls: []compatibleToolCall{{
-		id:        compatibleCallID(waybillID, name),
-		name:      name,
-		arguments: arguments,
-	}}}
-}
-
-func compatibleWriteCall(
-	waybillID domain.WaybillID,
-	idSuffix string,
-	arguments any,
-) compatibleToolCall {
-	name := idSuffix
-	if idSuffix == "notify_send_sms_driver" {
-		name = "notify_send_sms"
-	}
-	if strings.HasPrefix(idSuffix, "tms_create_claim_") {
-		name = "tms_create_claim"
-	}
-	return compatibleToolCall{
-		id:        compatibleCallID(waybillID, idSuffix),
-		name:      name,
-		arguments: arguments,
 	}
 }
 
-func compatibleCallID(waybillID domain.WaybillID, suffix string) string {
-	return "call-" + strings.ToLower(string(waybillID)) + "-" + suffix
-}
-
-func writeResponsesStream(w http.ResponseWriter, output compatibleOutput) {
-	items := make([]any, 0, len(output.calls)+1)
-	if output.text != "" {
-		items = append(items, map[string]any{
-			"id":   "msg-compatible",
-			"type": "message",
-			"role": "assistant",
-			"content": []any{map[string]any{
-				"type":        "output_text",
-				"text":        output.text,
-				"annotations": []any{},
-			}},
-		})
+func auditCallID(t *testing.T, event audit.Event) string {
+	t.Helper()
+	var payload struct {
+		CallID string `json:"call_id"`
 	}
-	for _, call := range output.calls {
-		arguments, _ := json.Marshal(call.arguments)
-		items = append(items, map[string]any{
-			"id":        "fc-" + call.id,
-			"type":      "function_call",
-			"call_id":   call.id,
-			"name":      call.name,
-			"arguments": string(arguments),
-		})
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatal(err)
 	}
-	event := map[string]any{
-		"type":            "response.completed",
-		"sequence_number": 0,
-		"response": map[string]any{
-			"id":     "resp-compatible",
-			"object": "response",
-			"status": "completed",
-			"model":  "compatible-model",
-			"output": items,
-			"usage": map[string]any{
-				"input_tokens":  40,
-				"output_tokens": 10,
-				"total_tokens":  50,
-			},
-		},
+	if payload.CallID == "" {
+		t.Fatalf("%s event has no call_id: %s", event.Type, event.Payload)
 	}
-	raw, _ := json.Marshal(event)
-	w.Header().Set("Content-Type", "text/event-stream")
-	_, _ = fmt.Fprintf(w, "data: %s\n\n", raw)
-}
-
-func writeChatCompletionsStream(w http.ResponseWriter, output compatibleOutput) {
-	delta := map[string]any{"role": "assistant"}
-	if output.text != "" {
-		delta["content"] = output.text
-	}
-	if len(output.calls) > 0 {
-		calls := make([]any, 0, len(output.calls))
-		for index, call := range output.calls {
-			arguments, _ := json.Marshal(call.arguments)
-			calls = append(calls, map[string]any{
-				"index": index,
-				"id":    call.id,
-				"type":  "function",
-				"function": map[string]any{
-					"name":      call.name,
-					"arguments": string(arguments),
-				},
-			})
-		}
-		delta["tool_calls"] = calls
-	}
-	finishReason := "stop"
-	if len(output.calls) > 0 {
-		finishReason = "tool_calls"
-	}
-	chunk := map[string]any{
-		"id":      "chat-compatible",
-		"object":  "chat.completion.chunk",
-		"created": 1,
-		"model":   "compatible-model",
-		"choices": []any{map[string]any{
-			"index":         0,
-			"delta":         delta,
-			"finish_reason": finishReason,
-		}},
-	}
-	usage := map[string]any{
-		"id":      "chat-compatible",
-		"object":  "chat.completion.chunk",
-		"created": 1,
-		"model":   "compatible-model",
-		"choices": []any{},
-		"usage": map[string]any{
-			"prompt_tokens":     40,
-			"completion_tokens": 10,
-			"total_tokens":      50,
-		},
-	}
-	rawChunk, _ := json.Marshal(chunk)
-	rawUsage, _ := json.Marshal(usage)
-	w.Header().Set("Content-Type", "text/event-stream")
-	_, _ = fmt.Fprintf(w, "data: %s\n\ndata: %s\n\ndata: [DONE]\n\n", rawChunk, rawUsage)
+	return payload.CallID
 }
