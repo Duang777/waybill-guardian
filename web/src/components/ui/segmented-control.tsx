@@ -7,16 +7,16 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import styles from "./cult.module.css";
+import styles from "./ui.module.css";
 
-export type HaloSegmentedItem<Value extends string> = {
+export type SegmentedControlItem<Value extends string> = {
   value: Value;
   label: ReactNode;
   disabled?: boolean;
 };
 
-export type HaloSegmentedProps<Value extends string> = {
-  items: readonly HaloSegmentedItem<Value>[];
+export type SegmentedControlProps<Value extends string> = {
+  items: readonly SegmentedControlItem<Value>[];
   value?: Value;
   defaultValue?: Value;
   onValueChange?: (value: Value) => void;
@@ -31,7 +31,7 @@ type SegmentedStyle = CSSProperties & {
   "--segment-index": number;
 };
 
-export function HaloSegmented<Value extends string>({
+export function SegmentedControl<Value extends string>({
   items,
   value,
   defaultValue,
@@ -40,7 +40,7 @@ export function HaloSegmented<Value extends string>({
   disabled = false,
   ariaLabel,
   semantics = "buttons",
-}: HaloSegmentedProps<Value>) {
+}: SegmentedControlProps<Value>) {
   const radioName = useId();
   const [internalValue, setInternalValue] = useState<Value | undefined>(
     defaultValue ?? items[0]?.value,
@@ -106,11 +106,13 @@ export function HaloSegmented<Value extends string>({
 
   return (
     <div
-      className={[styles.haloSegmented, className].filter(Boolean).join(" ")}
+      className={[styles.segmentedControl, className]
+        .filter(Boolean)
+        .join(" ")}
       style={style}
       role={semantics === "radio" ? "radiogroup" : "group"}
       aria-label={ariaLabel}
-      data-slot="halo-segmented"
+      data-slot="segmented-control"
     >
       <span className={styles.segmentThumb} aria-hidden="true" />
       {items.map((item, index) =>

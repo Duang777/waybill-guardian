@@ -157,7 +157,7 @@
   gap: 5px;
 }
 
-.runSignals :global([data-slot="halo-badge"]) {
+.runSignals :global([data-slot="badge"]) {
   white-space: nowrap;
 }
 
@@ -1619,6 +1619,50 @@
   line-height: 1.45;
 }
 
+.rejectDialogForm {
+  display: grid;
+  gap: 14px;
+}
+
+.rejectDialogForm label {
+  color: oklch(0.36 0.02 255);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.rejectDialogError {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid oklch(0.8 0.07 28);
+  border-radius: 6px;
+  background: oklch(0.95 0.035 28);
+  color: oklch(0.38 0.12 28);
+}
+
+.rejectDialogError > svg {
+  margin-top: 1px;
+}
+
+.rejectDialogError > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rejectDialogError strong {
+  font-size: 11px;
+}
+
+.rejectDialogError span {
+  overflow-wrap: anywhere;
+  color: oklch(0.42 0.09 28);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .rejectForm {
   display: grid;
   gap: 8px;
@@ -2069,7 +2113,7 @@
     gap: 4px;
   }
 
-  .timelineMeta :global([data-slot="halo-badge"]) {
+  .timelineMeta :global([data-slot="badge"]) {
     max-width: 150px;
     white-space: normal;
     overflow-wrap: anywhere;
@@ -3629,7 +3673,7 @@
   }
 
   .auditDrawerTitle small,
-  .auditDrawerMeta :global([data-slot="halo-badge"]) {
+  .auditDrawerMeta :global([data-slot="badge"]) {
     display: none;
   }
 

@@ -1,18 +1,18 @@
-import { m, useReducedMotion } from "motion/react";
-import type { ReactNode } from "react";
-import { RollingNumber } from "./RollingNumber";
-import styles from "./cult.module.css";
+import * as ProgressPrimitive from "@radix-ui/react-progress";
+import type { CSSProperties, ReactNode } from "react";
+import { AnimatedNumber } from "./animated-number";
+import styles from "./ui.module.css";
 
-export type HaloProgressTone = "high" | "medium" | "low" | "info";
+export type ProgressTone = "high" | "medium" | "low" | "info";
 
-export type HaloProgressProps = {
+export type ProgressProps = {
   value: number | null;
   label?: ReactNode;
   ariaLabel?: string;
   min?: number;
   max?: number;
   showValue?: boolean;
-  tone?: HaloProgressTone;
+  tone?: ProgressTone;
   className?: string;
   formatValue?: (value: number) => string;
 };
@@ -22,14 +22,14 @@ const toneClasses = {
   medium: styles.progressMedium,
   low: styles.progressLow,
   info: styles.progressInfo,
-} satisfies Record<HaloProgressTone, string>;
+} satisfies Record<ProgressTone, string>;
 
 const defaultValueFormatter = (value: number): string =>
   new Intl.NumberFormat("zh-CN", {
     maximumFractionDigits: 0,
   }).format(value);
 
-export function HaloProgress({
+export function Progress({
   value,
   label,
   ariaLabel,
@@ -39,21 +39,28 @@ export function HaloProgress({
   tone = "info",
   className,
   formatValue = defaultValueFormatter,
-}: HaloProgressProps) {
-  const reduceMotion = useReducedMotion() ?? false;
+}: ProgressProps) {
   const span = max - min;
-  const progress =
+  const normalized =
     value === null || !Number.isFinite(value) || span <= 0
       ? 0
       : Math.min(1, Math.max(0, (value - min) / span));
+  const radixValue =
+    value === null || span <= 0
+      ? null
+      : Math.min(span, Math.max(0, value - min));
+  const indicatorStyle = {
+    "--progress-offset": `${(1 - normalized) * -100}%`,
+  } as CSSProperties;
 
   return (
-    <div
-      className={[styles.haloProgress, toneClasses[tone], className]
+    <ProgressPrimitive.Root
+      className={[styles.progress, toneClasses[tone], className]
         .filter(Boolean)
         .join(" ")}
-      data-slot="halo-progress"
-      role="progressbar"
+      data-slot="progress"
+      value={radixValue}
+      max={span > 0 ? span : 100}
       aria-label={ariaLabel}
       aria-valuemin={min}
       aria-valuemax={max}
@@ -64,10 +71,10 @@ export function HaloProgress({
           <span>{label}</span>
           {showValue && value !== null && (
             <strong className={styles.progressValue}>
-              <RollingNumber
+              <AnimatedNumber
                 value={value}
                 format={formatValue}
-                label={`${formatValue(value)}`}
+                label={formatValue(value)}
               />
             </strong>
           )}
@@ -75,23 +82,12 @@ export function HaloProgress({
       )}
       <div className={styles.progressRim} aria-hidden="true">
         <div className={styles.progressTrack}>
-          <m.span
+          <ProgressPrimitive.Indicator
             className={styles.progressIndicator}
-            initial={false}
-            animate={{ scaleX: progress }}
-            transition={
-              reduceMotion
-                ? { duration: 0 }
-                : {
-                    type: "spring",
-                    bounce: 0.12,
-                    damping: 34,
-                    stiffness: 420,
-                  }
-            }
+            style={indicatorStyle}
           />
         </div>
       </div>
-    </div>
+    </ProgressPrimitive.Root>
   );
 }

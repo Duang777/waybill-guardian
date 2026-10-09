@@ -1,13 +1,21 @@
 import {
   Bot,
   CheckCheck,
-  ChevronRight,
   Clock3,
   FileText,
   RefreshCw,
   ShieldCheck,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { toast } from "sonner";
 import {
   APIError,
   getKPIs,
@@ -26,14 +34,11 @@ import {
   type RunStatus,
   type WaybillID,
 } from "./api";
-import {
-  HaloBadge,
-  HaloSegmented,
-  RollingNumber,
-  TextureButton,
-  TextureLink,
-  type HaloBadgeTone,
-} from "./components/cult";
+import type { AnomalyQueueRow } from "./components/AnomalyQueueTable";
+import { AnimatedNumber } from "./components/ui/animated-number";
+import { Badge, type BadgeTone } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { SegmentedControl } from "./components/ui/segmented-control";
 import { HubNetwork } from "./components/HubNetwork";
 import { PanelErrorBoundary } from "./components/PanelErrorBoundary";
 import {
@@ -74,6 +79,11 @@ type RunStream = {
 };
 
 const activeRunRefreshMilliseconds = 2_000;
+const AnomalyQueueTable = lazy(() =>
+  import("./components/AnomalyQueueTable").then((module) => ({
+    default: module.AnomalyQueueTable,
+  })),
+);
 
 type KPIContext = {
   anomalyCount: number;
@@ -267,6 +277,22 @@ export function OverviewPage() {
       }),
     [queueEntries, queueView],
   );
+  const queueRows = useMemo<readonly AnomalyQueueRow[]>(
+    () =>
+      visibleQueueEntries.map(({ item, rank, status, href }) => ({
+        waybillID: item.waybill_id,
+        origin: item.origin,
+        destination: item.destination,
+        anomalyLabel: anomalyTypeLabel(item.type),
+        rank,
+        riskScore: item.risk_score,
+        statusLabel: runStatusLabel(status),
+        statusTone: statusTone(status),
+        href,
+        selectable: !isActive(status),
+      })),
+    [visibleQueueEntries],
+  );
 
   const toggleSelection = (waybillID: WaybillID) => {
     setSelected((current) => {
@@ -310,6 +336,7 @@ export function OverviewPage() {
         failed: 0,
         message: "所选运单已在处置中",
       });
+      toast.info("所选运单已在处置中");
       return;
     }
     setBatch({ kind: "starting" });
@@ -332,12 +359,21 @@ export function OverviewPage() {
             ? `${result.accepted} 个独立处置任务已启动`
             : `${result.accepted} 个已启动，${failed} 个未启动`,
       });
+      if (failed === 0) {
+        toast.success(`${result.accepted} 个处置任务已启动`);
+      } else {
+        toast.warning("批量启动部分完成", {
+          description: `${result.accepted} 个已启动，${failed} 个未启动。`,
+        });
+      }
     } catch (error) {
+      const message = errorMessage(error);
       setBatch({
         kind: "result",
         failed: requestedWaybillIDs.length,
-        message: errorMessage(error),
+        message,
       });
+      toast.error("批量启动失败", { description: message });
     }
   };
 
@@ -354,7 +390,7 @@ export function OverviewPage() {
             </span>
           </a>
           <div className={styles.headerStatus}>
-            <HaloBadge
+            <Badge
               className={styles.headerNetworkStatus}
               tone={networkStatusTone(resource)}
               live={
@@ -363,14 +399,14 @@ export function OverviewPage() {
               }
             >
               {networkStatusLabel(resource)}
-            </HaloBadge>
+            </Badge>
             {resource.kind === "ready" && (
-              <HaloBadge tone="neutral">
+              <Badge tone="neutral">
                 {dataModeLabel(resource.overview.data_mode)}
-              </HaloBadge>
+              </Badge>
             )}
           </div>
-          <TextureButton
+          <Button
             type="button"
             variant="icon"
             size="icon"
@@ -380,7 +416,7 @@ export function OverviewPage() {
             onClick={() => void load()}
           >
             <RefreshCw aria-hidden="true" size={17} />
-          </TextureButton>
+          </Button>
         </header>
 
         <main id="overview-main">
@@ -421,21 +457,25 @@ export function OverviewPage() {
               title={requestIssueCopy(resource.issue).title}
               detail={requestIssueCopy(resource.issue).detail}
               action={
-                <TextureButton
+                <Button
                   type="button"
                   variant="secondary"
                   onClick={() => void load()}
                 >
                   <RefreshCw aria-hidden="true" size={16} />
                   重试
-                </TextureButton>
+                </Button>
               }
             />
           )}
           {resource.kind === "ready" && (
             <>
-              <div className={styles.operationsGrid}>
-                <section className={styles.mapPanel} aria-labelledby="map-heading">
+              <div className={styles.operationsGrid} data-overview-layout>
+                <section
+                  className={styles.mapPanel}
+                  aria-labelledby="map-heading"
+                  data-overview-map-panel
+                >
                   <PanelErrorBoundary name="全国港网">
                     <HubNetwork
                       hubs={resource.overview.hubs}
@@ -467,7 +507,7 @@ export function OverviewPage() {
                     <span className={styles.sectionMeta}>{anomalies.length} 项</span>
                   </div>
                   <div className={styles.queueControls}>
-                    <HaloSegmented
+                    <SegmentedControl
                       className={styles.queueSegments}
                       ariaLabel="筛选异常处置队列"
                       semantics="radio"
@@ -477,7 +517,7 @@ export function OverviewPage() {
                           <>
                             {view.label}
                             <small aria-hidden="true">
-                              <RollingNumber value={queueCounts[view.value]} />
+                              <AnimatedNumber value={queueCounts[view.value]} />
                             </small>
                           </>
                         ),
@@ -485,10 +525,10 @@ export function OverviewPage() {
                       value={queueView}
                       onValueChange={setQueueView}
                     />
-                    <TextureButton
+                    <Button
                       className={styles.selectButton}
                       type="button"
-                      variant="minimal"
+                      variant="ghost"
                       disabled={
                         !visibleQueueEntries.some(
                           (entry) => !isActive(entry.status),
@@ -498,14 +538,14 @@ export function OverviewPage() {
                     >
                       <CheckCheck aria-hidden="true" size={15} />
                       选择前 5
-                    </TextureButton>
+                    </Button>
                   </div>
                   <div className={styles.queueSummary}>
                     <span>
                       显示 {visibleQueueEntries.length} / {anomalies.length}
                       {selected.size > 0 ? ` · 已选 ${selected.size}` : ""}
                     </span>
-                    <TextureButton
+                    <Button
                       className={styles.batchButton}
                       type="button"
                       variant="primary"
@@ -516,7 +556,7 @@ export function OverviewPage() {
                       {batch.kind === "starting"
                         ? "正在启动"
                         : `交给 Agent${selected.size > 0 ? ` · ${selected.size}` : ""}`}
-                    </TextureButton>
+                    </Button>
                   </div>
                   {batch.kind === "result" && (
                     <div
@@ -526,75 +566,34 @@ export function OverviewPage() {
                       {batch.message}
                     </div>
                   )}
-                  <div className={styles.queueList}>
-                    {visibleQueueEntries.length === 0 ? (
-                      <StateFeedback
-                        className={styles.queueEmptyState}
-                        tone="empty"
-                        eyebrow="Empty queue"
-                        title={
-                          anomalies.length === 0
-                            ? "当前没有异常运单"
-                            : "当前筛选没有任务"
-                        }
-                        detail={
-                          anomalies.length === 0
-                            ? "经营数据已加载完成，风险队列中没有待处置记录。"
-                            : "切换筛选条件可查看其他处置状态。"
-                        }
-                        compact
+                  {visibleQueueEntries.length === 0 ? (
+                    <StateFeedback
+                      className={styles.queueEmptyState}
+                      tone="empty"
+                      eyebrow="Empty queue"
+                      title={
+                        anomalies.length === 0
+                          ? "当前没有异常运单"
+                          : "当前筛选没有任务"
+                      }
+                      detail={
+                        anomalies.length === 0
+                          ? "经营数据已加载完成，风险队列中没有待处置记录。"
+                          : "切换筛选条件可查看其他处置状态。"
+                      }
+                      compact
+                    />
+                  ) : (
+                    <Suspense fallback={<QueueTableLoading />}>
+                      <AnomalyQueueTable
+                        className={styles.queueList}
+                        rows={queueRows}
+                        selected={selected}
+                        selectionDisabled={batch.kind === "starting"}
+                        onToggleSelection={toggleSelection}
                       />
-                    ) : (
-                      visibleQueueEntries.map(({ item, rank, status, href }) => (
-                        <article className={styles.queueItem} key={item.waybill_id}>
-                          <label className={styles.queueCheck}>
-                            <input
-                              type="checkbox"
-                              checked={selected.has(item.waybill_id)}
-                              disabled={
-                                batch.kind === "starting" || isActive(status)
-                              }
-                              onChange={() => toggleSelection(item.waybill_id)}
-                            />
-                            <span className={styles.srOnly}>选择 {item.waybill_id}</span>
-                          </label>
-                          <span className={styles.queueRank}>
-                            {String(rank).padStart(2, "0")}
-                          </span>
-                          <div className={styles.queueBody}>
-                            <div className={styles.queueTitle}>
-                              <a href={href}>
-                                {item.origin} → {item.destination}
-                              </a>
-                              <span className={styles.riskScore}>
-                                <RollingNumber
-                                  value={item.risk_score}
-                                  label={`风险分 ${item.risk_score}`}
-                                />
-                              </span>
-                            </div>
-                            <div className={styles.queueMeta}>
-                              <span>{item.waybill_id}</span>
-                              <span>{anomalyTypeLabel(item.type)}</span>
-                              <HaloBadge tone={statusTone(status)}>
-                                {runStatusLabel(status)}
-                              </HaloBadge>
-                            </div>
-                          </div>
-                          <TextureLink
-                            className={styles.drilldown}
-                            href={href}
-                            variant="icon"
-                            size="icon"
-                            aria-label={`查看运单 ${item.waybill_id}`}
-                            title="查看运单"
-                          >
-                            <ChevronRight aria-hidden="true" size={17} />
-                          </TextureLink>
-                        </article>
-                      ))
-                    )}
-                  </div>
+                    </Suspense>
+                  )}
                 </section>
 
                 <section className={styles.briefSection} aria-labelledby="brief-heading">
@@ -604,11 +603,11 @@ export function OverviewPage() {
                       <h2 id="brief-heading">经营简报</h2>
                     </div>
                     <div className={styles.briefMeta}>
-                      <HaloBadge tone="success">
+                      <Badge tone="success">
                         <ShieldCheck aria-hidden="true" size={15} />
                         只读聚合
-                      </HaloBadge>
-                      <HaloBadge
+                      </Badge>
+                      <Badge
                         tone={
                           resource.overview.brief.mode === "model_read_only"
                             ? "info"
@@ -622,7 +621,7 @@ export function OverviewPage() {
                           <FileText aria-hidden="true" size={15} />
                         )}
                         {briefSourceLabel(resource.overview.brief)}
-                      </HaloBadge>
+                      </Badge>
                     </div>
                   </div>
                   <div className={styles.briefGrid}>
@@ -714,7 +713,7 @@ export function OverviewKPI({
         {presentation.kind === "unavailable" ? (
           "待接入"
         ) : (
-          <RollingNumber
+          <AnimatedNumber
             value={presentation.value}
             precision={1}
             format={(value) => formatMetricValue(value, metric.unit)}
@@ -837,7 +836,7 @@ function briefFallbackDetail(brief: Overview["brief"]): string {
   }
 }
 
-function networkStatusTone(resource: OverviewResource): HaloBadgeTone {
+function networkStatusTone(resource: OverviewResource): BadgeTone {
   switch (resource.kind) {
     case "loading":
       return "neutral";
@@ -967,6 +966,23 @@ function LoadingOverview() {
   );
 }
 
+function QueueTableLoading() {
+  return (
+    <div
+      className={styles.queueTableLoading}
+      role="status"
+      aria-label="正在加载异常处置队列"
+    >
+      {Array.from({ length: 5 }, (_, index) => (
+        <SkeletonBlock
+          className={styles.queueSkeletonItem}
+          key={`queue-table-skeleton-${index}`}
+        />
+      ))}
+    </div>
+  );
+}
+
 function statusFromEvent(event: AuditEvent): RunStatus | null {
   switch (event.type) {
     case "approval_requested":
@@ -1040,7 +1056,7 @@ function runStatusLabel(status: RunStatus | undefined): string {
   }
 }
 
-function statusTone(status: RunStatus | undefined): HaloBadgeTone {
+function statusTone(status: RunStatus | undefined): BadgeTone {
   if (status === "completed") {
     return "success";
   }

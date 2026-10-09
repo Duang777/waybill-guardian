@@ -1,19 +1,19 @@
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
-import styles from "./cult.module.css";
+import styles from "./ui.module.css";
 
-export type HaloBadgeTone =
+export type BadgeTone =
   | "neutral"
   | "info"
   | "success"
   | "warning"
   | "danger";
 
-export type HaloBadgeProps = Omit<
+export type BadgeProps = Omit<
   ComponentPropsWithoutRef<"span">,
   "children"
 > & {
   children: ReactNode;
-  tone?: HaloBadgeTone;
+  tone?: BadgeTone;
   live?: boolean;
   tabularNums?: boolean;
 };
@@ -24,35 +24,31 @@ const toneClasses = {
   success: styles.badgeSuccess,
   warning: styles.badgeWarning,
   danger: styles.badgeDanger,
-} satisfies Record<HaloBadgeTone, string>;
+} satisfies Record<BadgeTone, string>;
 
-export function HaloBadge({
+export function Badge({
   children,
   className,
   tone = "neutral",
   live = false,
   tabularNums = false,
   ...props
-}: HaloBadgeProps) {
+}: BadgeProps) {
   return (
     <span
       {...props}
       className={[
-        styles.haloBadge,
+        styles.badge,
         toneClasses[tone],
         tabularNums ? styles.badgeTabular : "",
         className,
       ]
         .filter(Boolean)
         .join(" ")}
-      data-slot="halo-badge"
+      data-slot="badge"
     >
-      <span className={styles.haloBadgeBody}>
-        {live && (
-          <span className={styles.badgeLiveDot} aria-hidden="true" />
-        )}
-        <span>{children}</span>
-      </span>
+      {live && <span className={styles.badgeLiveDot} aria-hidden="true" />}
+      <span>{children}</span>
     </span>
   );
 }

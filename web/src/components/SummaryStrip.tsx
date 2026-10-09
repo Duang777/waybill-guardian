@@ -2,12 +2,8 @@ import { Clock3, CloudSun, Route, ShieldCheck, Truck } from "lucide-react";
 import type { RunStatus } from "../api";
 import styles from "../app.module.css";
 import type { WaybillResource } from "../waybill-resource";
-import {
-  HaloBadge,
-  HaloProgress,
-  type HaloBadgeTone,
-  type HaloProgressTone,
-} from "./cult";
+import { Badge, type BadgeTone } from "./ui/badge";
+import { Progress, type ProgressTone } from "./ui/progress";
 import { SkeletonBlock } from "./StateFeedback";
 
 type SummaryStripProps = {
@@ -109,9 +105,9 @@ export function SummaryStrip({
             Agent
           </dt>
           <dd>
-            <HaloBadge tone={agentStatusTone(status)} live={connected}>
+            <Badge tone={agentStatusTone(status)} live={connected}>
               {status === null ? "待启动" : statusLabels[status]}
-            </HaloBadge>
+            </Badge>
           </dd>
         </div>
       </dl>
@@ -161,12 +157,12 @@ function routeLabel(resource: WaybillResource): string {
 type RiskBarProps = {
   label: string;
   value: number;
-  tone: HaloProgressTone;
+  tone: ProgressTone;
 };
 
 function RiskBar({ label, value, tone }: RiskBarProps) {
   return (
-    <HaloProgress
+    <Progress
       value={value}
       label={label}
       showValue
@@ -186,7 +182,7 @@ function RiskPlaceholder({ label }: { label: string }) {
   );
 }
 
-function agentStatusTone(status: RunStatus | null): HaloBadgeTone {
+function agentStatusTone(status: RunStatus | null): BadgeTone {
   switch (status) {
     case "completed":
       return "success";

@@ -5,9 +5,9 @@ import {
   useTransform,
 } from "motion/react";
 import { useEffect } from "react";
-import styles from "./cult.module.css";
+import styles from "./ui.module.css";
 
-export type RollingNumberProps = {
+export type AnimatedNumberProps = {
   value: number;
   className?: string;
   mass?: number;
@@ -21,7 +21,7 @@ export type RollingNumberProps = {
 const defaultFormatter = (value: number): string =>
   value.toLocaleString("zh-CN");
 
-export function RollingNumber({
+export function AnimatedNumber({
   value,
   className,
   mass = 0.8,
@@ -30,7 +30,7 @@ export function RollingNumber({
   precision = 0,
   format = defaultFormatter,
   label,
-}: RollingNumberProps) {
+}: AnimatedNumberProps) {
   const reduceMotion = useReducedMotion() ?? false;
   const spring = useSpring(value, { mass, stiffness, damping });
   const display = useTransform(spring, (current) =>
@@ -41,7 +41,9 @@ export function RollingNumber({
     spring.set(value);
   }, [spring, value]);
 
-  const classes = [styles.rollingNumber, className].filter(Boolean).join(" ");
+  const classes = [styles.animatedNumber, className]
+    .filter(Boolean)
+    .join(" ");
   if (reduceMotion) {
     return (
       <span className={classes} aria-label={label}>

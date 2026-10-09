@@ -41,12 +41,10 @@ import {
   type FacilityTransportRouteKind,
   type FacilityVehicleState,
 } from "./facilityLayout";
-import {
-  HaloBadge,
-  HaloSegmented,
-  RollingNumber,
-  TextureButton,
-} from "./cult";
+import { AnimatedNumber } from "./ui/animated-number";
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
+import { SegmentedControl } from "./ui/segmented-control";
 
 const HubNetworkScene = lazy(() => import("./HubNetworkScene"));
 
@@ -305,43 +303,43 @@ export function HubNetwork({
           </div>
           <div className={styles.sceneHudBadges}>
             {selectedHub !== undefined && (
-              <HaloBadge
+              <Badge
                 className={styles.sceneSelectedPill}
                 tone="info"
                 tabularNums
                 data-scene-selection-pill
               >
                 {selectedAnomaly?.waybill_id ?? selectedHub.hub_id}
-              </HaloBadge>
+              </Badge>
             )}
-            <HaloBadge tone="neutral">
+            <Badge tone="neutral">
               {dataModeLabel(dataMode)}
-            </HaloBadge>
+            </Badge>
           </div>
         </div>
         <dl className={styles.sceneMetrics} aria-label="网络运行摘要">
           <div>
             <dt>公路港</dt>
             <dd>
-              <RollingNumber value={hubs.length} label={`${hubs.length} 个公路港`} />
+              <AnimatedNumber value={hubs.length} label={`${hubs.length} 个公路港`} />
             </dd>
           </div>
           <div>
             <dt>在途</dt>
             <dd>
-              <RollingNumber value={totals.in_flight} label={`在途 ${totals.in_flight}`} />
+              <AnimatedNumber value={totals.in_flight} label={`在途 ${totals.in_flight}`} />
             </dd>
           </div>
           <div className={styles.sceneMetricSignal}>
             <dt>异常</dt>
             <dd>
-              <RollingNumber value={totals.anomalies} label={`异常 ${totals.anomalies}`} />
+              <AnimatedNumber value={totals.anomalies} label={`异常 ${totals.anomalies}`} />
             </dd>
           </div>
           <div>
             <dt>处置中</dt>
             <dd>
-              <RollingNumber value={totals.handling} label={`处置中 ${totals.handling}`} />
+              <AnimatedNumber value={totals.handling} label={`处置中 ${totals.handling}`} />
             </dd>
           </div>
         </dl>
@@ -392,7 +390,7 @@ export function HubNetwork({
 
       <div className={styles.sceneControls} data-scene-controls>
         {selectedHub !== undefined && (
-          <HaloSegmented
+          <SegmentedControl
             className={styles.sceneCameraPresets}
             ariaLabel="镜头预设"
             items={[
@@ -447,7 +445,7 @@ export function HubNetwork({
             </option>
           ))}
         </select>
-        <TextureButton
+        <Button
           className={styles.sceneToolButton}
           type="button"
           variant="icon"
@@ -458,8 +456,8 @@ export function HubNetwork({
           title="聚焦最高风险"
         >
           <Crosshair aria-hidden="true" size={17} />
-        </TextureButton>
-        <TextureButton
+        </Button>
+        <Button
           className={styles.sceneToolButton}
           type="button"
           variant="icon"
@@ -476,7 +474,7 @@ export function HubNetwork({
           ) : (
             <ArrowLeft aria-hidden="true" size={17} />
           )}
-        </TextureButton>
+        </Button>
       </div>
       {selectedHub !== undefined && (
         <div

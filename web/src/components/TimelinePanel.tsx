@@ -17,12 +17,9 @@ import { useEffect, useRef, useState, type Dispatch } from "react";
 import styles from "../app.module.css";
 import { motionTransition } from "../motion/tokens";
 import { useReducedMotionPreference } from "../motion/useReducedMotionPreference";
-import {
-  HaloBadge,
-  RollingNumber,
-  TextureButton,
-  type HaloBadgeTone,
-} from "./cult";
+import { AnimatedNumber } from "./ui/animated-number";
+import { Badge, type BadgeTone } from "./ui/badge";
+import { Button } from "./ui/button";
 import {
   inferenceMode,
   playbackCursor,
@@ -75,14 +72,14 @@ export function AuditDrawer({
           </span>
         </span>
         <span className={styles.auditDrawerMeta}>
-          <HaloBadge
+          <Badge
             tone={modeTone(mode)}
             live={mode.kind === "online"}
           >
             {modeLabel(mode)}
-          </HaloBadge>
+          </Badge>
           <span className={styles.eventCount}>
-            <RollingNumber
+            <AnimatedNumber
               value={state.events.length}
               format={formatEventCount}
               label={`${state.events.length} 条审计事件`}
@@ -139,14 +136,14 @@ export function TimelinePanel({
             <h2 id="timeline-title">Agent 审计时间线</h2>
           </div>
           <div className={styles.timelineMeta}>
-            <HaloBadge
+            <Badge
               tone={modeTone(mode)}
               live={mode.kind === "online"}
             >
               {modeLabel(mode)}
-            </HaloBadge>
+            </Badge>
             <span className={styles.eventCount}>
-              <RollingNumber
+              <AnimatedNumber
                 value={state.events.length}
                 format={formatEventCount}
                 label={`${state.events.length} 条审计事件`}
@@ -177,7 +174,7 @@ export function PlaybackControls({
   const isLive = state.playback.kind === "live";
   return (
     <div className={styles.playbackControls}>
-      <TextureButton
+      <Button
         type="button"
         variant="icon"
         size="icon"
@@ -187,7 +184,7 @@ export function PlaybackControls({
         onClick={() => dispatch({ type: "toggle_playback" })}
       >
         {isPlaying ? <Pause aria-hidden="true" size={16} /> : <Play aria-hidden="true" size={16} />}
-      </TextureButton>
+      </Button>
       <input
         className={styles.playbackRange}
         type="range"
@@ -203,16 +200,16 @@ export function PlaybackControls({
       <span className={styles.playbackPosition}>
         {cursor}/{state.events.length}
       </span>
-      <TextureButton
+      <Button
         type="button"
-        variant={isLive ? "secondary" : "minimal"}
+        variant={isLive ? "secondary" : "ghost"}
         disabled={isLive}
         aria-label={isLive ? "当前为实时状态" : "退出回放并返回实时状态"}
         onClick={() => dispatch({ type: "go_live" })}
       >
         <Radio aria-hidden="true" size={14} />
         {isLive ? "实时" : "退出回放"}
-      </TextureButton>
+      </Button>
     </div>
   );
 }
@@ -523,7 +520,7 @@ function formatSequence(sequences: readonly number[]): string {
   return first === last ? start : `${start}-${end}`;
 }
 
-function modeTone(mode: InferenceMode): HaloBadgeTone {
+function modeTone(mode: InferenceMode): BadgeTone {
   switch (mode.kind) {
     case "online":
       return "success";

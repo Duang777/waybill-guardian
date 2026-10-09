@@ -16,15 +16,26 @@ import type { Approval, Proposal, RunStatus, WaybillView } from "../api";
 import styles from "../app.module.css";
 import { motionTransition } from "../motion/tokens";
 import { useReducedMotionPreference } from "../motion/useReducedMotionPreference";
+import type { RequestIssueCopy } from "../request-issue";
 import type { EvidenceSelection } from "../timeline";
 import {
-  HaloBadge,
-  TextureButton,
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "./ui/alert-dialog";
+import { Badge, type BadgeTone } from "./ui/badge";
+import { Button } from "./ui/button";
+import {
   TimerDisplay,
   TimerIcon,
   TimerRoot,
-  type HaloBadgeTone,
-} from "./cult";
+} from "./ui/timer";
+import { Textarea } from "./ui/textarea";
 
 type ApprovalPanelProps = {
   approval: Approval | null;
@@ -32,6 +43,7 @@ type ApprovalPanelProps = {
   runStatus: RunStatus | null;
   view: WaybillView | null;
   decisionState: ApprovalDecisionState;
+  rejectError?: RequestIssueCopy | null;
   transitionIntent?: "confirm" | "reject" | null;
   embedded?: boolean;
   showEvidence?: boolean;
@@ -51,6 +63,7 @@ export function ApprovalPanel({
   runStatus,
   view,
   decisionState,
+  rejectError = null,
   transitionIntent = null,
   embedded = false,
   showEvidence = true,
@@ -62,6 +75,7 @@ export function ApprovalPanel({
   const [reason, setReason] = useState("");
   const reduceMotion = useReducedMotionPreference();
   const approvalTitle = useRef<HTMLHeadingElement>(null);
+  const rejectReason = useRef<HTMLTextAreaElement>(null);
   const previousApproval = useRef<Pick<Approval, "id" | "status"> | null>(null);
   const statusChanged =
     approval !== null &&
@@ -196,13 +210,13 @@ export function ApprovalPanel({
           </div>
           <div className={styles.approvalBadges}>
             {proposal !== null && (
-              <HaloBadge tone="info" tabularNums>
+              <Badge tone="info" tabularNums>
                 置信度 {formatConfidence(proposal.confidence_bps)}
-              </HaloBadge>
+              </Badge>
             )}
-            <HaloBadge tone={approvalStatusTone(approval.status)}>
+            <Badge tone={approvalStatusTone(approval.status)}>
               {approvalStatusLabel(approval.status)}
-            </HaloBadge>
+            </Badge>
           </div>
         </div>
 
@@ -219,7 +233,7 @@ export function ApprovalPanel({
                 <div key={alternative.carrier_id}>
                   <div className={styles.alternativeHeading}>
                     <strong>{carrierDisplayName(alternative.carrier_id, view)}</strong>
-                    <HaloBadge
+                    <Badge
                       tone={
                         alternative.carrier_id === selectedCarrierID
                           ? "info"
@@ -229,7 +243,7 @@ export function ApprovalPanel({
                       {alternative.carrier_id === selectedCarrierID
                         ? "首选"
                         : "备选"}
-                    </HaloBadge>
+                    </Badge>
                   </div>
                   <span className={styles.alternativeReason}>
                     {alternative.reason}
@@ -337,7 +351,7 @@ export function ApprovalPanel({
           )}
         </div>
 
-        {isPending && !rejecting && (
+        {isPending && (
           <div className={styles.approvalActions}>
             {decisionState.kind === "unavailable" && (
               <div className={styles.approvalUnavailable} role="status">
@@ -345,16 +359,90 @@ export function ApprovalPanel({
                 {decisionState.reason}
               </div>
             )}
-            <TextureButton
-              type="button"
-              variant="secondary"
-              disabled={decisionDisabled}
-              onClick={() => setRejecting(true)}
-            >
-              <X aria-hidden="true" size={16} />
-              驳回方案
-            </TextureButton>
-            <TextureButton
+            <AlertDialog open={rejecting} onOpenChange={setRejecting}>
+              <AlertDialogTrigger asChild>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={decisionDisabled}
+                >
+                  <X aria-hidden="true" size={16} />
+                  驳回方案
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent
+                onEscapeKeyDown={(event) => {
+                  if (busy) {
+                    event.preventDefault();
+                  }
+                }}
+                onOpenAutoFocus={(event) => {
+                  event.preventDefault();
+                  rejectReason.current?.focus();
+                }}
+              >
+                <form
+                  className={styles.rejectDialogForm}
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void submitReject();
+                  }}
+                >
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>驳回处置方案</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      说明不能执行当前方案的原因。该理由会写入审计记录，并交给 Agent
+                      继续处理。
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  {decisionState.kind === "unavailable" && (
+                    <div className={styles.approvalUnavailable} role="status">
+                      <WifiOff aria-hidden="true" size={15} />
+                      {decisionState.reason}
+                    </div>
+                  )}
+                  {rejectError !== null && (
+                    <div className={styles.rejectDialogError} role="alert">
+                      <TriangleAlert aria-hidden="true" size={16} />
+                      <div>
+                        <strong>{rejectError.title}</strong>
+                        <span>{rejectError.detail}</span>
+                      </div>
+                    </div>
+                  )}
+                  <label htmlFor="reject-reason">驳回原因</label>
+                  <Textarea
+                    id="reject-reason"
+                    ref={rejectReason}
+                    value={reason}
+                    rows={4}
+                    placeholder="例如：首选承运商当前无可用车辆"
+                    disabled={decisionDisabled}
+                    required
+                    onChange={(event) => setReason(event.target.value)}
+                  />
+                  <AlertDialogFooter>
+                    <AlertDialogCancel asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        disabled={busy}
+                      >
+                        取消
+                      </Button>
+                    </AlertDialogCancel>
+                    <Button
+                      type="submit"
+                      variant="destructive"
+                      disabled={decisionDisabled || reason.trim().length === 0}
+                    >
+                      {busy ? "正在驳回" : "确认驳回"}
+                    </Button>
+                  </AlertDialogFooter>
+                </form>
+              </AlertDialogContent>
+            </AlertDialog>
+            <Button
               type="button"
               variant="primary"
               disabled={decisionDisabled}
@@ -362,53 +450,8 @@ export function ApprovalPanel({
             >
               <Check aria-hidden="true" size={17} />
               {busy ? "正在执行" : "确认并执行"}
-            </TextureButton>
+            </Button>
           </div>
-        )}
-
-        {isPending && rejecting && (
-          <form
-            className={styles.rejectForm}
-            onSubmit={(event) => {
-              event.preventDefault();
-              void submitReject();
-            }}
-          >
-            {decisionState.kind === "unavailable" && (
-              <div className={styles.approvalUnavailable} role="status">
-                <WifiOff aria-hidden="true" size={15} />
-                {decisionState.reason}
-              </div>
-            )}
-            <label htmlFor="reject-reason">驳回原因</label>
-            <textarea
-              id="reject-reason"
-              value={reason}
-              rows={3}
-              placeholder="例如：首选承运商当前无可用车辆"
-              disabled={decisionDisabled}
-              onChange={(event) => setReason(event.target.value)}
-            />
-            <div className={styles.rejectActions}>
-              <TextureButton
-                type="button"
-                variant="minimal"
-                size="sm"
-                disabled={decisionDisabled}
-                onClick={() => setRejecting(false)}
-              >
-                取消
-              </TextureButton>
-              <TextureButton
-                type="submit"
-                variant="destructive"
-                size="sm"
-                disabled={decisionDisabled || reason.trim().length === 0}
-              >
-                确认驳回
-              </TextureButton>
-            </div>
-          </form>
         )}
       </m.div>
     </section>
@@ -666,7 +709,7 @@ function approvalStatusLabel(status: Approval["status"]): string {
   }
 }
 
-function approvalStatusTone(status: Approval["status"]): HaloBadgeTone {
+function approvalStatusTone(status: Approval["status"]): BadgeTone {
   switch (status) {
     case "pending":
     case "reconciliation_required":

@@ -1,10 +1,10 @@
+import { Clock3 } from "lucide-react";
 import {
   forwardRef,
   type ComponentType,
   type HTMLAttributes,
 } from "react";
-import { Clock3 } from "lucide-react";
-import styles from "./cult.module.css";
+import styles from "./ui.module.css";
 
 export type TimerRootProps = HTMLAttributes<HTMLDivElement>;
 

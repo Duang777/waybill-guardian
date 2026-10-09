@@ -38,6 +38,10 @@ provider fallback middleware，但当前实现没有配置 fallback。
 | `lucide-react` | `1.50.0` | ISC | 界面图标 |
 | `motion` | `14.0.0` | MIT | 数字、进度、实时事件、审批状态和轨迹选点反馈 |
 | `zod` | `4.6.5` | MIT | 浏览器端 API 边界校验 |
+| `@radix-ui/react-alert-dialog` | `1.1.24` | MIT | 驳回方案弹层的焦点锁定、Escape 关闭和焦点归还 |
+| `@radix-ui/react-progress` | `1.1.17` | MIT | 风险进度条的无障碍语义 |
+| `@tanstack/react-table` | `8.21.3` | MIT | 异常处置队列的行模型和排序 |
+| `sonner` | `2.0.8` | MIT | 批量启动和审批结果的瞬时通知 |
 
 ECharts 的 NOTICE 原文保存在
 [`docs/licenses/echarts-NOTICE.txt`](./docs/licenses/echarts-NOTICE.txt)。
@@ -61,13 +65,15 @@ ECharts 的 NOTICE 原文保存在
 
 ## 改编组件
 
-`web/src/components/cult/` 中的组件改编自
+`web/src/components/ui/` 中的按钮、徽标、进度、分段控件、数字和计时器改编自
 [nolly-studio/cult-ui](https://github.com/nolly-studio/cult-ui) 的公开 registry：
 `texture-button`、`halo-badge`、`halo-progress`、`halo-segmented`、
-`rolling-number` 和 `timer`。本仓库保留组件结构和交互思想，移除了 Tailwind、CVA、
-Radix UI 与 Base UI 耦合，并用 CSS Modules 适配本项目视觉规范。Cult UI 采用 MIT
-许可证，Copyright (c) 2023 Jordan-Gilliam；许可证原文保存在
-[`web/src/components/cult/LICENSE`](./web/src/components/cult/LICENSE)。
+`rolling-number` 和 `timer`。同目录的基础组件组织和 AlertDialog 组合参考
+[shadcn/ui](https://github.com/shadcn-ui/ui) 的项目内源码模式。本仓库没有引入 Tailwind，
+而是用 CSS Modules 适配白色工业视觉，并只按实际用例接入 Radix Primitives。Cult UI 与
+shadcn/ui 均采用 MIT 许可证；许可证原文分别保存在
+[`web/src/components/ui/CULT-UI-LICENSE`](./web/src/components/ui/CULT-UI-LICENSE) 和
+[`web/src/components/ui/SHADCN-UI-LICENSE`](./web/src/components/ui/SHADCN-UI-LICENSE)。
 
 ## 外部服务
 
