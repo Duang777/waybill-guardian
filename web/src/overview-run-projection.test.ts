@@ -26,6 +26,43 @@ function projection({
 }
 
 describe("overview run projections", () => {
+  it("preserves the projection map for an empty run summary", () => {
+    const current = new Map([
+      [
+        waybillID,
+        projection({
+          runID: "run-current",
+          status: "awaiting_approval",
+          lastSeq: 8,
+        }),
+      ],
+    ]);
+
+    expect(mergeRunProjections(current, [])).toBe(current);
+  });
+
+  it("preserves the projection map when every run summary is stale", () => {
+    const current = new Map([
+      [
+        waybillID,
+        projection({
+          runID: "run-current",
+          status: "awaiting_approval",
+          lastSeq: 8,
+        }),
+      ],
+    ]);
+    const stale = runSchema.parse({
+      run_id: "run-current",
+      incident_id: "incident-current",
+      waybill_id: waybillID,
+      status: "investigating",
+      last_seq: 7,
+    });
+
+    expect(mergeRunProjections(current, [stale])).toBe(current);
+  });
+
   it("discovers a new external run and ignores an older summary", () => {
     const previous = projection({
       runID: "run-previous",
