@@ -7,16 +7,18 @@ import {
   ChevronRight,
   Clock3,
   FileCheck2,
+  GitCompareArrows,
   LoaderCircle,
   Pause,
   Play,
+  Radio,
   RotateCw,
   ShieldCheck,
   Truck,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import {
-  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -48,9 +50,13 @@ import {
 import { useReducedMotionPreference } from "../motion/useReducedMotionPreference";
 import {
   confirmDeliveryApproval,
-  getDeliveryWorkspace,
   rejectDeliveryApproval,
 } from "./api";
+import {
+  deliveryConnectionLabel,
+  deliveryDecisionUnavailableReason,
+  type DeliveryConnectionState,
+} from "./connection";
 import type {
   DeliveryWorkspace,
   PlanRevisionID,
@@ -71,12 +77,8 @@ import {
   taskKindLabel,
   type DeliveryStep,
 } from "./model";
+import { useDeliveryWorkspace } from "./useDeliveryWorkspace";
 import styles from "./delivery-console.module.css";
-
-type WorkspaceResource =
-  | { kind: "loading" }
-  | { kind: "ready"; workspace: DeliveryWorkspace }
-  | { kind: "error"; issue: RequestIssue };
 
 type PendingDecision = "confirm" | "reject" | null;
 
@@ -85,34 +87,9 @@ export function DeliveryConsolePage({
 }: {
   revisionID: PlanRevisionID;
 }) {
-  const [resource, setResource] = useState<WorkspaceResource>({
-    kind: "loading",
-  });
-  const [reloadKey, setReloadKey] = useState(0);
+  const { resource, connection, reload } = useDeliveryWorkspace(revisionID);
   const [pendingDecision, setPendingDecision] =
     useState<PendingDecision>(null);
-
-  const load = useCallback(
-    async (signal: AbortSignal) => {
-      setResource({ kind: "loading" });
-      try {
-        const workspace = await getDeliveryWorkspace(revisionID, signal);
-        setResource({ kind: "ready", workspace });
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") {
-          return;
-        }
-        setResource({ kind: "error", issue: toRequestIssue(error) });
-      }
-    },
-    [revisionID],
-  );
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void load(controller.signal);
-    return () => controller.abort();
-  }, [load, reloadKey]);
 
   const decide = async (
     approvalID: string,
@@ -127,7 +104,7 @@ export function DeliveryConsolePage({
         await rejectDeliveryApproval(approvalID, reason ?? "");
       }
       toast.success(decision === "confirm" ? "计划已确认" : "计划已驳回");
-      setReloadKey((value) => value + 1);
+      reload();
     } catch (error) {
       const issue = toRequestIssue(error);
       const copy = requestIssueCopy(issue);
@@ -144,7 +121,7 @@ export function DeliveryConsolePage({
     return (
       <DeliveryFailurePage
         issue={resource.issue}
-        onRetry={() => setReloadKey((value) => value + 1)}
+        onRetry={reload}
       />
     );
   }
@@ -152,6 +129,7 @@ export function DeliveryConsolePage({
     <DeliveryConsoleReady
       key={resource.workspace.plan.revision_id}
       workspace={resource.workspace}
+      connection={connection}
       pendingDecision={pendingDecision}
       onDecision={decide}
     />
@@ -227,10 +205,12 @@ function DeliveryFrame({ children }: { children: React.ReactNode }) {
 
 export function DeliveryConsoleReady({
   workspace,
+  connection = "online",
   pendingDecision = null,
   onDecision = async () => undefined,
 }: {
   workspace: DeliveryWorkspace;
+  connection?: DeliveryConnectionState;
   pendingDecision?: PendingDecision;
   onDecision?: (
     approvalID: string,
@@ -302,7 +282,7 @@ export function DeliveryConsoleReady({
         跳到主要内容
       </a>
       <div className={styles.consoleShell}>
-        <DeliveryTopbar workspace={workspace} />
+        <DeliveryTopbar workspace={workspace} connection={connection} />
         <main id="delivery-main" className={styles.main}>
           <PlanMasthead workspace={workspace} />
           <section
@@ -336,8 +316,10 @@ export function DeliveryConsoleReady({
             onSelect={selectStep}
             onPlayingChange={setPlaying}
           />
+          <RevisionExecutionBand workspace={workspace} />
           <DecisionBand
             workspace={workspace}
+            connection={connection}
             pendingDecision={pendingDecision}
             onDecision={onDecision}
           />
@@ -348,7 +330,13 @@ export function DeliveryConsoleReady({
   );
 }
 
-function DeliveryTopbar({ workspace }: { workspace: DeliveryWorkspace }) {
+function DeliveryTopbar({
+  workspace,
+  connection,
+}: {
+  workspace: DeliveryWorkspace;
+  connection: DeliveryConnectionState;
+}) {
   return (
     <header className={styles.topbar}>
       <div className={styles.brand}>
@@ -376,6 +364,13 @@ function DeliveryTopbar({ workspace }: { workspace: DeliveryWorkspace }) {
         </Badge>
         <Badge tone={workspace.validation.valid ? "success" : "danger"}>
           {workspace.validation.valid ? "Validator 通过" : "Validator 拒绝"}
+        </Badge>
+        <Badge
+          tone={connectionTone(connection)}
+          live={connection === "online"}
+        >
+          <Radio aria-hidden="true" size={12} />
+          {deliveryConnectionLabel(connection)}
         </Badge>
       </div>
       <div className={styles.topbarTime}>
@@ -837,12 +832,157 @@ function PlaybackDock({
   );
 }
 
+function RevisionExecutionBand({
+  workspace,
+}: {
+  workspace: DeliveryWorkspace;
+}) {
+  const comparison = workspace.comparison;
+  const execution = workspace.execution;
+  return (
+    <section
+      className={styles.revisionExecutionBand}
+      aria-label="修订差异与执行回写"
+    >
+      <article
+        className={styles.revisionDiff}
+        aria-labelledby="revision-diff-title"
+      >
+        <header className={styles.bandHeader}>
+          <div>
+            <span className={styles.panelIndex}>04</span>
+            <GitCompareArrows aria-hidden="true" size={16} />
+            <div>
+              <span className={styles.eyebrow}>Revision diff</span>
+              <h2 id="revision-diff-title">计划修订差异</h2>
+            </div>
+          </div>
+          {comparison.kind === "available" && (
+            <Badge tone="neutral">{comparison.base_revision_id}</Badge>
+          )}
+        </header>
+        {comparison.kind === "unavailable" ? (
+          <div className={styles.bandEmpty}>
+            当前修订没有可比较的基线计划。
+          </div>
+        ) : (
+          <>
+            <dl className={styles.diffSummary}>
+              <div>
+                <dt>站序调整</dt>
+                <dd>{comparison.reordered_stop_count}</dd>
+              </div>
+              <div>
+                <dt>ETA 漂移</dt>
+                <dd>{formatSignedDuration(comparison.eta_drift_seconds)}</dd>
+              </div>
+              <div>
+                <dt>重新装载</dt>
+                <dd>{comparison.reloaded_cargo_count}</dd>
+              </div>
+              <div>
+                <dt>稳定性成本</dt>
+                <dd>{formatCurrency(comparison.stability_cost_cents)}</dd>
+              </div>
+            </dl>
+            <ol className={styles.diffList}>
+              {comparison.changes.map((change, index) => (
+                <li key={`${change.kind}-${comparisonChangeKey(change)}-${index}`}>
+                  <Badge tone={comparisonChangeTone(change.kind)}>
+                    {comparisonChangeLabel(change.kind)}
+                  </Badge>
+                  <span>
+                    <strong>{comparisonChangeSubject(change)}</strong>
+                    <small>{comparisonChangeDetail(change)}</small>
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </>
+        )}
+      </article>
+      <article
+        className={styles.executionPanel}
+        aria-labelledby="execution-panel-title"
+      >
+        <header className={styles.bandHeader}>
+          <div>
+            <span className={styles.panelIndex}>05</span>
+            <TriangleAlert aria-hidden="true" size={16} />
+            <div>
+              <span className={styles.eyebrow}>Writeback projection</span>
+              <h2 id="execution-panel-title">执行与对账</h2>
+            </div>
+          </div>
+          <Badge tone={executionTone(execution.kind)}>
+            {executionTitle(execution.kind)}
+          </Badge>
+        </header>
+        {execution.kind === "not_started" ? (
+          <div className={styles.bandEmpty}>
+            审批确认后，服务端将在这里投影 TMS 与 WMS 的逐项回写结果。
+          </div>
+        ) : (
+          <div className={styles.executionBody}>
+            <div className={styles.executionMeta}>
+              <span>{execution.execution_id}</span>
+              <time dateTime={execution.updated_at}>
+                {formatDateTime(execution.updated_at)}
+              </time>
+            </div>
+            <ul className={styles.executionEffects}>
+              {execution.effects.map((effect) => (
+                <li key={effect.effect_id}>
+                  <span>
+                    <strong>{effect.action}</strong>
+                    <small>{effect.target}</small>
+                  </span>
+                  <Badge tone={effectStateTone(effect.state)}>
+                    {effectStateLabel(effect.state)}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+            {execution.kind === "reconciliation_required" && (
+              <ul className={styles.reconciliationList}>
+                {execution.reconciliation.map((item) => (
+                  <li key={item.effect_id}>
+                    <TriangleAlert aria-hidden="true" size={15} />
+                    <span>
+                      <strong>{reconciliationCauseLabel(item.cause)}</strong>
+                      <small>
+                        {item.adapter} · key {item.idempotency_key_digest.slice(0, 10)}
+                        {" · "}
+                        {formatDateTime(item.next_check_at)} 再查
+                      </small>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {execution.kind === "failed" && (
+              <p className={styles.executionNotice}>
+                {execution.failure_code} · {execution.detail}
+              </p>
+            )}
+            {execution.kind === "manual_review" && (
+              <p className={styles.executionNotice}>{execution.reason}</p>
+            )}
+          </div>
+        )}
+      </article>
+    </section>
+  );
+}
+
 function DecisionBand({
   workspace,
+  connection,
   pendingDecision,
   onDecision,
 }: {
   workspace: DeliveryWorkspace;
+  connection: DeliveryConnectionState;
   pendingDecision: PendingDecision;
   onDecision: (
     approvalID: string,
@@ -859,11 +999,12 @@ function DecisionBand({
       ? decision.effects
       : [];
   const busy = pendingDecision !== null;
+  const unavailableReason = deliveryDecisionUnavailableReason(connection);
 
   return (
     <section className={styles.decisionBand} aria-labelledby="decision-title">
       <div className={styles.decisionSummary}>
-        <span className={styles.panelIndex}>04</span>
+        <span className={styles.panelIndex}>06</span>
         <div>
           <span className={styles.eyebrow}>Human decision boundary</span>
           <h2 id="decision-title">{decisionTitle(decision.kind)}</h2>
@@ -889,7 +1030,11 @@ function DecisionBand({
         <div className={styles.decisionActions}>
           <AlertDialog open={rejectOpen} onOpenChange={setRejectOpen}>
             <AlertDialogTrigger asChild>
-              <Button type="button" variant="secondary" disabled={busy}>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={busy || unavailableReason !== null}
+              >
                 <X aria-hidden="true" size={16} />
                 驳回计划
               </Button>
@@ -929,7 +1074,7 @@ function DecisionBand({
                   rows={4}
                   value={reason}
                   required
-                  disabled={busy}
+                  disabled={busy || unavailableReason !== null}
                   onChange={(event) => setReason(event.target.value)}
                 />
                 <AlertDialogFooter>
@@ -938,7 +1083,11 @@ function DecisionBand({
                       取消
                     </Button>
                   </AlertDialogCancel>
-                  <Button type="submit" variant="destructive" disabled={busy}>
+                  <Button
+                    type="submit"
+                    variant="destructive"
+                    disabled={busy || unavailableReason !== null}
+                  >
                     {pendingDecision === "reject" ? (
                       <LoaderCircle className={styles.loadingIcon} aria-hidden="true" size={16} />
                     ) : (
@@ -952,7 +1101,11 @@ function DecisionBand({
           </AlertDialog>
           <Button
             type="button"
-            disabled={busy || !workspace.validation.valid}
+            disabled={
+              busy ||
+              !workspace.validation.valid ||
+              unavailableReason !== null
+            }
             onClick={() => void onDecision(decision.approval_id, "confirm")}
           >
             {pendingDecision === "confirm" ? (
@@ -962,6 +1115,9 @@ function DecisionBand({
             )}
             确认并执行
           </Button>
+          {unavailableReason !== null && (
+            <p className={styles.decisionLock}>{unavailableReason}</p>
+          )}
         </div>
       )}
       {decision.kind !== "pending" && (
@@ -978,7 +1134,7 @@ function AuditBand({ workspace }: { workspace: DeliveryWorkspace }) {
     <section className={styles.auditBand} aria-labelledby="audit-title">
       <header>
         <div>
-          <span className={styles.panelIndex}>05</span>
+          <span className={styles.panelIndex}>07</span>
           <h2 id="audit-title">计划审计</h2>
         </div>
         <Badge tone="neutral" tabularNums>{workspace.audit.length} EVENTS</Badge>
@@ -1016,6 +1172,300 @@ function runStateTone(state: DeliveryWorkspace["run_state"]): BadgeTone {
       return "neutral";
     default: {
       const exhaustive: never = state;
+      return exhaustive;
+    }
+  }
+}
+
+type AvailableComparison = Extract<
+  DeliveryWorkspace["comparison"],
+  { kind: "available" }
+>;
+type ComparisonChange = AvailableComparison["changes"][number];
+type ExecutionKind = DeliveryWorkspace["execution"]["kind"];
+type ReconciliationCause = Extract<
+  DeliveryWorkspace["execution"],
+  { kind: "reconciliation_required" }
+>["reconciliation"][number]["cause"];
+
+function connectionTone(state: DeliveryConnectionState): BadgeTone {
+  switch (state) {
+    case "online":
+      return "success";
+    case "reconnecting":
+    case "offline":
+      return "warning";
+    case "sealed":
+      return "info";
+    case "idle":
+    case "connecting":
+      return "neutral";
+    default: {
+      const exhaustive: never = state;
+      return exhaustive;
+    }
+  }
+}
+
+function comparisonChangeKey(change: ComparisonChange): string {
+  switch (change.kind) {
+    case "vehicle_assignment":
+      return change.unit_id;
+    case "driver_assignment":
+      return change.vehicle_id;
+    case "stop_sequence":
+      return `${change.vehicle_id}-${change.trip_id}-${change.location_id}`;
+    case "eta":
+      return change.task_id;
+    case "cargo_placement":
+      return change.cargo_id;
+    case "metric":
+      return change.metric;
+    default: {
+      const exhaustive: never = change;
+      return exhaustive;
+    }
+  }
+}
+
+function comparisonChangeLabel(
+  kind: ComparisonChange["kind"],
+): string {
+  switch (kind) {
+    case "vehicle_assignment":
+      return "车辆";
+    case "driver_assignment":
+      return "司机";
+    case "stop_sequence":
+      return "站序";
+    case "eta":
+      return "ETA";
+    case "cargo_placement":
+      return "装载";
+    case "metric":
+      return "指标";
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
+}
+
+function comparisonChangeTone(
+  kind: ComparisonChange["kind"],
+): BadgeTone {
+  switch (kind) {
+    case "vehicle_assignment":
+    case "driver_assignment":
+      return "info";
+    case "cargo_placement":
+      return "warning";
+    case "stop_sequence":
+    case "eta":
+    case "metric":
+      return "neutral";
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
+}
+
+function comparisonChangeSubject(change: ComparisonChange): string {
+  switch (change.kind) {
+    case "vehicle_assignment":
+      return change.unit_id;
+    case "driver_assignment":
+      return change.vehicle_id;
+    case "stop_sequence":
+      return `${change.vehicle_id} / ${change.trip_id}`;
+    case "eta":
+      return change.task_id;
+    case "cargo_placement":
+      return change.cargo_id;
+    case "metric":
+      return metricLabel(change.metric);
+    default: {
+      const exhaustive: never = change;
+      return exhaustive;
+    }
+  }
+}
+
+function comparisonChangeDetail(change: ComparisonChange): string {
+  switch (change.kind) {
+    case "vehicle_assignment":
+      return `${assignmentLabel(change.before)} → ${assignmentLabel(change.after)}`;
+    case "driver_assignment":
+      return `${change.before_driver_ids.join(" / ")} → ${change.after_driver_ids.join(" / ")}`;
+    case "stop_sequence":
+      return `第 ${change.before_index + 1} 站 → 第 ${change.after_index + 1} 站 · ${change.location_id}`;
+    case "eta":
+      return `${formatDateTime(change.before_at)} → ${formatDateTime(change.after_at)} · ${formatSignedDuration(change.drift_seconds)}`;
+    case "cargo_placement":
+      return `第 ${change.before_stop_index + 1} 站 → 第 ${change.after_stop_index + 1} 站 · ${change.before_door_id} → ${change.after_door_id}`;
+    case "metric":
+      return `${formatComparisonMetric(change.metric, change.before)} → ${formatComparisonMetric(change.metric, change.after)} · ${formatSignedMetric(change.metric, change.delta)}`;
+    default: {
+      const exhaustive: never = change;
+      return exhaustive;
+    }
+  }
+}
+
+function assignmentLabel(
+  assignment: Extract<
+    ComparisonChange,
+    { kind: "vehicle_assignment" }
+  >["before"],
+): string {
+  switch (assignment.kind) {
+    case "assigned":
+      return assignment.vehicle_id;
+    case "unassigned":
+      return "未分配";
+    default: {
+      const exhaustive: never = assignment;
+      return exhaustive;
+    }
+  }
+}
+
+function metricLabel(
+  metric: Extract<ComparisonChange, { kind: "metric" }>["metric"],
+): string {
+  switch (metric) {
+    case "vehicles_used":
+      return "使用车辆";
+    case "total_distance_meters":
+      return "总里程";
+    case "total_cost_cents":
+      return "总成本";
+    case "on_time_rate_ppm":
+      return "准时率";
+    case "mean_volume_utilization_ppm":
+      return "平均装载率";
+    case "stability_cost_cents":
+      return "稳定性成本";
+    default: {
+      const exhaustive: never = metric;
+      return exhaustive;
+    }
+  }
+}
+
+function formatComparisonMetric(
+  metric: Extract<ComparisonChange, { kind: "metric" }>["metric"],
+  value: number,
+): string {
+  switch (metric) {
+    case "vehicles_used":
+      return `${value} 辆`;
+    case "total_distance_meters":
+      return formatDistance(value);
+    case "total_cost_cents":
+    case "stability_cost_cents":
+      return formatCurrency(value);
+    case "on_time_rate_ppm":
+    case "mean_volume_utilization_ppm":
+      return formatPercentFromPPM(value);
+    default: {
+      const exhaustive: never = metric;
+      return exhaustive;
+    }
+  }
+}
+
+function formatSignedMetric(
+  metric: Extract<ComparisonChange, { kind: "metric" }>["metric"],
+  value: number,
+): string {
+  const prefix = value > 0 ? "+" : "";
+  switch (metric) {
+    case "vehicles_used":
+      return `${prefix}${value} 辆`;
+    case "total_distance_meters":
+      return `${prefix}${(value / 1_000).toFixed(1)} km`;
+    case "total_cost_cents":
+    case "stability_cost_cents":
+      return `${prefix}¥${Math.round(value / 100).toLocaleString("zh-CN")}`;
+    case "on_time_rate_ppm":
+    case "mean_volume_utilization_ppm":
+      return `${prefix}${(value / 10_000).toFixed(1)}%`;
+    default: {
+      const exhaustive: never = metric;
+      return exhaustive;
+    }
+  }
+}
+
+function formatSignedDuration(seconds: number): string {
+  const prefix = seconds > 0 ? "+" : seconds < 0 ? "-" : "";
+  const absoluteSeconds = Math.abs(seconds);
+  if (absoluteSeconds < 60) {
+    return `${prefix}${absoluteSeconds} 秒`;
+  }
+  return `${prefix}${Math.round(absoluteSeconds / 60)} 分钟`;
+}
+
+function executionTitle(kind: ExecutionKind): string {
+  switch (kind) {
+    case "not_started":
+      return "尚未执行";
+    case "running":
+      return "正在回写";
+    case "partial":
+      return "部分写入";
+    case "reconciliation_required":
+      return "等待对账";
+    case "completed":
+      return "回写完成";
+    case "failed":
+      return "回写失败";
+    case "manual_review":
+      return "人工复核";
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
+}
+
+function executionTone(kind: ExecutionKind): BadgeTone {
+  switch (kind) {
+    case "completed":
+      return "success";
+    case "running":
+      return "info";
+    case "partial":
+    case "reconciliation_required":
+      return "warning";
+    case "failed":
+    case "manual_review":
+      return "danger";
+    case "not_started":
+      return "neutral";
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
+}
+
+function reconciliationCauseLabel(cause: ReconciliationCause): string {
+  switch (cause) {
+    case "request_timeout":
+      return "外部请求超时";
+    case "connection_reset":
+      return "连接被重置";
+    case "invalid_response":
+      return "响应无法确认";
+    case "provider_unavailable":
+      return "外部服务不可用";
+    case "result_mismatch":
+      return "查询结果不一致";
+    default: {
+      const exhaustive: never = cause;
       return exhaustive;
     }
   }

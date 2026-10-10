@@ -1,8 +1,9 @@
-import { Canvas, type ThreeEvent } from "@react-three/fiber";
+import { Canvas, useThree, type ThreeEvent } from "@react-three/fiber";
 import {
   BoxGeometry,
   Color,
   EdgesGeometry,
+  InstancedBufferAttribute,
   LineBasicMaterial,
   LineSegments,
   Matrix4,
@@ -86,6 +87,9 @@ export function DeliveryCargoScene({
       className={styles.cargoCanvas}
       data-cargo-renderer="webgl"
       data-cargo-count={stage.placements.length}
+      data-cargo-mode={
+        stage.placements.length > 100 ? "instanced" : "individual"
+      }
     >
       <Canvas
         orthographic
@@ -300,6 +304,21 @@ function InstancedCargo({
   const mesh = useRef<InstancedMesh>(null);
   const transform = useMemo(() => new Object3D(), []);
   const matrix = useMemo(() => new Matrix4(), []);
+  const invalidate = useThree((state) => state.invalidate);
+  const instanceColors = useMemo(() => {
+    const values = new Float32Array(placements.length * 3);
+    placements.forEach((placement, index) => {
+      const color = new Color(
+        placement.cargo_id === selectedCargoID
+          ? "#d84c3f"
+          : cargoColor(placement.cargo_id).fill,
+      );
+      values[index * 3] = color.r;
+      values[index * 3 + 1] = color.g;
+      values[index * 3 + 2] = color.b;
+    });
+    return new InstancedBufferAttribute(values, 3);
+  }, [placements, selectedCargoID]);
 
   useLayoutEffect(() => {
     placements.forEach((placement, index) => {
@@ -310,22 +329,12 @@ function InstancedCargo({
       transform.updateMatrix();
       matrix.copy(transform.matrix);
       mesh.current?.setMatrixAt(index, matrix);
-      mesh.current?.setColorAt(
-        index,
-        new Color(
-          placement.cargo_id === selectedCargoID
-            ? "#d84c3f"
-            : cargoColor(placement.cargo_id).fill,
-        ),
-      );
     });
     if (mesh.current !== null) {
       mesh.current.instanceMatrix.needsUpdate = true;
-      if (mesh.current.instanceColor !== null) {
-        mesh.current.instanceColor.needsUpdate = true;
-      }
+      invalidate();
     }
-  }, [matrix, placements, selectedCargoID, transform]);
+  }, [invalidate, matrix, placements, transform]);
 
   const selectInstance = (event: ThreeEvent<MouseEvent>) => {
     event.stopPropagation();
@@ -342,11 +351,12 @@ function InstancedCargo({
     <instancedMesh
       ref={mesh}
       args={[undefined, undefined, placements.length]}
+      instanceColor={instanceColors}
       onClick={selectInstance}
       frustumCulled={false}
     >
       <boxGeometry args={[1, 1, 1]} />
-      <meshStandardMaterial vertexColors roughness={0.8} />
+      <meshStandardMaterial roughness={0.8} />
     </instancedMesh>
   );
 }
@@ -371,6 +381,7 @@ function CargoFallback({
       className={styles.cargoFallback}
       data-cargo-renderer="svg"
       data-cargo-count={stage.placements.length}
+      data-cargo-mode="svg"
     >
       <svg
         viewBox={`0 0 ${bounds.length} ${bounds.width}`}

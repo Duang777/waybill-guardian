@@ -1,5 +1,6 @@
 import {
   deliveryWorkspaceSchema,
+  type DeliveryPlacement,
   type DeliveryWorkspace,
 } from "./contract";
 
@@ -73,7 +74,7 @@ function placement(
   position: { x: number; y: number; z: number },
   size: { length: number; width: number; height: number },
   unloadAtTaskID: string,
-) {
+): DeliveryPlacement {
   return {
     cargo_id: cargoID,
     compartment_id: "COMP-MAIN",
@@ -215,6 +216,7 @@ export function deliveryWorkspaceFixture(): DeliveryWorkspace {
     attempt: 3,
     created_at: "2026-10-10T07:42:00Z",
     updated_at: "2026-10-10T07:42:18Z",
+    last_event_seq: 4,
     problem: {
       problem_id: "PROBLEM-HZ-AM-1010",
       version: 7,
@@ -646,7 +648,48 @@ export function deliveryWorkspaceFixture(): DeliveryWorkspace {
       ],
     },
     execution: { kind: "not_started" },
-    comparison: { kind: "unavailable" },
+    comparison: {
+      kind: "available",
+      base_revision_id: "REV-HZ-1010-06",
+      changed_vehicle_count: 0,
+      changed_driver_count: 0,
+      reordered_stop_count: 1,
+      eta_drift_seconds: -420,
+      reloaded_cargo_count: 2,
+      stability_cost_cents: 8_400,
+      changes: [
+        {
+          kind: "stop_sequence",
+          vehicle_id: "浙A-D4182",
+          trip_id: "TRIP-HZ-01",
+          location_id: "LOC-SHAOXING",
+          before_index: 3,
+          after_index: 2,
+        },
+        {
+          kind: "eta",
+          task_id: "TASK-SHAOXING",
+          before_at: "2026-10-10T10:40:00+08:00",
+          after_at: "2026-10-10T10:33:00+08:00",
+          drift_seconds: -420,
+        },
+        {
+          kind: "cargo_placement",
+          cargo_id: "CARGO-007",
+          before_stop_index: 3,
+          after_stop_index: 2,
+          before_door_id: "DOOR-REAR",
+          after_door_id: "DOOR-REAR",
+        },
+        {
+          kind: "metric",
+          metric: "total_distance_meters",
+          before: 89_760,
+          after: 86_420,
+          delta: -3_340,
+        },
+      ],
+    },
     audit: [
       {
         seq: 1,
@@ -682,4 +725,290 @@ export function deliveryWorkspaceFixture(): DeliveryWorkspace {
       },
     ],
   });
+}
+
+export type DeliveryFixtureState =
+  | "normal"
+  | "empty"
+  | "failed"
+  | "expired"
+  | "stale"
+  | "rejected"
+  | "approved"
+  | "partial"
+  | "reconciliation";
+
+type DeliveryEffect = Extract<
+  DeliveryWorkspace["decision"],
+  { kind: "pending" }
+>["effects"][number];
+
+export function deliveryWorkspaceStateFixture(
+  state: DeliveryFixtureState,
+): DeliveryWorkspace {
+  const workspace = structuredClone(deliveryWorkspaceFixture());
+  if (state === "normal") {
+    return workspace;
+  }
+
+  if (state === "empty") {
+    workspace.problem.cargo = [];
+    workspace.problem.tasks.forEach((task) => {
+      task.unit_ids = [];
+    });
+    workspace.plan.duties.forEach((duty) => {
+      duty.trips.forEach((trip) => {
+        trip.load_stages.forEach((stage) => {
+          stage.placements = [];
+          stage.rehandled_cargo = [];
+        });
+      });
+    });
+    workspace.plan.metrics.assigned_units = 0;
+    workspace.plan.metrics.mean_volume_utilization_ppm = 0;
+    workspace.plan.metrics.min_volume_utilization_ppm = 0;
+    workspace.plan.metrics.mean_payload_utilization_ppm = 0;
+    workspace.plan.metrics.max_payload_utilization_ppm = 0;
+    workspace.validation.metrics = structuredClone(workspace.plan.metrics);
+    workspace.comparison = { kind: "unavailable" };
+    return deliveryWorkspaceSchema.parse(workspace);
+  }
+
+  const sourceEffects =
+    workspace.decision.kind === "pending"
+      ? workspace.decision.effects
+      : [];
+  const pendingEffects = sourceEffects.map(
+    (effect): DeliveryEffect => ({ ...effect, state: "pending" }),
+  );
+
+  switch (state) {
+    case "failed":
+      workspace.run_state = "failed";
+      workspace.decision = { kind: "not_requested" };
+      appendAudit(workspace, "run_failed", "求解服务返回不可恢复错误");
+      break;
+    case "expired":
+      workspace.run_state = "candidate";
+      workspace.decision = {
+        kind: "expired",
+        approval_id: "APPROVAL-HZ-1010-07",
+        expired_at: "2026-10-10T08:12:18Z",
+      };
+      appendAudit(workspace, "approval_expired", "审批超过有效期，计划未执行");
+      break;
+    case "stale":
+      workspace.run_state = "manual_review";
+      workspace.decision = {
+        kind: "stale",
+        approval_id: "APPROVAL-HZ-1010-07",
+        detected_at: "2026-10-10T07:48:00Z",
+        reason: "车队事实水位已变化，需要基于新快照重新优化。",
+      };
+      appendAudit(workspace, "revision_stale", "车队事实变化使当前修订失效");
+      break;
+    case "rejected":
+      workspace.run_state = "candidate";
+      workspace.decision = {
+        kind: "rejected",
+        approval_id: "APPROVAL-HZ-1010-07",
+        decided_at: "2026-10-10T07:45:00Z",
+        decided_by: "dispatcher-042",
+        reason: "客户临时调整绍兴站时间窗",
+      };
+      appendAudit(workspace, "approval_rejected", "调度员驳回当前计划修订");
+      break;
+    case "approved":
+      workspace.run_state = "executing";
+      workspace.decision = {
+        kind: "confirmed",
+        approval_id: "APPROVAL-HZ-1010-07",
+        decided_at: "2026-10-10T07:45:00Z",
+        decided_by: "dispatcher-042",
+        effects: pendingEffects,
+      };
+      appendAudit(workspace, "approval_confirmed", "调度员确认计划并冻结 effect 集合");
+      break;
+    case "partial": {
+      const effects = [
+        effectWithState(sourceEffects[0], "succeeded"),
+        effectWithState(sourceEffects[1], "failed"),
+      ].filter((effect): effect is DeliveryEffect => effect !== undefined);
+      workspace.run_state = "manual_review";
+      workspace.decision = {
+        kind: "confirmed",
+        approval_id: "APPROVAL-HZ-1010-07",
+        decided_at: "2026-10-10T07:45:00Z",
+        decided_by: "dispatcher-042",
+        effects,
+      };
+      workspace.execution = {
+        kind: "partial",
+        execution_id: "EXECUTION-HZ-1010-07",
+        started_at: "2026-10-10T07:45:01Z",
+        updated_at: "2026-10-10T07:46:20Z",
+        finished_at: "2026-10-10T07:46:20Z",
+        effects,
+      };
+      appendAudit(workspace, "execution_partial", "TMS 已写入，WMS 发布失败");
+      break;
+    }
+    case "reconciliation": {
+      const effects = [
+        effectWithState(sourceEffects[0], "succeeded"),
+        effectWithState(sourceEffects[1], "unknown"),
+      ].filter((effect): effect is DeliveryEffect => effect !== undefined);
+      const unknownEffect = effects.find((effect) => effect.state === "unknown");
+      if (unknownEffect === undefined) {
+        throw new Error("reconciliation fixture requires an unknown effect");
+      }
+      workspace.run_state = "executing";
+      workspace.decision = {
+        kind: "confirmed",
+        approval_id: "APPROVAL-HZ-1010-07",
+        decided_at: "2026-10-10T07:45:00Z",
+        decided_by: "dispatcher-042",
+        effects,
+      };
+      workspace.execution = {
+        kind: "reconciliation_required",
+        execution_id: "EXECUTION-HZ-1010-07",
+        started_at: "2026-10-10T07:45:01Z",
+        updated_at: "2026-10-10T07:46:20Z",
+        effects,
+        reconciliation: [
+          {
+            effect_id: unknownEffect.effect_id,
+            cause: "request_timeout",
+            adapter: "wms-prod",
+            last_attempt_at: "2026-10-10T07:46:18Z",
+            idempotency_key_digest: "9".repeat(64),
+            next_check_at: "2026-10-10T07:47:18Z",
+          },
+        ],
+      };
+      appendAudit(workspace, "reconciliation_required", "WMS 返回结果未知，进入只查不写对账");
+      break;
+    }
+    default: {
+      const exhaustive: never = state;
+      return exhaustive;
+    }
+  }
+
+  return deliveryWorkspaceSchema.parse(workspace);
+}
+
+export function deliveryLargeWorkspaceFixture(
+  cargoCount = 300,
+): DeliveryWorkspace {
+  const workspace = structuredClone(deliveryWorkspaceFixture());
+  const largeCargo = Array.from({ length: cargoCount }, (_, index) =>
+    cargo(index + 1, {
+      length: 250,
+      width: 350,
+      height: 300,
+      weight: 5_000,
+      temperatureZone: "ambient",
+      cargoClass: "parcel",
+    }),
+  );
+  const largePlacements = largeCargo.map((item, index) => {
+    const deliveryTaskID =
+      index < Math.ceil(cargoCount / 3)
+        ? "TASK-XIAOSHAN"
+        : index < Math.ceil((cargoCount * 2) / 3)
+          ? "TASK-SHAOXING"
+          : "TASK-YUHANG";
+    return placement(
+      item.id,
+      {
+        x: (index % 20) * 300,
+        y: (Math.floor(index / 20) % 5) * 450,
+        z: Math.floor(index / 100) * 350,
+      },
+      item.size_mm,
+      deliveryTaskID,
+    );
+  });
+
+  workspace.problem.cargo = largeCargo;
+  const loadTask = workspace.problem.tasks.find(
+    (task) => task.id === "TASK-LOAD",
+  );
+  if (loadTask === undefined) {
+    throw new Error("large fixture requires the depot load task");
+  }
+  loadTask.unit_ids = largeCargo.map((item) => item.unit_id);
+  for (const task of workspace.problem.tasks) {
+    if (task.id === "TASK-XIAOSHAN") {
+      task.unit_ids = largeCargo
+        .slice(0, Math.ceil(cargoCount / 3))
+        .map((item) => item.unit_id);
+    } else if (task.id === "TASK-SHAOXING") {
+      task.unit_ids = largeCargo
+        .slice(
+          Math.ceil(cargoCount / 3),
+          Math.ceil((cargoCount * 2) / 3),
+        )
+        .map((item) => item.unit_id);
+    } else if (task.id === "TASK-YUHANG") {
+      task.unit_ids = largeCargo
+        .slice(Math.ceil((cargoCount * 2) / 3))
+        .map((item) => item.unit_id);
+    }
+  }
+  const trip = workspace.plan.duties[0]?.trips[0];
+  if (trip === undefined) {
+    throw new Error("large fixture requires one trip");
+  }
+  const firstCut = Math.ceil(cargoCount / 3);
+  const secondCut = Math.ceil((cargoCount * 2) / 3);
+  const stages = [
+    largePlacements,
+    largePlacements.slice(firstCut),
+    largePlacements.slice(secondCut),
+    [],
+  ];
+  trip.load_stages.forEach((stage, index) => {
+    stage.placements = stages[index] ?? [];
+    stage.rehandled_cargo = [];
+  });
+  workspace.plan.metrics.assigned_units = cargoCount;
+  workspace.validation.metrics = structuredClone(workspace.plan.metrics);
+  if (workspace.decision.kind === "pending") {
+    const loadingEffect = workspace.decision.effects.find(
+      (effect) => effect.action === "wms.publish_loading_instruction",
+    );
+    if (loadingEffect !== undefined) {
+      loadingEffect.summary = `发布 ${cargoCount} 件货物的装车与逐站卸货指令`;
+    }
+  }
+  return deliveryWorkspaceSchema.parse(workspace);
+}
+
+function effectWithState(
+  effect: DeliveryEffect | undefined,
+  state: DeliveryEffect["state"],
+): DeliveryEffect | undefined {
+  return effect === undefined ? undefined : { ...effect, state };
+}
+
+function appendAudit(
+  workspace: DeliveryWorkspace,
+  type: string,
+  summary: string,
+): void {
+  const seq = workspace.audit.length + 1;
+  const occurredAt = "2026-10-10T07:48:00Z";
+  workspace.audit.push({
+    seq,
+    type,
+    occurred_at: occurredAt,
+    actor: "delivery-service",
+    summary,
+    artifact_digest: workspace.plan.plan_digest,
+  });
+  workspace.last_event_seq = seq;
+  workspace.updated_at = occurredAt;
 }

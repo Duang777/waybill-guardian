@@ -28,6 +28,12 @@ React 运营控制台。目标是在三分钟内显示异常、归因、审批�
 - API 响应通过 Zod 在边界解析。结构不符合契约时，页面显示错误。
 - Delivery 调度台只接受 `delivery.workspace.v1` read model。它复验 revision 和
   problem/policy/commitment/plan digest 绑定，并拒绝悬空车辆、位置、任务、货物、舱室和门引用。
+- Delivery workspace snapshot 的 `last_event_seq` 必须等于审计尾序号。页面随后订阅
+  `/api/delivery/plan-revisions/:revisionID/events?after=:last_event_seq`，按 seq 去重，再重新读取
+  权威 workspace；SSE 不携带大型路线或装载坐标。
+- Delivery 修订差异使用有类型的 vehicle/driver/stop/ETA/cargo/metric change。执行投影区分
+  running、partial、reconciliation_required、completed、failed 和 manual_review，并要求
+  unknown effect 与对账项一一对应。浏览器不提供“盲目重试”操作。
 - Delivery 路线、司机时间轴、SOC 和装载阶段由同一个离散 stop 游标驱动。浏览器只投影
   artifact，不补算路线、装载坐标、校验结论或收益。
 - Delivery 3D 装载静止时使用 `frameloop="demand"`，超过 100 件货物切换
@@ -87,8 +93,10 @@ transform/opacity，动态切换 reduced-motion 后要求无位移，并保存�
 生产构建同时要求入口 gzip 相对 `187686` 字节基线增长小于 25 KB。
 
 `npm run verify:delivery` 用版本化 API fixture 验证调度台 WebGL 像素、路线与装载联动、
-键盘步骤切换、context 丢失后的 SVG 降级、审批按钮命中区、375 像素无横向溢出和契约错误态。
-脚本保存桌面与手机完整截图。
+键盘步骤切换、SSE 游标去重与断线审批锁、context 丢失后的 SVG 降级、审批按钮命中区、
+桌面和 375 像素下的 normal/empty/failed/expired/stale/rejected/approved/partial/
+reconciliation/fallback 状态矩阵，以及 300 件 InstancedMesh 容量和重复挂载资源门禁。
+脚本保存桌面、手机和 300 件装载截图。
 
 `npm run record:demo` 默认使用在线模型，启动隔离服务并录制确认、回放和驳回路径，再用
 ffmpeg 生成带中文字幕的 MP4。默认分辨率是 1600×900；正式高清录制可设置

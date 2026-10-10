@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { APIError } from "../api";
 import {
+  deliveryStreamEventSchema,
   deliveryWorkspaceSchema,
+  type DeliveryStreamEvent,
   type DeliveryWorkspace,
   type PlanRevisionID,
 } from "./contract";
@@ -16,6 +18,18 @@ const problemSchema = z
       .strict(),
   })
   .strict();
+
+export type DeliveryStreamConnectionState =
+  | "connecting"
+  | "online"
+  | "reconnecting"
+  | "closed";
+
+type DeliveryStreamHandlers = {
+  onEvent: (event: DeliveryStreamEvent) => void;
+  onConnectionChange: (state: DeliveryStreamConnectionState) => void;
+  onError: (message: string) => void;
+};
 
 export async function getDeliveryWorkspace(
   revisionID: PlanRevisionID,
@@ -101,6 +115,70 @@ export function rejectDeliveryApproval(
     { reason },
     signal,
   );
+}
+
+export function openDeliveryWorkspaceEvents(
+  revisionID: PlanRevisionID,
+  after: number,
+  handlers: DeliveryStreamHandlers,
+): () => void {
+  const query = new URLSearchParams({ after: String(after) });
+  const source = new EventSource(
+    `/api/delivery/plan-revisions/${encodeURIComponent(revisionID)}/events?${query.toString()}`,
+  );
+  let cursor = after;
+  let closed = false;
+  handlers.onConnectionChange("connecting");
+
+  const close = (): void => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    source.close();
+    handlers.onConnectionChange("closed");
+  };
+  const receive = (message: Event): void => {
+    if (!(message instanceof MessageEvent) || typeof message.data !== "string") {
+      return;
+    }
+    try {
+      const raw: unknown = JSON.parse(message.data);
+      const event = deliveryStreamEventSchema.parse(raw);
+      if (event.revision_id !== revisionID) {
+        throw new Error("实时事件属于其他计划修订");
+      }
+      if (
+        message.lastEventId !== "" &&
+        message.lastEventId !== String(event.seq)
+      ) {
+        throw new Error("实时事件游标与 SSE id 不一致");
+      }
+      if (event.seq <= cursor) {
+        return;
+      }
+      cursor = event.seq;
+      handlers.onEvent(event);
+      handlers.onConnectionChange("online");
+    } catch (error) {
+      handlers.onConnectionChange("reconnecting");
+      handlers.onError(
+        error instanceof Error ? error.message : "调度实时事件无法解析",
+      );
+    }
+  };
+
+  source.addEventListener("message", receive);
+  for (const kind of deliveryStreamEventSchema.shape.kind.options) {
+    source.addEventListener(kind, receive);
+  }
+  source.onopen = () => handlers.onConnectionChange("online");
+  source.onerror = () => {
+    if (!closed) {
+      handlers.onConnectionChange("reconnecting");
+    }
+  };
+  return close;
 }
 
 async function submitDeliveryDecision(

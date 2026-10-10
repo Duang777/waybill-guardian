@@ -360,6 +360,30 @@ const effectSchema = z
   })
   .strict();
 
+const executionFields = {
+  execution_id: identifierSchema,
+  started_at: timestampSchema,
+  updated_at: timestampSchema,
+  effects: z.array(effectSchema).min(1),
+};
+
+const reconciliationItemSchema = z
+  .object({
+    effect_id: identifierSchema,
+    cause: z.enum([
+      "request_timeout",
+      "connection_reset",
+      "invalid_response",
+      "provider_unavailable",
+      "result_mismatch",
+    ]),
+    adapter: z.string().min(1),
+    last_attempt_at: timestampSchema,
+    idempotency_key_digest: digestSchema,
+    next_check_at: timestampSchema,
+  })
+  .strict();
+
 const decisionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("not_requested") }).strict(),
   z
@@ -406,15 +430,191 @@ const decisionSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
-const executionSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("not_started") }).strict(),
+const executionSchema = z
+  .discriminatedUnion("kind", [
+    z.object({ kind: z.literal("not_started") }).strict(),
+    z
+      .object({
+        kind: z.literal("running"),
+        ...executionFields,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("partial"),
+        ...executionFields,
+        finished_at: timestampSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("reconciliation_required"),
+        ...executionFields,
+        reconciliation: z.array(reconciliationItemSchema).min(1),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("completed"),
+        ...executionFields,
+        committed_at: timestampSchema,
+        active_revision_id: planRevisionIdSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("failed"),
+        ...executionFields,
+        failed_at: timestampSchema,
+        failure_code: z.string().min(1),
+        detail: z.string().min(1),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("manual_review"),
+        ...executionFields,
+        entered_at: timestampSchema,
+        reason: z.string().min(1),
+      })
+      .strict(),
+  ])
+  .superRefine((execution, context) => {
+    if (execution.kind === "not_started") {
+      return;
+    }
+    const states = execution.effects.map((effect) => effect.state);
+    if (
+      execution.kind === "running" &&
+      states.some((state) => state === "unknown" || state === "failed")
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "running execution cannot contain terminal or unknown effects",
+        path: ["effects"],
+      });
+    }
+    if (
+      execution.kind === "partial" &&
+      (!states.includes("succeeded") || !states.includes("failed"))
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "partial execution requires succeeded and failed effects",
+        path: ["effects"],
+      });
+    }
+    if (
+      execution.kind === "completed" &&
+      states.some((state) => state !== "succeeded")
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "completed execution requires every effect to succeed",
+        path: ["effects"],
+      });
+    }
+    if (
+      execution.kind === "failed" &&
+      !states.includes("failed")
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "failed execution requires a failed effect",
+        path: ["effects"],
+      });
+    }
+    if (execution.kind === "reconciliation_required") {
+      const unknownEffectIDs = execution.effects
+        .filter((effect) => effect.state === "unknown")
+        .map((effect) => effect.effect_id)
+        .sort();
+      const reconciliationEffectIDs = execution.reconciliation
+        .map((item) => item.effect_id)
+        .sort();
+      if (
+        unknownEffectIDs.length === 0 ||
+        unknownEffectIDs.join("\n") !== reconciliationEffectIDs.join("\n")
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "reconciliation items must match unknown effects",
+          path: ["reconciliation"],
+        });
+      }
+    }
+  });
+
+const assignmentSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("unassigned") }).strict(),
   z
     .object({
-      kind: z.enum(["running", "partial", "completed", "failed"]),
-      execution_id: identifierSchema,
-      started_at: timestampSchema,
-      updated_at: timestampSchema,
-      effects: z.array(effectSchema).min(1),
+      kind: z.literal("assigned"),
+      vehicle_id: identifierSchema,
+    })
+    .strict(),
+]);
+
+const comparisonChangeSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("vehicle_assignment"),
+      unit_id: identifierSchema,
+      before: assignmentSchema,
+      after: assignmentSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("driver_assignment"),
+      vehicle_id: identifierSchema,
+      before_driver_ids: z.array(identifierSchema).min(1),
+      after_driver_ids: z.array(identifierSchema).min(1),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("stop_sequence"),
+      vehicle_id: identifierSchema,
+      trip_id: identifierSchema,
+      location_id: identifierSchema,
+      before_index: nonnegativeIntegerSchema,
+      after_index: nonnegativeIntegerSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("eta"),
+      task_id: identifierSchema,
+      before_at: timestampSchema,
+      after_at: timestampSchema,
+      drift_seconds: signedSafeIntegerSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("cargo_placement"),
+      cargo_id: identifierSchema,
+      before_stop_index: nonnegativeIntegerSchema,
+      after_stop_index: nonnegativeIntegerSchema,
+      before_door_id: identifierSchema,
+      after_door_id: identifierSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("metric"),
+      metric: z.enum([
+        "vehicles_used",
+        "total_distance_meters",
+        "total_cost_cents",
+        "on_time_rate_ppm",
+        "mean_volume_utilization_ppm",
+        "stability_cost_cents",
+      ]),
+      before: signedSafeIntegerSchema,
+      after: signedSafeIntegerSchema,
+      delta: signedSafeIntegerSchema,
     })
     .strict(),
 ]);
@@ -431,6 +631,7 @@ const comparisonSchema = z.discriminatedUnion("kind", [
       eta_drift_seconds: signedSafeIntegerSchema,
       reloaded_cargo_count: nonnegativeIntegerSchema,
       stability_cost_cents: nonnegativeSafeIntegerSchema,
+      changes: z.array(comparisonChangeSchema).min(1),
     })
     .strict(),
 ]);
@@ -443,6 +644,24 @@ const auditEventSchema = z
     actor: z.string().min(1),
     summary: z.string().min(1),
     artifact_digest: digestSchema,
+  })
+  .strict();
+
+export const deliveryStreamEventSchema = z
+  .object({
+    schema_version: z.literal("delivery.workspace-event.v1"),
+    event_id: identifierSchema,
+    seq: z.number().int().positive(),
+    revision_id: planRevisionIdSchema,
+    workspace_version: z.number().int().positive(),
+    occurred_at: timestampSchema,
+    kind: z.enum([
+      "run_state_changed",
+      "approval_changed",
+      "execution_changed",
+      "revision_stale",
+      "audit_appended",
+    ]),
   })
   .strict();
 
@@ -465,6 +684,7 @@ export const deliveryWorkspaceSchema = z
     attempt: z.number().int().positive(),
     created_at: timestampSchema,
     updated_at: timestampSchema,
+    last_event_seq: nonnegativeIntegerSchema,
     problem: z
       .object({
         problem_id: identifierSchema,
@@ -524,6 +744,44 @@ export const deliveryWorkspaceSchema = z
         path: ["execution", "kind"],
       });
     }
+    if (
+      workspace.execution.kind !== "not_started" &&
+      workspace.decision.kind === "confirmed"
+    ) {
+      const approvedEffectIDs = workspace.decision.effects
+        .map((effect) => effect.effect_id)
+        .sort();
+      const executionEffectIDs = workspace.execution.effects
+        .map((effect) => effect.effect_id)
+        .sort();
+      if (approvedEffectIDs.join("\n") !== executionEffectIDs.join("\n")) {
+        context.addIssue({
+          code: "custom",
+          message: "execution effects do not match the confirmed approval",
+          path: ["execution", "effects"],
+        });
+      }
+    }
+    if (
+      workspace.execution.kind === "completed" &&
+      workspace.execution.active_revision_id !== workspace.plan.revision_id
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "completed execution activated another plan revision",
+        path: ["execution", "active_revision_id"],
+      });
+    }
+    if (
+      workspace.comparison.kind === "available" &&
+      workspace.comparison.base_revision_id === workspace.plan.revision_id
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "comparison base must differ from the current revision",
+        path: ["comparison", "base_revision_id"],
+      });
+    }
     workspace.audit.forEach((event, index) => {
       if (event.seq !== index + 1) {
         context.addIssue({
@@ -533,6 +791,14 @@ export const deliveryWorkspaceSchema = z
         });
       }
     });
+    const auditTail = workspace.audit.at(-1)?.seq ?? 0;
+    if (workspace.last_event_seq !== auditTail) {
+      context.addIssue({
+        code: "custom",
+        message: "workspace event cursor must match the audit tail",
+        path: ["last_event_seq"],
+      });
+    }
     const locationIDs = new Set(
       workspace.problem.locations.map((location) => location.id),
     );
@@ -657,3 +923,4 @@ export type DeliveryPlacement = DeliveryLoadStage["placements"][number];
 export type DeliveryVehicle = DeliveryWorkspace["problem"]["vehicles"][number];
 export type DeliveryLocation = DeliveryWorkspace["problem"]["locations"][number];
 export type DeliveryTask = DeliveryWorkspace["problem"]["tasks"][number];
+export type DeliveryStreamEvent = z.infer<typeof deliveryStreamEventSchema>;

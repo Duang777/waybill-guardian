@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { deliveryWorkspaceSchema } from "./contract";
-import { deliveryWorkspaceFixture } from "./test-fixture";
+import {
+  deliveryWorkspaceFixture,
+  deliveryWorkspaceStateFixture,
+} from "./test-fixture";
 
 describe("deliveryWorkspaceSchema", () => {
   it("parses a complete versioned workspace", () => {
@@ -11,6 +14,8 @@ describe("deliveryWorkspaceSchema", () => {
     expect(workspace.validation.schema_version).toBe(
       "delivery.validation.v1",
     );
+    expect(workspace.last_event_seq).toBe(4);
+    expect(workspace.comparison.kind).toBe("available");
   });
 
   it("rejects fields outside the versioned contract", () => {
@@ -73,6 +78,51 @@ describe("deliveryWorkspaceSchema", () => {
     event.seq = 9;
 
     expect(deliveryWorkspaceSchema.safeParse(raw).success).toBe(false);
+  });
+
+  it("rejects a snapshot cursor that does not match the audit tail", () => {
+    const raw = structuredClone(deliveryWorkspaceFixture());
+    raw.last_event_seq = 3;
+
+    const parsed = deliveryWorkspaceSchema.safeParse(raw);
+
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues.map((issue) => issue.message)).toContain(
+        "workspace event cursor must match the audit tail",
+      );
+    }
+  });
+
+  it("requires reconciliation entries for every unknown effect", () => {
+    const raw = structuredClone(
+      deliveryWorkspaceStateFixture("reconciliation"),
+    );
+    if (raw.execution.kind !== "reconciliation_required") {
+      throw new Error("fixture requires reconciliation");
+    }
+    raw.execution.reconciliation = [];
+
+    expect(deliveryWorkspaceSchema.safeParse(raw).success).toBe(false);
+  });
+
+  it("requires partial execution to preserve both outcomes", () => {
+    const raw = structuredClone(deliveryWorkspaceStateFixture("partial"));
+    if (raw.execution.kind !== "partial") {
+      throw new Error("fixture requires partial execution");
+    }
+    raw.execution.effects.forEach((effect) => {
+      effect.state = "succeeded";
+    });
+
+    const parsed = deliveryWorkspaceSchema.safeParse(raw);
+
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues.map((issue) => issue.message)).toContain(
+        "partial execution requires succeeded and failed effects",
+      );
+    }
   });
 
   it("rejects orphaned route and loading references", () => {
