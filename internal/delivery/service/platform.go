@@ -22,6 +22,9 @@ var (
 	ErrNoWork              = errors.New("delivery worker has no work")
 	ErrSolverExhausted     = errors.New("delivery solver exhausted its fixed budget")
 	ErrSolverAborted       = errors.New("delivery solver was aborted")
+	ErrApprovalExpired     = errors.New("delivery approval expired")
+	ErrApprovalStale       = errors.New("delivery approval is stale")
+	ErrSeparationOfDuties  = errors.New("delivery approval requires a different reviewer")
 )
 
 type IdempotencyKey string
@@ -45,6 +48,13 @@ const (
 	EventRunFailed          EventType = "run.failed"
 	EventRevisionPublished  EventType = "revision.published"
 	EventRevisionActivated  EventType = "revision.activated"
+	EventApprovalRequested  EventType = "approval.requested"
+	EventApprovalDecided    EventType = "approval.decided"
+	EventExecutionCreated   EventType = "execution.created"
+	EventEffectClaimed      EventType = "effect.claimed"
+	EventEffectCompleted    EventType = "effect.completed"
+	EventActivationFailed   EventType = "revision.activation_failed"
+	EventRevisionSuperseded EventType = "revision.superseded"
 )
 
 type AggregateType string
@@ -126,6 +136,83 @@ type FinishRunTx struct {
 	Now         time.Time
 }
 
+type PrepareApprovalTx struct {
+	IdempotencyKey          IdempotencyKey
+	RequestDigest           domain.ArtifactDigest
+	ExpectedRevisionVersion uint64
+	Actor                   Actor
+	Approval                domain.PlanApproval
+}
+
+type ApprovalDecision string
+
+const (
+	ConfirmApproval ApprovalDecision = "confirm"
+	RejectApproval  ApprovalDecision = "reject"
+)
+
+type DecideExecutionTx struct {
+	TenantID                 domain.TenantID
+	IdempotencyKey           IdempotencyKey
+	RequestDigest            domain.ArtifactDigest
+	Actor                    Actor
+	ApprovalID               domain.ApprovalID
+	ExpectedVersion          uint64
+	ExpectedActiveRevisionID domain.PlanRevisionID
+	ExpectedActiveVersion    uint64
+	Decision                 ApprovalDecision
+	RejectReason             string
+	OverrideReason           string
+	Execution                domain.DispatchExecution
+	Effects                  []domain.EffectRecord
+	Now                      time.Time
+}
+
+type ClaimEffects struct {
+	TenantID domain.TenantID
+	WorkerID string
+	Limit    int
+	LeaseTTL time.Duration
+	Now      time.Time
+}
+
+type EffectClaim struct {
+	Effect       domain.EffectRecord
+	Operation    domain.EffectOperation
+	WorkerID     string
+	FencingToken uint64
+}
+
+type CompleteEffectTx struct {
+	Status         domain.EffectStatus
+	NextOperation  domain.EffectOperation
+	ExternalRef    string
+	ResponseDigest domain.ArtifactDigest
+	ErrorCode      string
+	RetryAt        *time.Time
+	ObservedAt     time.Time
+}
+
+type EffectCompletion struct {
+	ExecutionID     domain.ExecutionID
+	ActivationReady bool
+}
+
+type ActivateRevisionTx struct {
+	TenantID      domain.TenantID
+	ExecutionID   domain.ExecutionID
+	PlanID        domain.PlanID
+	RevisionID    domain.PlanRevisionID
+	ActiveVersion uint64
+	Now           time.Time
+}
+
+type ExpireApprovals struct {
+	TenantID domain.TenantID
+	Limit    int
+	Now      time.Time
+}
+
 type StreamCursor struct {
 	TenantID      domain.TenantID
 	AggregateType AggregateType
@@ -134,6 +221,7 @@ type StreamCursor struct {
 }
 
 type RecoveryItem struct {
+	TenantID   domain.TenantID
 	Kind       string
 	ResourceID string
 	Status     string
@@ -164,6 +252,21 @@ type Store interface {
 		error,
 	)
 	FinishRun(context.Context, RunClaim, FinishRunTx) error
+	PrepareApproval(context.Context, PrepareApprovalTx) (
+		domain.PlanApproval,
+		Replay,
+		error,
+	)
+	DecideAndCreateExecution(context.Context, DecideExecutionTx) (
+		domain.DispatchExecution,
+		Replay,
+		error,
+	)
+	ClaimEffects(context.Context, ClaimEffects) ([]EffectClaim, error)
+	RenewEffectLease(context.Context, EffectClaim, time.Time) error
+	CompleteEffect(context.Context, EffectClaim, CompleteEffectTx) (EffectCompletion, error)
+	ActivateRevision(context.Context, ActivateRevisionTx) error
+	ExpireApprovals(context.Context, ExpireApprovals) (int, error)
 	RequestRunCancellation(
 		context.Context,
 		domain.TenantID,
@@ -194,6 +297,16 @@ type Store interface {
 		domain.TenantID,
 		domain.PlanRevisionID,
 	) (domain.PlanRevision, error)
+	GetApproval(
+		context.Context,
+		domain.TenantID,
+		domain.ApprovalID,
+	) (domain.PlanApproval, error)
+	GetExecution(
+		context.Context,
+		domain.TenantID,
+		domain.ExecutionID,
+	) (domain.DispatchExecution, []domain.EffectRecord, error)
 	ArtifactReachable(
 		context.Context,
 		domain.TenantID,
@@ -234,6 +347,27 @@ type CancelOptimization struct {
 	ExpectedVersion uint64
 }
 
+type RequestPlanApproval struct {
+	TenantID        domain.TenantID
+	Actor           Actor
+	IdempotencyKey  IdempotencyKey
+	RevisionID      domain.PlanRevisionID
+	ExpectedVersion uint64
+	TTL             time.Duration
+	Reason          string
+}
+
+type DecideApproval struct {
+	TenantID        domain.TenantID
+	Actor           Actor
+	IdempotencyKey  IdempotencyKey
+	ApprovalID      domain.ApprovalID
+	ExpectedVersion uint64
+	Decision        ApprovalDecision
+	RejectReason    string
+	OverrideReason  string
+}
+
 type Commands interface {
 	CreateProblem(context.Context, CreateProblem) (domain.ProblemVersion, Replay, error)
 	RequestOptimization(context.Context, RequestOptimization) (
@@ -243,6 +377,16 @@ type Commands interface {
 	)
 	CancelOptimization(context.Context, CancelOptimization) (
 		domain.OptimizationRun,
+		error,
+	)
+	RequestPlanApproval(context.Context, RequestPlanApproval) (
+		domain.PlanApproval,
+		Replay,
+		error,
+	)
+	DecideApproval(context.Context, DecideApproval) (
+		domain.DispatchExecution,
+		Replay,
 		error,
 	)
 }
@@ -269,6 +413,16 @@ type Queries interface {
 		domain.TenantID,
 		domain.PlanRevisionID,
 	) (domain.PlanRevision, error)
+	GetApproval(
+		context.Context,
+		domain.TenantID,
+		domain.ApprovalID,
+	) (domain.PlanApproval, error)
+	GetExecution(
+		context.Context,
+		domain.TenantID,
+		domain.ExecutionID,
+	) (domain.DispatchExecution, []domain.EffectRecord, error)
 	OpenArtifact(
 		context.Context,
 		domain.TenantID,
@@ -286,6 +440,7 @@ type Platform interface {
 	Queries() Queries
 	EventStreams() EventStreams
 	RunWorker(WorkerConfig) (*RunWorker, error)
+	EffectWorker(EffectWorkerConfig) (*EffectWorker, error)
 	Recover(context.Context) error
 }
 
@@ -316,6 +471,14 @@ type Validator interface {
 		domain.Plan,
 		time.Time,
 	) domain.ValidationReport
+}
+
+type EffectPlanner interface {
+	BuildEffectSet(
+		domain.TenantID,
+		domain.PlanRevisionID,
+		domain.Plan,
+	) (domain.EffectSet, error)
 }
 
 type SourceBuildRequest struct {

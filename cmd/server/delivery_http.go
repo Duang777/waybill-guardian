@@ -29,11 +29,22 @@ func (a *api) mountDeliveryRoutes() {
 	a.mux.HandleFunc("GET /api/v1/delivery/runs/{id}/candidate", a.getDeliveryCandidate)
 	a.mux.HandleFunc("GET /api/v1/delivery/plans/{id}", a.getDeliveryPlan)
 	a.mux.HandleFunc("GET /api/v1/delivery/revisions/{id}", a.getDeliveryRevision)
+	a.mux.HandleFunc(
+		"POST /api/v1/delivery/revisions/{id}/approval-requests",
+		a.requestDeliveryPlanApproval,
+	)
+	a.mux.HandleFunc("GET /api/v1/delivery/approvals/{id}", a.getDeliveryApproval)
+	a.mux.HandleFunc(
+		"POST /api/v1/delivery/approvals/{id}/decisions",
+		a.decideDeliveryApproval,
+	)
+	a.mux.HandleFunc("GET /api/v1/delivery/executions/{id}", a.getDeliveryExecution)
 	a.mux.HandleFunc("GET /api/v1/delivery/artifacts/{digest}", a.getDeliveryArtifact)
 	a.mux.HandleFunc("GET /api/v1/delivery/problems/{id}/events", a.deliveryProblemEvents)
 	a.mux.HandleFunc("GET /api/v1/delivery/runs/{id}/events", a.deliveryRunEvents)
 	a.mux.HandleFunc("GET /api/v1/delivery/plans/{id}/events", a.deliveryPlanEvents)
 	a.mux.HandleFunc("GET /api/v1/delivery/revisions/{id}/events", a.deliveryRevisionEvents)
+	a.mux.HandleFunc("GET /api/v1/delivery/executions/{id}/events", a.deliveryExecutionEvents)
 }
 
 func (a *api) createDeliveryProblem(w http.ResponseWriter, r *http.Request) {
@@ -277,6 +288,180 @@ func (a *api) getDeliveryRevision(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, value)
 }
 
+func (a *api) requestDeliveryPlanApproval(w http.ResponseWriter, r *http.Request) {
+	principal, _, ok := a.grant(w, r, httpauth.DeliveryOptimize)
+	if !ok {
+		return
+	}
+	if err := requireJSONContentType(r.Header.Get("Content-Type")); err != nil {
+		writeProblem(w, http.StatusUnsupportedMediaType, "invalid_content_type", err.Error())
+		return
+	}
+	key, err := deliveryIdempotencyKey(r)
+	if err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid_idempotency_key", err.Error())
+		return
+	}
+	expected, err := parseIfMatch(r.Header.Get("If-Match"))
+	if err != nil {
+		writeProblem(w, http.StatusPreconditionRequired, "if_match_required", err.Error())
+		return
+	}
+	var body struct {
+		TTLSeconds int64  `json:"ttl_seconds"`
+		Reason     string `json:"reason"`
+	}
+	if err := decodeJSON(r.Body, &body); err != nil ||
+		body.TTLSeconds <= 0 ||
+		body.TTLSeconds > int64((24*time.Hour)/time.Second) ||
+		strings.TrimSpace(body.Reason) == "" {
+		writeProblem(
+			w,
+			http.StatusBadRequest,
+			"invalid_body",
+			"ttl_seconds and reason are required",
+		)
+		return
+	}
+	value, replay, err := a.delivery.Commands().RequestPlanApproval(
+		r.Context(),
+		deliveryservice.RequestPlanApproval{
+			TenantID:        deliverydomain.TenantID(principal.TenantID()),
+			Actor:           deliveryservice.Actor{Subject: principal.Subject()},
+			IdempotencyKey:  key,
+			RevisionID:      deliverydomain.PlanRevisionID(r.PathValue("id")),
+			ExpectedVersion: expected,
+			TTL:             time.Duration(body.TTLSeconds) * time.Second,
+			Reason:          strings.TrimSpace(body.Reason),
+		},
+	)
+	if err != nil {
+		writeDeliveryError(w, err)
+		return
+	}
+	if replay.Replayed {
+		w.Header().Set("Idempotent-Replayed", "true")
+	}
+	w.Header().Set("ETag", quotedVersion(value.Version))
+	writeJSON(w, http.StatusCreated, value)
+}
+
+func (a *api) getDeliveryApproval(w http.ResponseWriter, r *http.Request) {
+	principal, _, ok := a.grant(w, r, httpauth.DeliveryRead)
+	if !ok {
+		return
+	}
+	value, err := a.delivery.Queries().GetApproval(
+		r.Context(),
+		deliverydomain.TenantID(principal.TenantID()),
+		deliverydomain.ApprovalID(r.PathValue("id")),
+	)
+	if err != nil {
+		writeDeliveryError(w, err)
+		return
+	}
+	w.Header().Set("ETag", quotedVersion(value.Version))
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (a *api) decideDeliveryApproval(w http.ResponseWriter, r *http.Request) {
+	principal, _, ok := a.grant(w, r, httpauth.DeliveryApprove)
+	if !ok {
+		return
+	}
+	if err := requireJSONContentType(r.Header.Get("Content-Type")); err != nil {
+		writeProblem(w, http.StatusUnsupportedMediaType, "invalid_content_type", err.Error())
+		return
+	}
+	key, err := deliveryIdempotencyKey(r)
+	if err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid_idempotency_key", err.Error())
+		return
+	}
+	expected, err := parseIfMatch(r.Header.Get("If-Match"))
+	if err != nil {
+		writeProblem(w, http.StatusPreconditionRequired, "if_match_required", err.Error())
+		return
+	}
+	var body struct {
+		Decision       deliveryservice.ApprovalDecision `json:"decision"`
+		RejectReason   string                           `json:"reject_reason,omitempty"`
+		OverrideReason string                           `json:"override_reason,omitempty"`
+	}
+	if err := decodeJSON(r.Body, &body); err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	body.RejectReason = strings.TrimSpace(body.RejectReason)
+	body.OverrideReason = strings.TrimSpace(body.OverrideReason)
+	if body.OverrideReason != "" {
+		if _, err := a.access.Grant(principal, httpauth.DeliveryOverride); err != nil {
+			a.writeAccessError(w, err)
+			return
+		}
+	}
+	value, replay, err := a.delivery.Commands().DecideApproval(
+		r.Context(),
+		deliveryservice.DecideApproval{
+			TenantID:        deliverydomain.TenantID(principal.TenantID()),
+			Actor:           deliveryservice.Actor{Subject: principal.Subject()},
+			IdempotencyKey:  key,
+			ApprovalID:      deliverydomain.ApprovalID(r.PathValue("id")),
+			ExpectedVersion: expected,
+			Decision:        body.Decision,
+			RejectReason:    body.RejectReason,
+			OverrideReason:  body.OverrideReason,
+		},
+	)
+	if err != nil {
+		writeDeliveryError(w, err)
+		return
+	}
+	if replay.Replayed {
+		w.Header().Set("Idempotent-Replayed", "true")
+	}
+	if body.Decision == deliveryservice.RejectApproval {
+		approval, getErr := a.delivery.Queries().GetApproval(
+			r.Context(),
+			deliverydomain.TenantID(principal.TenantID()),
+			deliverydomain.ApprovalID(r.PathValue("id")),
+		)
+		if getErr != nil {
+			writeDeliveryError(w, getErr)
+			return
+		}
+		w.Header().Set("ETag", quotedVersion(approval.Version))
+		writeJSON(w, http.StatusOK, approval)
+		return
+	}
+	w.Header().Set("ETag", quotedVersion(value.Version))
+	writeJSON(w, http.StatusAccepted, value)
+}
+
+func (a *api) getDeliveryExecution(w http.ResponseWriter, r *http.Request) {
+	principal, _, ok := a.grant(w, r, httpauth.DeliveryRead)
+	if !ok {
+		return
+	}
+	value, effects, err := a.delivery.Queries().GetExecution(
+		r.Context(),
+		deliverydomain.TenantID(principal.TenantID()),
+		deliverydomain.ExecutionID(r.PathValue("id")),
+	)
+	if err != nil {
+		writeDeliveryError(w, err)
+		return
+	}
+	w.Header().Set("ETag", quotedVersion(value.Version))
+	writeJSON(w, http.StatusOK, struct {
+		Execution deliverydomain.DispatchExecution `json:"execution"`
+		Effects   []deliverydomain.EffectRecord    `json:"effects"`
+	}{
+		Execution: value,
+		Effects:   effects,
+	})
+}
+
 func (a *api) getDeliveryArtifact(w http.ResponseWriter, r *http.Request) {
 	principal, _, ok := a.grant(w, r, httpauth.DeliveryArtifactRead)
 	if !ok {
@@ -315,6 +500,10 @@ func (a *api) deliveryPlanEvents(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) deliveryRevisionEvents(w http.ResponseWriter, r *http.Request) {
 	a.deliveryEvents(w, r, deliveryservice.AggregateRevision)
+}
+
+func (a *api) deliveryExecutionEvents(w http.ResponseWriter, r *http.Request) {
+	a.deliveryEvents(w, r, deliveryservice.AggregateExecution)
 }
 
 func (a *api) deliveryEvents(
@@ -476,8 +665,12 @@ func writeDeliveryError(w http.ResponseWriter, err error) {
 	case errors.Is(err, deliveryservice.ErrIdempotencyConflict):
 		writeProblem(w, http.StatusConflict, "idempotency_conflict", err.Error())
 	case errors.Is(err, deliveryservice.ErrConflict),
-		errors.Is(err, deliveryservice.ErrCursorAhead):
+		errors.Is(err, deliveryservice.ErrCursorAhead),
+		errors.Is(err, deliveryservice.ErrApprovalExpired),
+		errors.Is(err, deliveryservice.ErrApprovalStale):
 		writeProblem(w, http.StatusConflict, "version_conflict", err.Error())
+	case errors.Is(err, deliveryservice.ErrSeparationOfDuties):
+		writeProblem(w, http.StatusForbidden, "separation_of_duties", err.Error())
 	case errors.Is(err, deliveryservice.ErrServiceClosed):
 		writeProblem(w, http.StatusServiceUnavailable, "service_closing", "service is shutting down")
 	case errors.Is(err, deliveryartifact.ErrIntegrity):

@@ -55,6 +55,7 @@ type OptimizationRun struct {
 	ProblemDigest     ArtifactDigest    `json:"problem_digest"`
 	SolverProfile     string            `json:"solver_profile"`
 	ConfigDigest      ArtifactDigest    `json:"config_digest"`
+	RequestedBy       string            `json:"requested_by"`
 	Status            RunStatus         `json:"status"`
 	Version           uint64            `json:"version"`
 	CancelRequestedAt *time.Time        `json:"cancel_requested_at,omitempty"`

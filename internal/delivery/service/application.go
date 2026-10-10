@@ -15,27 +15,32 @@ import (
 
 	"github.com/Duang777/waybill-guardian/internal/delivery/artifact"
 	"github.com/Duang777/waybill-guardian/internal/delivery/domain"
+	"github.com/Duang777/waybill-guardian/internal/delivery/execution"
 )
 
 type PlatformConfig struct {
-	Store     Store
-	Artifacts artifact.Store
-	Sources   SourceProfiles
-	Solvers   SolverProfiles
-	Validator Validator
-	Clock     func() time.Time
-	NewID     func(string) string
+	Store          Store
+	Artifacts      artifact.Store
+	Sources        SourceProfiles
+	Solvers        SolverProfiles
+	Validator      Validator
+	EffectPlanner  EffectPlanner
+	EffectRegistry *execution.Registry
+	Clock          func() time.Time
+	NewID          func(string) string
 }
 
 type Application struct {
-	store     Store
-	artifacts artifact.Store
-	sources   SourceProfiles
-	solvers   SolverProfiles
-	validator Validator
-	clock     func() time.Time
-	newID     func(string) string
-	closed    atomic.Bool
+	store          Store
+	artifacts      artifact.Store
+	sources        SourceProfiles
+	solvers        SolverProfiles
+	validator      Validator
+	effectPlanner  EffectPlanner
+	effectRegistry *execution.Registry
+	clock          func() time.Time
+	newID          func(string) string
+	closed         atomic.Bool
 }
 
 func NewPlatform(config PlatformConfig) (*Application, error) {
@@ -83,13 +88,15 @@ func NewPlatform(config PlatformConfig) (*Application, error) {
 		solvers[profile] = value
 	}
 	return &Application{
-		store:     config.Store,
-		artifacts: config.Artifacts,
-		sources:   sources,
-		solvers:   solvers,
-		validator: config.Validator,
-		clock:     config.Clock,
-		newID:     config.NewID,
+		store:          config.Store,
+		artifacts:      config.Artifacts,
+		sources:        sources,
+		solvers:        solvers,
+		validator:      config.Validator,
+		effectPlanner:  config.EffectPlanner,
+		effectRegistry: config.EffectRegistry,
+		clock:          config.Clock,
+		newID:          config.NewID,
 	}, nil
 }
 
@@ -244,6 +251,7 @@ func (application *Application) RequestOptimization(
 		ProblemDigest:  problem.ProblemDigest,
 		SolverProfile:  request.SolverProfile,
 		ConfigDigest:   binding.ConfigDigest,
+		RequestedBy:    request.Actor.Subject,
 		Status:         domain.RunQueued,
 		Version:        1,
 		CreatedAt:      now,
@@ -370,11 +378,34 @@ func (application *Application) Recover(ctx context.Context) error {
 	if err := application.checkOpen(); err != nil {
 		return err
 	}
-	_, err := application.store.ScanRecovery(ctx, RecoveryScan{
+	now := application.clock().UTC()
+	if _, err := application.store.ExpireApprovals(ctx, ExpireApprovals{
 		Limit: 1_000,
-		Now:   application.clock().UTC(),
+		Now:   now,
+	}); err != nil {
+		return err
+	}
+	items, err := application.store.ScanRecovery(ctx, RecoveryScan{
+		Limit: 1_000,
+		Now:   now,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	var failures []error
+	for _, item := range items {
+		if item.Kind != "execution_ready" {
+			continue
+		}
+		if activateErr := application.activateReadyExecution(
+			ctx,
+			item.TenantID,
+			domain.ExecutionID(item.ResourceID),
+		); activateErr != nil {
+			failures = append(failures, activateErr)
+		}
+	}
+	return errors.Join(failures...)
 }
 
 func (application *Application) Close() {

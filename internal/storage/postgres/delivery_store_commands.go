@@ -200,15 +200,16 @@ func (store *DeliveryStore) CreateRun(
 			problem_digest,
 			solver_profile,
 			config_digest,
+			requested_by,
 			status,
 			version,
 			created_at,
 			updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
 	`, command.Run.TenantID, command.Run.ID, command.Run.ProblemID,
 		command.Run.ProblemVersion, command.Run.ProblemDigest,
-		command.Run.SolverProfile, command.Run.ConfigDigest, command.Run.Status,
-		command.Run.Version, command.Run.CreatedAt); err != nil {
+		command.Run.SolverProfile, command.Run.ConfigDigest, command.Run.RequestedBy,
+		command.Run.Status, command.Run.Version, command.Run.CreatedAt); err != nil {
 		return deliverydomain.OptimizationRun{}, deliveryservice.Replay{}, err
 	}
 	event, err := appendDeliveryEvent(
@@ -312,6 +313,7 @@ func (store *DeliveryStore) ClaimRuns(
 			          problem_digest,
 			          solver_profile,
 			          config_digest,
+			          requested_by,
 			          status,
 			          version,
 			          cancel_requested_at,

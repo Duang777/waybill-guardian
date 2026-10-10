@@ -65,8 +65,8 @@ func TestMigrationsAgainstPostgreSQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if health.SchemaVersion != 10 {
-		t.Fatalf("schema version = %d, want 10", health.SchemaVersion)
+	if health.SchemaVersion != 11 {
+		t.Fatalf("schema version = %d, want 11", health.SchemaVersion)
 	}
 	var tableCount int
 	if err := db.pool.QueryRow(ctx, `
@@ -77,8 +77,8 @@ func TestMigrationsAgainstPostgreSQL(t *testing.T) {
 	`).Scan(&tableCount); err != nil {
 		t.Fatal(err)
 	}
-	if tableCount != 26 {
-		t.Fatalf("business table count = %d, want 26", tableCount)
+	if tableCount != 30 {
+		t.Fatalf("business table count = %d, want 30", tableCount)
 	}
 	var migrationCount int
 	if err := db.pool.QueryRow(ctx,
@@ -86,8 +86,8 @@ func TestMigrationsAgainstPostgreSQL(t *testing.T) {
 	).Scan(&migrationCount); err != nil {
 		t.Fatal(err)
 	}
-	if migrationCount != 10 {
-		t.Fatalf("migration rows = %d, want 10", migrationCount)
+	if migrationCount != 11 {
+		t.Fatalf("migration rows = %d, want 11", migrationCount)
 	}
 
 	insert := func() error {

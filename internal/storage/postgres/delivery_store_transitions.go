@@ -294,6 +294,7 @@ func (store *DeliveryStore) RequestRunCancellation(
 		          problem_digest,
 		          solver_profile,
 		          config_digest,
+		          requested_by,
 		          status,
 		          version,
 		          cancel_requested_at,

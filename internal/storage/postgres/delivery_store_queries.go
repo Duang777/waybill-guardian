@@ -97,19 +97,52 @@ func (store *DeliveryStore) ScanRecovery(
 	if request.Limit <= 0 {
 		return nil, deliveryservice.ErrConflict
 	}
-	query := `
-		SELECT run_id, status
-		FROM waybill.delivery_runs
-		WHERE status IN ('queued', 'solving', 'validating')
-		  AND (lease_deadline IS NULL OR lease_deadline <= $1)
-	`
-	args := []any{request.Now, request.Limit}
-	if request.TenantID != "" {
-		query += ` AND tenant_id = $3`
-		args = append(args, request.TenantID)
-	}
-	query += ` ORDER BY updated_at, tenant_id, run_id LIMIT $2`
-	rows, err := store.db.pool.Query(ctx, query, args...)
+	rows, err := store.db.pool.Query(ctx, `
+		SELECT tenant_id, kind, resource_id, status
+		FROM (
+			SELECT 'run'::text AS kind,
+			       run_id AS resource_id,
+			       status,
+			       updated_at,
+			       tenant_id
+			FROM waybill.delivery_runs
+			WHERE status IN ('queued', 'solving', 'validating')
+			  AND (lease_deadline IS NULL OR lease_deadline <= $1)
+			  AND ($3 = '' OR tenant_id = $3)
+
+			UNION ALL
+
+			SELECT 'execution_ready'::text AS kind,
+			       execution.execution_id AS resource_id,
+			       execution.status,
+			       execution.updated_at,
+			       execution.tenant_id
+			FROM waybill.delivery_executions execution
+			JOIN waybill.delivery_execution_reservations reservation
+			  ON reservation.tenant_id = execution.tenant_id
+			 AND reservation.execution_id = execution.execution_id
+			WHERE execution.status IN (
+			    'prepared',
+			    'executing',
+			    'reconciliation_required'
+			)
+			  AND reservation.status IN (
+			      'reserved',
+			      'reconciliation_required'
+			  )
+			  AND ($3 = '' OR execution.tenant_id = $3)
+			  AND NOT EXISTS (
+			      SELECT 1
+			      FROM waybill.delivery_effects effect
+			      WHERE effect.tenant_id = execution.tenant_id
+			        AND effect.execution_id = execution.execution_id
+			        AND effect.required
+			        AND effect.status <> 'succeeded'
+			  )
+		) recovery
+		ORDER BY updated_at, tenant_id, kind, resource_id
+		LIMIT $2
+	`, request.Now, request.Limit, request.TenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -117,8 +150,12 @@ func (store *DeliveryStore) ScanRecovery(
 	var result []deliveryservice.RecoveryItem
 	for rows.Next() {
 		var item deliveryservice.RecoveryItem
-		item.Kind = "run"
-		if err := rows.Scan(&item.ResourceID, &item.Status); err != nil {
+		if err := rows.Scan(
+			&item.TenantID,
+			&item.Kind,
+			&item.ResourceID,
+			&item.Status,
+		); err != nil {
 			return nil, err
 		}
 		result = append(result, item)

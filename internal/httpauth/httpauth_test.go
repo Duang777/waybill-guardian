@@ -139,6 +139,30 @@ func TestJWTBoundaryAuthenticatesAndAuthorizes(t *testing.T) {
 	}
 }
 
+func TestJWTBoundarySeparatesApprovalAndOverrideRoles(t *testing.T) {
+	now := time.Date(2026, time.October, 4, 10, 0, 0, 0, time.UTC)
+	privateKey := newRSAKey(t)
+	boundary := newTestJWTBoundary(t, now, &privateKey.PublicKey)
+
+	operator := authenticateClaims(t, boundary, privateKey, validClaims(now))
+	if _, err := boundary.Grant(operator, DeliveryApprove); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := boundary.Grant(operator, DeliveryOverride); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("operator override grant error = %v", err)
+	}
+
+	claims := validClaims(now)
+	claims.Roles = []string{"supervisor"}
+	supervisor := authenticateClaims(t, boundary, privateKey, claims)
+	if _, err := boundary.Grant(supervisor, DeliveryOverride); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := boundary.Grant(supervisor, DeliveryApprove); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("supervisor approval grant error = %v", err)
+	}
+}
+
 func TestJWTBoundaryRejectsInvalidCredentials(t *testing.T) {
 	now := time.Date(2026, time.October, 4, 10, 0, 0, 0, time.UTC)
 	privateKey := newRSAKey(t)

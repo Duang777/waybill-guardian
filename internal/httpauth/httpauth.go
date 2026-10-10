@@ -33,6 +33,7 @@ const (
 	RoleViewer        Role = "viewer"
 	RoleDispatcher    Role = "dispatcher"
 	RoleOperator      Role = "operator"
+	RoleSupervisor    Role = "supervisor"
 	RoleEventProducer Role = "event_producer"
 
 	Read           Capability = "read"
@@ -150,6 +151,7 @@ func New(config Config) (*Boundary, error) {
 					RoleViewer:        {},
 					RoleDispatcher:    {},
 					RoleOperator:      {},
+					RoleSupervisor:    {},
 					RoleEventProducer: {},
 				},
 				scope: waybillScope{all: true},
@@ -267,9 +269,10 @@ func roleFor(capability Capability) (Role, bool) {
 		return RoleDispatcher, true
 	case DeliveryApprove,
 		DeliveryExecute,
-		DeliveryPolicyAdmin,
-		DeliveryOverride:
+		DeliveryPolicyAdmin:
 		return RoleOperator, true
+	case DeliveryOverride:
+		return RoleSupervisor, true
 	default:
 		return "", false
 	}

@@ -130,7 +130,7 @@ func parseRoles(values []string) (map[Role]struct{}, error) {
 	for _, value := range values {
 		role := Role(value)
 		switch role {
-		case RoleViewer, RoleDispatcher, RoleOperator, RoleEventProducer:
+		case RoleViewer, RoleDispatcher, RoleOperator, RoleSupervisor, RoleEventProducer:
 		default:
 			return nil, ErrUnauthenticated
 		}

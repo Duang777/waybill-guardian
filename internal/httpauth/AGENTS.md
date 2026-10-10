@@ -17,6 +17,7 @@
 - `viewer` 允许读取。
 - `dispatcher` 允许启动 run。
 - `operator` 允许确认或驳回审批。
+- `supervisor` 只允许对职责分离规则执行带原因的紧急 override，不能代替普通审批权限。
 - `event_producer` 允许提交事件。该角色要求 1 到 16 个无重复的 `event_sources`，以及 1 到
   8 个无重复的 `event_types`。事件入口同时检查运单范围。
 - Principal 的 tenant 必须等于进程配置的 `TENANT_ID`。
