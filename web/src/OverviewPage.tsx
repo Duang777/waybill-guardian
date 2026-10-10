@@ -39,6 +39,7 @@ import { AnimatedNumber } from "./components/ui/animated-number";
 import { Badge, type BadgeTone } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { SegmentedControl } from "./components/ui/segmented-control";
+import { Tooltip } from "./components/ui/tooltip";
 import { HubNetwork } from "./components/HubNetwork";
 import { PanelErrorBoundary } from "./components/PanelErrorBoundary";
 import {
@@ -406,17 +407,18 @@ export function OverviewPage() {
               </Badge>
             )}
           </div>
-          <Button
-            type="button"
-            variant="icon"
-            size="icon"
-            aria-label="刷新经营总览"
-            title="刷新"
-            disabled={resource.kind === "loading"}
-            onClick={() => void load()}
-          >
-            <RefreshCw aria-hidden="true" size={17} />
-          </Button>
+          <Tooltip content="刷新经营总览" side="bottom">
+            <Button
+              type="button"
+              variant="icon"
+              size="icon"
+              aria-label="刷新经营总览"
+              disabled={resource.kind === "loading"}
+              onClick={() => void load()}
+            >
+              <RefreshCw aria-hidden="true" size={17} />
+            </Button>
+          </Tooltip>
         </header>
 
         <main id="overview-main">

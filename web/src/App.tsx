@@ -41,6 +41,8 @@ import {
 } from "./components/ApprovalPanel";
 import { Badge, type BadgeTone } from "./components/ui/badge";
 import { Button, ButtonLink } from "./components/ui/button";
+import { Select } from "./components/ui/select";
+import { Tooltip } from "./components/ui/tooltip";
 import { PanelErrorBoundary } from "./components/PanelErrorBoundary";
 import {
   SkeletonBlock,
@@ -722,16 +724,17 @@ function WaybillWorkbench({
       <div className={styles.appShell}>
         <header className={styles.topbar}>
           <div className={styles.brand}>
-            <ButtonLink
-              className={styles.backButton}
-              href="/"
-              variant="icon"
-              size="icon"
-              aria-label="返回全国经营总览"
-              title="返回总览"
-            >
-              <ArrowLeft aria-hidden="true" size={17} />
-            </ButtonLink>
+            <Tooltip content="返回经营总览" side="right">
+              <ButtonLink
+                className={styles.backButton}
+                href="/"
+                variant="icon"
+                size="icon"
+                aria-label="返回全国经营总览"
+              >
+                <ArrowLeft aria-hidden="true" size={17} />
+              </ButtonLink>
+            </Tooltip>
             <span className={styles.brandMark} aria-hidden="true">
               WG
             </span>
@@ -742,26 +745,30 @@ function WaybillWorkbench({
           </div>
           <label className={styles.waybillPicker}>
             <span>运单</span>
-            <select
-              value={selectedWaybillID ?? ""}
+            <Select
+              className={styles.waybillSelect}
+              value={selectedWaybillID}
               disabled={
                 catalog.kind !== "ready" ||
                 pendingAction !== null ||
                 recoveryError !== null
               }
-              aria-label="选择异常运单"
-              onChange={(event) => selectWaybill(event.currentTarget.value)}
-            >
-              {catalog.kind === "loading" && <option value="">正在读取运单目录</option>}
-              {catalog.kind === "empty" && <option value="">暂无可处置运单</option>}
-              {catalog.kind === "error" && <option value="">运单目录不可用</option>}
-              {catalog.kind === "ready" &&
-                catalog.data.map((item) => (
-                  <option value={item.waybill_id} key={item.waybill_id}>
-                    {item.origin} → {item.destination} · {item.waybill_id}
-                  </option>
-                ))}
-            </select>
+              ariaLabel="选择异常运单"
+              placeholder={catalogSelectPlaceholder(catalog)}
+              options={
+                catalog.kind === "ready"
+                  ? catalog.data.map((item) => ({
+                      value: item.waybill_id,
+                      label: `${item.origin} → ${item.destination} · ${item.waybill_id}`,
+                    }))
+                  : []
+              }
+              onValueChange={(value) => {
+                if (value !== null) {
+                  selectWaybill(value);
+                }
+              }}
+            />
           </label>
           <div className={styles.runContext}>
             <div>
@@ -842,16 +849,17 @@ function WaybillWorkbench({
                   </Button>
                 )}
                 {message !== null && (
-                  <Button
-                    type="button"
-                    variant="icon"
-                    size="icon"
-                    aria-label="关闭错误提示"
-                    title="关闭"
-                    onClick={() => setMessage(null)}
-                  >
-                    <X aria-hidden="true" size={16} />
-                  </Button>
+                  <Tooltip content="关闭提示" side="left">
+                    <Button
+                      type="button"
+                      variant="icon"
+                      size="icon"
+                      aria-label="关闭错误提示"
+                      onClick={() => setMessage(null)}
+                    >
+                      <X aria-hidden="true" size={16} />
+                    </Button>
+                  </Tooltip>
                 )}
               </div>
             </div>
@@ -1062,6 +1070,23 @@ function shouldShowConnectionNotice(
   connection: WorkbenchConnectionState,
 ): boolean {
   return connection === "reconnecting" || connection === "offline";
+}
+
+function catalogSelectPlaceholder(catalog: CatalogResource): string {
+  switch (catalog.kind) {
+    case "loading":
+      return "正在读取运单目录";
+    case "empty":
+      return "暂无可处置运单";
+    case "error":
+      return "运单目录不可用";
+    case "ready":
+      return "选择异常运单";
+    default: {
+      const exhaustive: never = catalog;
+      return exhaustive;
+    }
+  }
 }
 
 function connectionTone(

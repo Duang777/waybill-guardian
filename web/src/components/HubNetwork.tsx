@@ -45,6 +45,8 @@ import { AnimatedNumber } from "./ui/animated-number";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { SegmentedControl } from "./ui/segmented-control";
+import { Select } from "./ui/select";
+import { Tooltip } from "./ui/tooltip";
 
 const HubNetworkScene = lazy(() => import("./HubNetworkScene"));
 
@@ -429,52 +431,55 @@ export function HubNetwork({
             onValueChange={selectCameraPreset}
           />
         )}
-        <select
-          value={selectedHubID ?? ""}
-          aria-label="选择公路港"
-          onChange={(event) => {
-            selectHub(event.target.value || null);
-          }}
-        >
-          <option value="">
-            {selectedHub === undefined ? "选择港口" : "返回全国港网"}
-          </option>
-          {hubs.map((hub) => (
-            <option key={hub.hub_id} value={hub.hub_id}>
-              {hub.name}
-            </option>
-          ))}
-        </select>
-        <Button
-          className={styles.sceneToolButton}
-          type="button"
-          variant="icon"
-          size="icon"
-          onClick={focusTopRisk}
-          disabled={topRiskHub === undefined}
-          aria-label="聚焦最高风险"
-          title="聚焦最高风险"
-        >
-          <Crosshair aria-hidden="true" size={17} />
-        </Button>
-        <Button
-          className={styles.sceneToolButton}
-          type="button"
-          variant="icon"
-          size="icon"
-          onClick={resetView}
-          disabled={selectedHubID === null}
-          aria-label={
-            selectedHubID === null ? "复位网络视角" : "返回全国视角"
+        <Select
+          className={styles.sceneHubSelect}
+          value={selectedHubID}
+          ariaLabel="选择公路港"
+          placeholder="选择港口"
+          nullOptionLabel={
+            selectedHub === undefined ? "选择港口" : "返回全国港网"
           }
-          title={selectedHubID === null ? "复位视角" : "返回全国视角"}
+          options={hubs.map((hub) => ({
+            value: hub.hub_id,
+            label: hub.name,
+          }))}
+          onValueChange={selectHub}
+        />
+        <Tooltip content="聚焦最高风险" side="bottom">
+          <Button
+            className={styles.sceneToolButton}
+            type="button"
+            variant="icon"
+            size="icon"
+            onClick={focusTopRisk}
+            disabled={topRiskHub === undefined}
+            aria-label="聚焦最高风险"
+          >
+            <Crosshair aria-hidden="true" size={17} />
+          </Button>
+        </Tooltip>
+        <Tooltip
+          content={selectedHubID === null ? "复位视角" : "返回全国视角"}
+          side="bottom"
         >
-          {selectedHubID === null ? (
-            <RotateCcw aria-hidden="true" size={17} />
-          ) : (
-            <ArrowLeft aria-hidden="true" size={17} />
-          )}
-        </Button>
+          <Button
+            className={styles.sceneToolButton}
+            type="button"
+            variant="icon"
+            size="icon"
+            onClick={resetView}
+            disabled={selectedHubID === null}
+            aria-label={
+              selectedHubID === null ? "复位网络视角" : "返回全国视角"
+            }
+          >
+            {selectedHubID === null ? (
+              <RotateCcw aria-hidden="true" size={17} />
+            ) : (
+              <ArrowLeft aria-hidden="true" size={17} />
+            )}
+          </Button>
+        </Tooltip>
       </div>
       {selectedHub !== undefined && (
         <div

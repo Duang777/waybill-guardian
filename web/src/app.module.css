@@ -117,22 +117,13 @@
   font-size: 10px;
 }
 
-.waybillPicker select {
+.waybillSelect {
   width: 100%;
   min-width: 0;
-  height: 40px;
-  padding: 0 32px 0 10px;
-  border: 1px solid oklch(0.72 0.01 95);
-  border-radius: 0;
-  color: oklch(0.2 0.012 255);
-  background: oklch(0.985 0.003 95);
-  font-size: 12px;
-  cursor: pointer;
 }
 
-.waybillPicker select:disabled {
-  cursor: not-allowed;
-  opacity: 0.64;
+.waybillSelect :global([data-slot="select-trigger"]) {
+  border-radius: 3px;
 }
 
 .runContext {

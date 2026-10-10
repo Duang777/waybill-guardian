@@ -20,6 +20,7 @@ import { useReducedMotionPreference } from "../motion/useReducedMotionPreference
 import { AnimatedNumber } from "./ui/animated-number";
 import { Badge, type BadgeTone } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Tooltip } from "./ui/tooltip";
 import {
   inferenceMode,
   playbackCursor,
@@ -174,17 +175,25 @@ export function PlaybackControls({
   const isLive = state.playback.kind === "live";
   return (
     <div className={styles.playbackControls}>
-      <Button
-        type="button"
-        variant="icon"
-        size="icon"
-        aria-label={isPlaying ? "暂停回放" : "播放回放"}
-        title={isPlaying ? "暂停回放" : "播放回放"}
-        disabled={state.events.length === 0}
-        onClick={() => dispatch({ type: "toggle_playback" })}
+      <Tooltip
+        content={isPlaying ? "暂停回放" : "播放回放"}
+        side="bottom"
       >
-        {isPlaying ? <Pause aria-hidden="true" size={16} /> : <Play aria-hidden="true" size={16} />}
-      </Button>
+        <Button
+          type="button"
+          variant="icon"
+          size="icon"
+          aria-label={isPlaying ? "暂停回放" : "播放回放"}
+          disabled={state.events.length === 0}
+          onClick={() => dispatch({ type: "toggle_playback" })}
+        >
+          {isPlaying ? (
+            <Pause aria-hidden="true" size={16} />
+          ) : (
+            <Play aria-hidden="true" size={16} />
+          )}
+        </Button>
+      </Tooltip>
       <input
         className={styles.playbackRange}
         type="range"

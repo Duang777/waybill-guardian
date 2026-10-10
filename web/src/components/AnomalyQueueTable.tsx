@@ -13,6 +13,8 @@ import type { WaybillID } from "../api";
 import { AnimatedNumber } from "./ui/animated-number";
 import { Badge, type BadgeTone } from "./ui/badge";
 import { ButtonLink } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
+import { Tooltip } from "./ui/tooltip";
 import styles from "./anomaly-queue-table.module.css";
 
 export type AnomalyQueueRow = {
@@ -151,6 +153,7 @@ export function AnomalyQueueTable({
           {table.getRowModel().rows.map((row) => (
             <tr
               data-queue-row
+              data-selected={selected.has(row.original.waybillID)}
               data-waybill-id={row.original.waybillID}
               key={row.id}
             >
@@ -169,6 +172,7 @@ export function AnomalyQueueTable({
           <article
             className={styles.mobileRow}
             data-queue-card
+            data-selected={selected.has(row.original.waybillID)}
             data-waybill-id={row.original.waybillID}
             key={row.id}
           >
@@ -211,15 +215,14 @@ function QueueCheckbox({
   onToggle: (waybillID: WaybillID) => void;
 }) {
   return (
-    <label className={styles.checkbox}>
-      <input
-        type="checkbox"
+    <span className={styles.checkbox}>
+      <Checkbox
+        aria-label={`选择 ${row.waybillID}`}
         checked={checked}
         disabled={disabled}
-        onChange={() => onToggle(row.waybillID)}
+        onCheckedChange={() => onToggle(row.waybillID)}
       />
-      <span className={styles.srOnly}>选择 {row.waybillID}</span>
-    </label>
+    </span>
   );
 }
 
@@ -239,16 +242,17 @@ function QueueIdentity({ row }: { row: AnomalyQueueRow }) {
 
 function QueueLink({ row }: { row: AnomalyQueueRow }) {
   return (
-    <ButtonLink
-      className={styles.drilldown}
-      href={row.href}
-      variant="icon"
-      size="icon"
-      aria-label={`查看运单 ${row.waybillID}`}
-      title="查看运单"
-    >
-      <ChevronRight aria-hidden="true" size={17} />
-    </ButtonLink>
+    <Tooltip content="查看运单" side="left">
+      <ButtonLink
+        className={styles.drilldown}
+        href={row.href}
+        variant="icon"
+        size="icon"
+        aria-label={`查看运单 ${row.waybillID}`}
+      >
+        <ChevronRight aria-hidden="true" size={17} />
+      </ButtonLink>
+    </Tooltip>
   );
 }
 

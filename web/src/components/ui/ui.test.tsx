@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import { AnimatedNumber } from "./animated-number";
 import { Badge } from "./badge";
 import { Button } from "./button";
+import { Checkbox } from "./checkbox";
 import { Progress } from "./progress";
+import { Select } from "./select";
 import { SegmentedControl } from "./segmented-control";
 import { TimerDisplay, TimerIcon, TimerRoot } from "./timer";
 
@@ -85,5 +87,34 @@ describe("project UI components", () => {
     expect(markup).toContain('role="radiogroup"');
     expect(markup).toContain('type="radio"');
     expect(markup).toContain("checked");
+  });
+
+  it("exposes accessible headless selection controls", () => {
+    const markup = renderToStaticMarkup(
+      <>
+        <Checkbox
+          aria-label="选择运单"
+          checked
+          onCheckedChange={() => undefined}
+        />
+        <Select
+          ariaLabel="选择公路港"
+          placeholder="选择港口"
+          value="hub-wuhan"
+          options={[
+            { value: "hub-wuhan", label: "武汉公路港" },
+            { value: "hub-hangzhou", label: "杭州公路港" },
+          ]}
+          onValueChange={() => undefined}
+        />
+      </>,
+    );
+
+    expect(markup).toContain('data-slot="checkbox"');
+    expect(markup).toContain('type="checkbox"');
+    expect(markup).toContain("checked");
+    expect(markup).toContain('data-slot="select-trigger"');
+    expect(markup).toContain("<select");
+    expect(markup).toContain('aria-label="选择公路港"');
   });
 });

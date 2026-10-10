@@ -690,16 +690,13 @@
   flex: 0 1 auto;
 }
 
-.sceneControls select {
-  width: 128px;
-  height: 40px;
-  padding: 0 28px 0 10px;
-  border: 1px solid oklch(0.72 0.01 230);
+.sceneHubSelect {
+  width: 144px;
+}
+
+.sceneHubSelect :global([data-slot="select-trigger"]) {
   border-radius: 2px;
-  color: var(--ink);
-  background: oklch(0.99 0.002 95 / 0.94);
-  font-size: 11px;
-  cursor: pointer;
+  background: oklch(0.99 0.002 95 / 0.96);
 }
 
 .sceneToolButton {
@@ -1857,7 +1854,7 @@
     grid-template-columns: minmax(0, 1fr) 40px 40px;
   }
 
-  .sceneControls select {
+  .sceneHubSelect {
     width: 100%;
   }
 

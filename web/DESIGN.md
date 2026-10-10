@@ -26,6 +26,12 @@ ledger apply its rules for one visual focus, fewer repeated lines, semantic data
 real desktop and phone checks. Oil UI does not provide the React business components used
 here; the implementation remains project-owned CSS Modules code.
 
+The control system uses Radix UI for behavior-heavy primitives such as approval dialogs and
+progress. shadcn/ui informs the component composition: one project-owned
+wrapper per control, explicit variants, Lucide icons, and no application code coupled to a
+third-party visual theme. Transitions.dev informs only the motion rules: short transform and
+opacity feedback, delayed tooltips, no layout animation, and an immediate reduced-motion path.
+
 ## 2. Color palette and roles
 
 | Token | Value | Role |
@@ -56,6 +62,12 @@ breakpoint and never scale with viewport width.
 ## 4. Component styling
 
 - Buttons use square geometry, a 40 px minimum hit area, and `scale(0.96)` press feedback.
+- Buttons use flat surfaces and explicit primary, secondary, destructive, ghost, and icon
+  variants. Glossy inset highlights and generic elevated shadows are not part of the system.
+- Native selects keep platform keyboard and screen-reader behavior inside a project-owned
+  trigger shell. Native queue checkboxes retain form semantics inside a visible 40 px hit area.
+- Icon-only controls expose a text tooltip on hover and keyboard focus. Tooltips stay inside
+  the owning panel so they do not add a portal or another interaction runtime.
 - The overview masthead stays paper-white. It never becomes a dark dashboard banner.
 - KPI indexes use one divided band with bottom-aligned labels and 42 px numeric values.
 - The 3D map and risk queue form one flush workspace separated by a 1 px divider.
