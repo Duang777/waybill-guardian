@@ -39,6 +39,17 @@ const (
 	StartRun       Capability = "run:create"
 	DecideApproval Capability = "approval:decide"
 	IngestEvent    Capability = "event:ingest"
+
+	DeliveryRead         Capability = "delivery.read"
+	DeliveryProblemWrite Capability = "delivery.problem.write"
+	DeliveryOptimize     Capability = "delivery.optimize"
+	DeliveryApprove      Capability = "delivery.approve"
+	DeliveryExecute      Capability = "delivery.execute"
+	DeliveryReoptimize   Capability = "delivery.reoptimize"
+	DeliveryAuditRead    Capability = "delivery.audit.read"
+	DeliveryArtifactRead Capability = "delivery.artifact.read"
+	DeliveryPolicyAdmin  Capability = "delivery.policy.admin"
+	DeliveryOverride     Capability = "delivery.override"
 )
 
 const (
@@ -71,6 +82,10 @@ type Principal struct {
 
 func (p Principal) Subject() string {
 	return string(p.subject)
+}
+
+func (p Principal) TenantID() string {
+	return string(p.tenantID)
 }
 
 func (p Principal) CredentialDeadline() (time.Time, bool) {
@@ -246,6 +261,15 @@ func roleFor(capability Capability) (Role, bool) {
 		return RoleOperator, true
 	case IngestEvent:
 		return RoleEventProducer, true
+	case DeliveryRead, DeliveryAuditRead, DeliveryArtifactRead:
+		return RoleViewer, true
+	case DeliveryProblemWrite, DeliveryOptimize, DeliveryReoptimize:
+		return RoleDispatcher, true
+	case DeliveryApprove,
+		DeliveryExecute,
+		DeliveryPolicyAdmin,
+		DeliveryOverride:
+		return RoleOperator, true
 	default:
 		return "", false
 	}

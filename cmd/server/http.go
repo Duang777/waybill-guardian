@@ -18,6 +18,7 @@ import (
 
 	"github.com/Duang777/waybill-guardian/internal/approval"
 	"github.com/Duang777/waybill-guardian/internal/audit"
+	deliveryservice "github.com/Duang777/waybill-guardian/internal/delivery/service"
 	"github.com/Duang777/waybill-guardian/internal/domain"
 	"github.com/Duang777/waybill-guardian/internal/events"
 	"github.com/Duang777/waybill-guardian/internal/guardian"
@@ -31,6 +32,7 @@ type api struct {
 	access       *httpauth.Boundary
 	eventStore   events.Ingestor
 	eventMetrics ingestObserver
+	delivery     deliveryservice.Platform
 	mux          *http.ServeMux
 	sseSlots     chan struct{}
 }
@@ -74,11 +76,34 @@ func newHandlerWithFrontend(
 	trustedLocalRemotes []netip.Addr,
 	crossOrigin *http.CrossOriginProtection,
 ) http.Handler {
+	return newHandlerWithFrontendAndDelivery(
+		service,
+		access,
+		eventStore,
+		eventMetrics,
+		frontend,
+		trustedLocalRemotes,
+		crossOrigin,
+		nil,
+	)
+}
+
+func newHandlerWithFrontendAndDelivery(
+	service *guardian.Service,
+	access *httpauth.Boundary,
+	eventStore events.Ingestor,
+	eventMetrics ingestObserver,
+	frontend http.Handler,
+	trustedLocalRemotes []netip.Addr,
+	crossOrigin *http.CrossOriginProtection,
+	delivery deliveryservice.Platform,
+) http.Handler {
 	server := &api{
 		service:      service,
 		access:       access,
 		eventStore:   eventStore,
 		eventMetrics: eventMetrics,
+		delivery:     delivery,
 		mux:          http.NewServeMux(),
 		sseSlots:     make(chan struct{}, maxSSESubscriptions),
 	}
@@ -95,6 +120,9 @@ func newHandlerWithFrontend(
 	server.mux.HandleFunc("POST /api/approvals/{id}/confirm", server.confirm)
 	server.mux.HandleFunc("POST /api/approvals/{id}/reject", server.reject)
 	server.mux.HandleFunc("GET /api/waybills/{id}", server.waybill)
+	if delivery != nil {
+		server.mountDeliveryRoutes()
+	}
 	root := http.NewServeMux()
 	root.HandleFunc("GET /healthz", server.health)
 	root.Handle("/api/", crossOrigin.Handler(authenticateAPI(access, server.mux)))

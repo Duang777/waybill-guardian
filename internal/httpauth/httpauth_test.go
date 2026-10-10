@@ -63,7 +63,22 @@ func TestLocalBoundaryUsesTrustedIdentity(t *testing.T) {
 	if _, ok := principal.CredentialDeadline(); ok {
 		t.Fatal("local principal unexpectedly has a credential deadline")
 	}
-	for _, capability := range []Capability{Read, StartRun, DecideApproval, IngestEvent} {
+	for _, capability := range []Capability{
+		Read,
+		StartRun,
+		DecideApproval,
+		IngestEvent,
+		DeliveryRead,
+		DeliveryProblemWrite,
+		DeliveryOptimize,
+		DeliveryApprove,
+		DeliveryExecute,
+		DeliveryReoptimize,
+		DeliveryAuditRead,
+		DeliveryArtifactRead,
+		DeliveryPolicyAdmin,
+		DeliveryOverride,
+	} {
 		grant, grantErr := boundary.Grant(principal, capability)
 		if grantErr != nil {
 			t.Fatalf("grant %q: %v", capability, grantErr)

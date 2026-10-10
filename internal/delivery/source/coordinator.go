@@ -288,6 +288,27 @@ func (coordinator *Coordinator) Build(
 	return BuildResult{Problem: problem, Manifest: manifest}, nil
 }
 
+func (coordinator *Coordinator) BuildProblem(
+	ctx context.Context,
+	request service.SourceBuildRequest,
+) (service.SourceBuildResult, error) {
+	result, err := coordinator.Build(ctx, BuildRequest{
+		TenantID:    request.TenantID,
+		ProblemID:   request.ProblemID,
+		Version:     request.Version,
+		SourceRef:   SnapshotRef(request.SnapshotRef),
+		Horizon:     request.Horizon,
+		Commitments: request.Commitments,
+	})
+	if err != nil {
+		return service.SourceBuildResult{}, err
+	}
+	return service.SourceBuildResult{
+		Problem:        result.Problem,
+		ManifestDigest: result.Manifest.Digest,
+	}, nil
+}
+
 func validateBuildRequest(request BuildRequest) error {
 	if strings.TrimSpace(string(request.TenantID)) == "" ||
 		strings.TrimSpace(string(request.TenantID)) != string(request.TenantID) {
