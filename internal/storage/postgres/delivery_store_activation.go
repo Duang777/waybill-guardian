@@ -326,6 +326,17 @@ func (store *DeliveryStore) finishStaleActivation(
 	activeVersion uint64,
 	command deliveryservice.ActivateRevisionTx,
 ) error {
+	blockedPreparedEffectIDs, err := terminalizePreparedEffects(
+		ctx,
+		tx,
+		command.TenantID,
+		execution.ID,
+		"blocked_by_stale_activation",
+		command.Now,
+	)
+	if err != nil {
+		return err
+	}
 	hasDispatchIntent, err := executionHasDispatchIntent(
 		ctx,
 		tx,
@@ -387,13 +398,18 @@ func (store *DeliveryStore) finishStaleActivation(
 		return err
 	}
 	eventPayload := map[string]any{
-		"plan_id":                 execution.PlanID,
-		"revision_id":             execution.RevisionID,
-		"expected_base_revision":  approval.Binding.BaseRevisionID,
-		"current_active_revision": activeRevision,
-		"expected_active_version": approval.Binding.ActiveVersion,
-		"current_active_version":  activeVersion,
-		"reason":                  "approval_base_changed",
+		"plan_id":                     execution.PlanID,
+		"revision_id":                 execution.RevisionID,
+		"expected_base_revision":      approval.Binding.BaseRevisionID,
+		"current_active_revision":     activeRevision,
+		"expected_active_version":     approval.Binding.ActiveVersion,
+		"current_active_version":      activeVersion,
+		"reason":                      "approval_base_changed",
+		"blocked_prepared":            len(blockedPreparedEffectIDs),
+		"blocked_prepared_effect_ids": blockedPreparedEffectIDs,
+	}
+	if len(blockedPreparedEffectIDs) > 0 {
+		eventPayload["blocked_prepared_error_code"] = "blocked_by_stale_activation"
 	}
 	executionEvent, err := appendDeliveryEvent(
 		ctx,

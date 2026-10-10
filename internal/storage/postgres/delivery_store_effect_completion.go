@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	deliverydomain "github.com/Duang777/waybill-guardian/internal/delivery/domain"
@@ -76,6 +77,22 @@ func (store *DeliveryStore) CompleteEffect(
 		`, claim.Effect.TenantID, command.ResponseDigest,
 			claim.Effect.ExecutionID, "effect_result:"+string(claim.Effect.ID),
 			command.ObservedAt); err != nil {
+			return deliveryservice.EffectCompletion{}, err
+		}
+	}
+	var blockedPreparedEffectIDs []deliverydomain.EffectID
+	if claim.Effect.Required &&
+		(command.Status == deliverydomain.EffectPermanentFailed ||
+			command.Status == deliverydomain.EffectManualReview) {
+		blockedPreparedEffectIDs, err = terminalizePreparedEffects(
+			ctx,
+			tx,
+			claim.Effect.TenantID,
+			claim.Effect.ExecutionID,
+			"blocked_by_required_failure",
+			command.ObservedAt,
+		)
+		if err != nil {
 			return deliveryservice.EffectCompletion{}, err
 		}
 	}
@@ -164,14 +181,19 @@ func (store *DeliveryStore) CompleteEffect(
 		return deliveryservice.EffectCompletion{}, err
 	}
 	eventPayload := map[string]any{
-		"effect_id":       claim.Effect.ID,
-		"operation":       claim.Operation,
-		"status":          command.Status,
-		"next_operation":  command.NextOperation,
-		"external_ref":    command.ExternalRef,
-		"response_digest": command.ResponseDigest,
-		"error_code":      command.ErrorCode,
-		"retry_at":        command.RetryAt,
+		"effect_id":                   claim.Effect.ID,
+		"operation":                   claim.Operation,
+		"status":                      command.Status,
+		"next_operation":              command.NextOperation,
+		"external_ref":                command.ExternalRef,
+		"response_digest":             command.ResponseDigest,
+		"error_code":                  command.ErrorCode,
+		"retry_at":                    command.RetryAt,
+		"blocked_prepared":            len(blockedPreparedEffectIDs),
+		"blocked_prepared_effect_ids": blockedPreparedEffectIDs,
+	}
+	if len(blockedPreparedEffectIDs) > 0 {
+		eventPayload["blocked_prepared_error_code"] = "blocked_by_required_failure"
 	}
 	executionEvent, err := appendDeliveryEvent(
 		ctx,
@@ -238,6 +260,47 @@ func validateEffectCompletion(command deliveryservice.CompleteEffectTx) error {
 	return nil
 }
 
+func terminalizePreparedEffects(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID deliverydomain.TenantID,
+	executionID deliverydomain.ExecutionID,
+	errorCode string,
+	now time.Time,
+) ([]deliverydomain.EffectID, error) {
+	rows, err := tx.Query(ctx, `
+		UPDATE waybill.delivery_effects
+		SET status = 'manual_review',
+		    error_code = $3,
+		    retry_at = NULL,
+		    lease_owner = NULL,
+		    lease_deadline = NULL,
+		    updated_at = $4
+		WHERE tenant_id = $1
+		  AND execution_id = $2
+		  AND status = 'prepared'
+		  AND dispatch_started_at IS NULL
+		RETURNING effect_id
+	`, tenantID, executionID, errorCode, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	effectIDs := make([]deliverydomain.EffectID, 0)
+	for rows.Next() {
+		var effectID deliverydomain.EffectID
+		if err := rows.Scan(&effectID); err != nil {
+			return nil, err
+		}
+		effectIDs = append(effectIDs, effectID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	slices.Sort(effectIDs)
+	return effectIDs, nil
+}
+
 func (store *DeliveryStore) markExecutionFailed(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -245,7 +308,18 @@ func (store *DeliveryStore) markExecutionFailed(
 	executionID deliverydomain.ExecutionID,
 	revisionID deliverydomain.PlanRevisionID,
 	now time.Time,
-) error {
+) ([]deliverydomain.EffectID, error) {
+	blockedPreparedEffectIDs, err := terminalizePreparedEffects(
+		ctx,
+		tx,
+		tenantID,
+		executionID,
+		"blocked_by_required_failure",
+		now,
+	)
+	if err != nil {
+		return nil, err
+	}
 	var succeeded int
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*)
@@ -254,7 +328,7 @@ func (store *DeliveryStore) markExecutionFailed(
 		  AND execution_id = $2
 		  AND status = 'succeeded'
 	`, tenantID, executionID).Scan(&succeeded); err != nil {
-		return err
+		return nil, err
 	}
 	executionStatus := deliverydomain.ExecutionManualReview
 	if succeeded > 0 {
@@ -267,7 +341,7 @@ func (store *DeliveryStore) markExecutionFailed(
 		executionID,
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	reservationStatus := executionReservationReleased
 	if hasDispatchIntent {
@@ -285,7 +359,7 @@ func (store *DeliveryStore) markExecutionFailed(
 		  AND execution_id = $2
 		  AND status IN ('reserved', 'reconciliation_required')
 	`, tenantID, executionID, reservationStatus, now); err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE waybill.delivery_executions
@@ -294,7 +368,7 @@ func (store *DeliveryStore) markExecutionFailed(
 		  AND execution_id = $2
 		  AND status <> 'committed'
 	`, tenantID, executionID, executionStatus, now); err != nil {
-		return err
+		return nil, err
 	}
 	_, err = tx.Exec(ctx, `
 		UPDATE waybill.delivery_plan_revisions
@@ -305,5 +379,5 @@ func (store *DeliveryStore) markExecutionFailed(
 		  AND revision_id = $2
 		  AND status <> 'active'
 	`, tenantID, revisionID, now)
-	return err
+	return blockedPreparedEffectIDs, err
 }

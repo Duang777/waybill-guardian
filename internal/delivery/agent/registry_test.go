@@ -197,6 +197,13 @@ func (*recordingCommands) DecideApproval(
 	return domain.DispatchExecution{}, service.Replay{}, errors.New("not used")
 }
 
+func (*recordingCommands) ResolveExecutionReservation(
+	context.Context,
+	service.ResolveExecutionReservation,
+) (domain.DispatchExecution, service.Replay, error) {
+	return domain.DispatchExecution{}, service.Replay{}, errors.New("not used")
+}
+
 func deliveryToolCall(arguments string) *agents.ToolCall {
 	return &agents.ToolCall{
 		FunctionCallMessage: &responses.FunctionCallMessage{

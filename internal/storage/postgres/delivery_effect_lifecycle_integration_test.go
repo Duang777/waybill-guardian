@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -138,7 +140,8 @@ func TestDeliveryEffectPermanentFailureAfterSuccessIsPartiallyApplied(
 		len(effects) != 3 ||
 		effects[0].Status != deliverydomain.EffectSucceeded ||
 		effects[1].Status != deliverydomain.EffectPermanentFailed ||
-		effects[2].Status != deliverydomain.EffectPrepared {
+		effects[2].Status != deliverydomain.EffectManualReview ||
+		effects[2].ErrorCode != "blocked_by_required_failure" {
 		t.Fatalf(
 			"partial state = plan:%+v revision:%+v execution:%+v effects:%+v",
 			storedPlan,
@@ -153,6 +156,21 @@ func TestDeliveryEffectPermanentFailureAfterSuccessIsPartiallyApplied(
 		tenantID,
 		execution.ID,
 		executionReservationReconciliationRequired,
+	)
+	events, err := store.Replay(t.Context(), deliveryservice.StreamCursor{
+		TenantID:      tenantID,
+		AggregateType: deliveryservice.AggregateExecution,
+		AggregateID:   string(execution.ID),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDeliveryBlockedPreparedAudit(
+		t,
+		events,
+		deliveryservice.EventEffectCompleted,
+		[]deliverydomain.EffectID{"effect-3"},
+		"blocked_by_required_failure",
 	)
 }
 
@@ -170,7 +188,7 @@ func TestDeliveryPreparedEffectWithExpiredKeyMovesToManualReview(t *testing.T) {
 		tenantID,
 		now,
 		now.Add(time.Hour),
-		1,
+		3,
 	)
 	execution := confirmDeliveryExecutionFixture(
 		t,
@@ -180,18 +198,42 @@ func TestDeliveryPreparedEffectWithExpiredKeyMovesToManualReview(t *testing.T) {
 		now.Add(2*time.Minute),
 	)
 
-	claims, err := store.ClaimEffects(t.Context(), deliveryservice.ClaimEffects{
-		TenantID: tenantID,
-		WorkerID: "effect-worker-1",
-		Limit:    10,
-		LeaseTTL: time.Minute,
-		Now:      now.Add(49 * time.Hour),
-	})
-	if err != nil {
-		t.Fatal(err)
+	type claimResult struct {
+		claims []deliveryservice.EffectClaim
+		err    error
 	}
-	if len(claims) != 0 {
-		t.Fatalf("claimed expired effects = %d, want 0", len(claims))
+	const workerCount = 20
+	start := make(chan struct{})
+	results := make(chan claimResult, workerCount)
+	var wait sync.WaitGroup
+	wait.Add(workerCount)
+	for index := range workerCount {
+		go func() {
+			defer wait.Done()
+			<-start
+			claims, claimErr := store.ClaimEffects(
+				t.Context(),
+				deliveryservice.ClaimEffects{
+					TenantID: tenantID,
+					WorkerID: fmt.Sprintf("expiry-worker-%d", index),
+					Limit:    1,
+					LeaseTTL: time.Minute,
+					Now:      now.Add(49 * time.Hour),
+				},
+			)
+			results <- claimResult{claims: claims, err: claimErr}
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(results)
+	for result := range results {
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if len(result.claims) != 0 {
+			t.Fatalf("claimed expired effects = %d, want 0", len(result.claims))
+		}
 	}
 	storedRevision, err := store.GetRevision(t.Context(), tenantID, revision.ID)
 	if err != nil {
@@ -207,11 +249,16 @@ func TestDeliveryPreparedEffectWithExpiredKeyMovesToManualReview(t *testing.T) {
 	}
 	if storedRevision.Status != deliverydomain.RevisionPartiallyApplied ||
 		storedExecution.Status != deliverydomain.ExecutionManualReview ||
-		len(effects) != 1 ||
+		storedExecution.Version != execution.Version+1 ||
+		len(effects) != 3 ||
 		effects[0].Status != deliverydomain.EffectManualReview ||
 		effects[0].Attempt != 0 ||
 		effects[0].DispatchStartedAt != nil ||
-		effects[0].ErrorCode != "idempotency_key_expired" {
+		effects[0].ErrorCode != "idempotency_key_expired" ||
+		effects[1].Status != deliverydomain.EffectManualReview ||
+		effects[1].ErrorCode != "blocked_by_required_failure" ||
+		effects[2].Status != deliverydomain.EffectManualReview ||
+		effects[2].ErrorCode != "blocked_by_required_failure" {
 		t.Fatalf(
 			"expired state = revision:%+v execution:%+v effects:%+v",
 			storedRevision,
@@ -225,6 +272,27 @@ func TestDeliveryPreparedEffectWithExpiredKeyMovesToManualReview(t *testing.T) {
 		tenantID,
 		execution.ID,
 		executionReservationReleased,
+	)
+	events, err := store.Replay(t.Context(), deliveryservice.StreamCursor{
+		TenantID:      tenantID,
+		AggregateType: deliveryservice.AggregateExecution,
+		AggregateID:   string(execution.ID),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSingleDeliveryEvent(
+		t,
+		events,
+		deliveryservice.EventEffectCompleted,
+		"system:delivery-effect-worker",
+	)
+	assertDeliveryBlockedPreparedAudit(
+		t,
+		events,
+		deliveryservice.EventEffectCompleted,
+		[]deliverydomain.EffectID{"effect-2", "effect-3"},
+		"blocked_by_required_failure",
 	)
 }
 
@@ -594,8 +662,9 @@ func TestDeliveryActivationCASFailureBecomesPartialApplication(t *testing.T) {
 		tenantID,
 		now,
 		now.Add(time.Hour),
-		1,
+		2,
 	)
+	previews[1].Required = false
 	execution := confirmDeliveryExecutionFixture(
 		t,
 		store,
@@ -677,7 +746,7 @@ func TestDeliveryActivationCASFailureBecomesPartialApplication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	storedExecution, _, err := store.GetExecution(
+	storedExecution, storedEffects, err := store.GetExecution(
 		t.Context(),
 		tenantID,
 		execution.ID,
@@ -690,13 +759,18 @@ func TestDeliveryActivationCASFailureBecomesPartialApplication(t *testing.T) {
 		storedPlan.ActiveVersion != 1 ||
 		storedRevision.Status != deliverydomain.RevisionPartiallyApplied ||
 		storedExecution.Status != deliverydomain.ExecutionPartiallyApplied ||
-		storedExecution.CompletedAt != nil {
+		storedExecution.CompletedAt != nil ||
+		len(storedEffects) != 2 ||
+		storedEffects[0].Status != deliverydomain.EffectSucceeded ||
+		storedEffects[1].Status != deliverydomain.EffectManualReview ||
+		storedEffects[1].ErrorCode != "blocked_by_stale_activation" {
 		t.Fatalf(
-			"stale activation = approval:%+v plan:%+v revision:%+v execution:%+v",
+			"stale activation = approval:%+v plan:%+v revision:%+v execution:%+v effects:%+v",
 			storedApproval,
 			storedPlan,
 			storedRevision,
 			storedExecution,
+			storedEffects,
 		)
 	}
 	assertDeliveryReservationStatus(
@@ -705,6 +779,35 @@ func TestDeliveryActivationCASFailureBecomesPartialApplication(t *testing.T) {
 		tenantID,
 		execution.ID,
 		executionReservationReconciliationRequired,
+	)
+	resolved, replay, err := store.ResolveExecutionReservation(
+		t.Context(),
+		deliveryservice.ResolveExecutionReservationTx{
+			TenantID:              tenantID,
+			IdempotencyKey:        "resolve-stale-activation",
+			RequestDigest:         deliveryDigest("8"),
+			Actor:                 deliveryservice.Actor{Subject: "supervisor-1"},
+			ExecutionID:           execution.ID,
+			ExpectedVersion:       storedExecution.Version,
+			Reason:                "stale route creation was compensated",
+			CompensationReference: "ops-case-stale-activation",
+			Now:                   now.Add(5 * time.Minute),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replay.Replayed ||
+		resolved.Status != deliverydomain.ExecutionPartiallyApplied ||
+		resolved.Version != storedExecution.Version+1 {
+		t.Fatalf("resolved stale activation = %+v replay=%+v", resolved, replay)
+	}
+	assertDeliveryReservationStatus(
+		t,
+		db,
+		tenantID,
+		execution.ID,
+		executionReservationReleased,
 	)
 	events, err := store.Replay(t.Context(), deliveryservice.StreamCursor{
 		TenantID:      tenantID,
@@ -720,6 +823,19 @@ func TestDeliveryActivationCASFailureBecomesPartialApplication(t *testing.T) {
 		deliveryservice.EventActivationFailed,
 		"system:delivery-effect-worker",
 	)
+	assertDeliveryBlockedPreparedAudit(
+		t,
+		events,
+		deliveryservice.EventActivationFailed,
+		[]deliverydomain.EffectID{"effect-2"},
+		"blocked_by_stale_activation",
+	)
+	assertDeliveryEvent(
+		t,
+		events,
+		deliveryservice.EventExecutionReservationResolved,
+		"supervisor-1",
+	)
 	revisionEvents, err := store.Replay(t.Context(), deliveryservice.StreamCursor{
 		TenantID:      tenantID,
 		AggregateType: deliveryservice.AggregateRevision,
@@ -734,6 +850,43 @@ func TestDeliveryActivationCASFailureBecomesPartialApplication(t *testing.T) {
 		deliveryservice.EventActivationFailed,
 		"system:delivery-effect-worker",
 	)
+}
+
+func assertDeliveryBlockedPreparedAudit(
+	t *testing.T,
+	events []deliveryservice.Event,
+	eventType deliveryservice.EventType,
+	wantIDs []deliverydomain.EffectID,
+	wantErrorCode string,
+) {
+	t.Helper()
+	for _, event := range events {
+		if event.Type != eventType {
+			continue
+		}
+		var payload struct {
+			EffectIDs []deliverydomain.EffectID `json:"blocked_prepared_effect_ids"`
+			ErrorCode string                    `json:"blocked_prepared_error_code"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if len(payload.EffectIDs) == 0 {
+			continue
+		}
+		if !slices.Equal(payload.EffectIDs, wantIDs) ||
+			payload.ErrorCode != wantErrorCode {
+			t.Fatalf(
+				"blocked prepared audit = ids:%v error:%q, want ids:%v error:%q",
+				payload.EffectIDs,
+				payload.ErrorCode,
+				wantIDs,
+				wantErrorCode,
+			)
+		}
+		return
+	}
+	t.Fatalf("blocked prepared audit event %q not found in %+v", eventType, events)
 }
 
 func prepareDeliveryApprovalFixture(

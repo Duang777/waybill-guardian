@@ -335,14 +335,174 @@ func TestDeliveryHTTPApprovalBoundaryRejectsAuthoritativeFields(t *testing.T) {
 	}
 }
 
+func TestDeliveryHTTPReservationResolutionDerivesAuthority(t *testing.T) {
+	guardianService := newSimulatedHTTPService(t, 1)
+	defer guardianService.Close()
+	platform := &deliveryHTTPPlatform{}
+	server := httptest.NewServer(newHandlerWithFrontendAndDelivery(
+		guardianService,
+		newLocalAccess(t),
+		nil,
+		nil,
+		nil,
+		nil,
+		defaultCrossOriginProtection(),
+		platform,
+	))
+	defer server.Close()
+
+	for name, body := range map[string]string{
+		"tenant": `{
+			"reason":"compensation verified",
+			"tenant_id":"attacker"
+		}`,
+		"actor": `{
+			"reason":"compensation verified",
+			"actor":"attacker"
+		}`,
+		"execution": `{
+			"reason":"compensation verified",
+			"execution_id":"attacker-execution"
+		}`,
+	} {
+		t.Run("rejects "+name, func(t *testing.T) {
+			request, err := http.NewRequest(
+				http.MethodPost,
+				server.URL+"/api/v1/delivery/executions/execution-1/reservation-resolutions",
+				bytes.NewBufferString(body),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Idempotency-Key", "resolution-key-"+name)
+			request.Header.Set("If-Match", `"7"`)
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response.Body.Close()
+			if response.StatusCode != http.StatusBadRequest ||
+				platform.resolutionCalls != 0 {
+				t.Fatalf(
+					"authority resolution status=%d calls=%d",
+					response.StatusCode,
+					platform.resolutionCalls,
+				)
+			}
+		})
+	}
+
+	request, err := http.NewRequest(
+		http.MethodPost,
+		server.URL+"/api/v1/delivery/executions/execution-1/reservation-resolutions",
+		bytes.NewBufferString(`{
+			"reason":" compensation verified ",
+			"compensation_reference":" case-42 "
+		}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "resolution-key")
+	request.Header.Set("If-Match", `"7"`)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("resolution status = %d, want 200", response.StatusCode)
+	}
+	if platform.resolutionCalls != 1 ||
+		platform.resolution.TenantID != "local-demo" ||
+		platform.resolution.Actor.Subject != "local-demo-reviewer" ||
+		platform.resolution.ExecutionID != "execution-1" ||
+		platform.resolution.ExpectedVersion != 7 ||
+		platform.resolution.Reason != "compensation verified" ||
+		platform.resolution.CompensationReference != "case-42" {
+		t.Fatalf("resolution = %+v, calls=%d",
+			platform.resolution, platform.resolutionCalls)
+	}
+}
+
+func TestDeliveryHTTPReservationResolutionRequiresSupervisor(t *testing.T) {
+	guardianService := newSimulatedHTTPService(t, 1)
+	defer guardianService.Close()
+	platform := &deliveryHTTPPlatform{}
+	access, privateKey := newJWTAccess(t)
+	server := httptest.NewServer(newHandlerWithFrontendAndDelivery(
+		guardianService,
+		access,
+		nil,
+		nil,
+		nil,
+		nil,
+		defaultCrossOriginProtection(),
+		platform,
+	))
+	defer server.Close()
+
+	for _, test := range []struct {
+		name       string
+		roles      []string
+		wantStatus int
+	}{
+		{name: "operator", roles: []string{"operator"}, wantStatus: http.StatusForbidden},
+		{name: "supervisor", roles: []string{"supervisor"}, wantStatus: http.StatusOK},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			token := authToken(t, privateKey, "tenant-a", test.roles, true, nil)
+			request, err := http.NewRequest(
+				http.MethodPost,
+				server.URL+"/api/v1/delivery/executions/execution-1/reservation-resolutions",
+				bytes.NewBufferString(`{
+					"reason":"terminal effects reconciled",
+					"compensation_reference":"case-42"
+				}`),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("Authorization", "Bearer "+token)
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Idempotency-Key", "resolution-key-"+test.name)
+			request.Header.Set("If-Match", `"7"`)
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != test.wantStatus {
+				raw, _ := io.ReadAll(response.Body)
+				t.Fatalf(
+					"status = %d, want %d; body=%s",
+					response.StatusCode,
+					test.wantStatus,
+					raw,
+				)
+			}
+		})
+	}
+	if platform.resolutionCalls != 1 ||
+		platform.resolution.TenantID != "tenant-a" ||
+		platform.resolution.Actor.Subject != "reviewer-42" {
+		t.Fatalf("resolution = %+v, calls=%d",
+			platform.resolution, platform.resolutionCalls)
+	}
+}
+
 type deliveryHTTPPlatform struct {
 	createCalls     int
 	approvalCalls   int
 	decisionCalls   int
+	resolutionCalls int
 	created         deliveryservice.CreateProblem
 	cancelled       deliveryservice.CancelOptimization
 	approvalRequest deliveryservice.RequestPlanApproval
 	decision        deliveryservice.DecideApproval
+	resolution      deliveryservice.ResolveExecutionReservation
 }
 
 func (platform *deliveryHTTPPlatform) Commands() deliveryservice.Commands {
@@ -438,6 +598,20 @@ func (platform *deliveryHTTPPlatform) DecideApproval(
 		ApprovalID: request.ApprovalID,
 		Status:     deliverydomain.ExecutionPrepared,
 		Version:    1,
+	}, deliveryservice.Replay{}, nil
+}
+
+func (platform *deliveryHTTPPlatform) ResolveExecutionReservation(
+	_ context.Context,
+	request deliveryservice.ResolveExecutionReservation,
+) (deliverydomain.DispatchExecution, deliveryservice.Replay, error) {
+	platform.resolutionCalls++
+	platform.resolution = request
+	return deliverydomain.DispatchExecution{
+		TenantID: request.TenantID,
+		ID:       request.ExecutionID,
+		Status:   deliverydomain.ExecutionPartiallyApplied,
+		Version:  request.ExpectedVersion + 1,
 	}, deliveryservice.Replay{}, nil
 }
 

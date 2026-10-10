@@ -382,7 +382,6 @@ func (store *DeliveryStore) expireEffectKeys(
 		        AND reservation.status <> 'released'
 		  )
 		ORDER BY key_expires_at, execution_id, ordinal
-		FOR UPDATE SKIP LOCKED
 		LIMIT $3
 	`, request.TenantID, request.Now, request.Limit)
 	if err != nil {
@@ -405,7 +404,19 @@ func (store *DeliveryStore) expireEffectKeys(
 
 	events := make([]deliveryservice.Event, 0, len(expired))
 	for _, effect := range expired {
-		if _, err := tx.Exec(ctx, `
+		reservation, err := getExecutionReservationForUpdate(
+			ctx,
+			tx,
+			effect.TenantID,
+			effect.ExecutionID,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if reservation.Status == executionReservationReleased {
+			continue
+		}
+		tag, err := tx.Exec(ctx, `
 			UPDATE waybill.delivery_effects
 			SET status = 'manual_review',
 			    error_code = 'idempotency_key_expired',
@@ -413,26 +424,41 @@ func (store *DeliveryStore) expireEffectKeys(
 			    lease_owner = NULL,
 			    lease_deadline = NULL,
 			    updated_at = $3
-			WHERE tenant_id = $1 AND effect_id = $2
-		`, effect.TenantID, effect.ID, request.Now); err != nil {
+			WHERE tenant_id = $1
+			  AND effect_id = $2
+			  AND status = $4
+			  AND key_expires_at <= $3
+			  AND (lease_deadline IS NULL OR lease_deadline <= $3)
+		`, effect.TenantID, effect.ID, request.Now, effect.Status)
+		if err != nil {
 			return nil, err
 		}
+		if tag.RowsAffected() != 1 {
+			continue
+		}
+		var blockedPreparedEffectIDs []deliverydomain.EffectID
 		if effect.Required {
-			if err := store.markExecutionFailed(
+			blockedPreparedEffectIDs, err = store.markExecutionFailed(
 				ctx,
 				tx,
 				effect.TenantID,
 				effect.ExecutionID,
 				effect.RevisionID,
 				request.Now,
-			); err != nil {
+			)
+			if err != nil {
 				return nil, err
 			}
 		}
 		eventPayload := map[string]any{
-			"effect_id":  effect.ID,
-			"status":     deliverydomain.EffectManualReview,
-			"error_code": "idempotency_key_expired",
+			"effect_id":                   effect.ID,
+			"status":                      deliverydomain.EffectManualReview,
+			"error_code":                  "idempotency_key_expired",
+			"blocked_prepared":            len(blockedPreparedEffectIDs),
+			"blocked_prepared_effect_ids": blockedPreparedEffectIDs,
+		}
+		if len(blockedPreparedEffectIDs) > 0 {
+			eventPayload["blocked_prepared_error_code"] = "blocked_by_required_failure"
 		}
 		executionEvent, err := appendDeliveryEvent(
 			ctx,

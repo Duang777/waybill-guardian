@@ -78,6 +78,7 @@ func TestLocalBoundaryUsesTrustedIdentity(t *testing.T) {
 		DeliveryArtifactRead,
 		DeliveryPolicyAdmin,
 		DeliveryOverride,
+		DeliveryReconcile,
 	} {
 		grant, grantErr := boundary.Grant(principal, capability)
 		if grantErr != nil {
@@ -151,11 +152,17 @@ func TestJWTBoundarySeparatesApprovalAndOverrideRoles(t *testing.T) {
 	if _, err := boundary.Grant(operator, DeliveryOverride); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("operator override grant error = %v", err)
 	}
+	if _, err := boundary.Grant(operator, DeliveryReconcile); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("operator reconcile grant error = %v", err)
+	}
 
 	claims := validClaims(now)
 	claims.Roles = []string{"supervisor"}
 	supervisor := authenticateClaims(t, boundary, privateKey, claims)
 	if _, err := boundary.Grant(supervisor, DeliveryOverride); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := boundary.Grant(supervisor, DeliveryReconcile); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := boundary.Grant(supervisor, DeliveryApprove); !errors.Is(err, ErrForbidden) {

@@ -40,21 +40,22 @@ type Actor struct {
 type EventType string
 
 const (
-	EventProblemCreated     EventType = "problem.created"
-	EventRunRequested       EventType = "run.requested"
-	EventRunClaimed         EventType = "run.claimed"
-	EventRunCheckpointed    EventType = "run.checkpointed"
-	EventRunCancelRequested EventType = "run.cancel_requested"
-	EventRunFailed          EventType = "run.failed"
-	EventRevisionPublished  EventType = "revision.published"
-	EventRevisionActivated  EventType = "revision.activated"
-	EventApprovalRequested  EventType = "approval.requested"
-	EventApprovalDecided    EventType = "approval.decided"
-	EventExecutionCreated   EventType = "execution.created"
-	EventEffectClaimed      EventType = "effect.claimed"
-	EventEffectCompleted    EventType = "effect.completed"
-	EventActivationFailed   EventType = "revision.activation_failed"
-	EventRevisionSuperseded EventType = "revision.superseded"
+	EventProblemCreated               EventType = "problem.created"
+	EventRunRequested                 EventType = "run.requested"
+	EventRunClaimed                   EventType = "run.claimed"
+	EventRunCheckpointed              EventType = "run.checkpointed"
+	EventRunCancelRequested           EventType = "run.cancel_requested"
+	EventRunFailed                    EventType = "run.failed"
+	EventRevisionPublished            EventType = "revision.published"
+	EventRevisionActivated            EventType = "revision.activated"
+	EventApprovalRequested            EventType = "approval.requested"
+	EventApprovalDecided              EventType = "approval.decided"
+	EventExecutionCreated             EventType = "execution.created"
+	EventEffectClaimed                EventType = "effect.claimed"
+	EventEffectCompleted              EventType = "effect.completed"
+	EventExecutionReservationResolved EventType = "execution.reservation_resolved"
+	EventActivationFailed             EventType = "revision.activation_failed"
+	EventRevisionSuperseded           EventType = "revision.superseded"
 )
 
 type AggregateType string
@@ -207,6 +208,18 @@ type ActivateRevisionTx struct {
 	Now           time.Time
 }
 
+type ResolveExecutionReservationTx struct {
+	TenantID              domain.TenantID
+	IdempotencyKey        IdempotencyKey
+	RequestDigest         domain.ArtifactDigest
+	Actor                 Actor
+	ExecutionID           domain.ExecutionID
+	ExpectedVersion       uint64
+	Reason                string
+	CompensationReference string
+	Now                   time.Time
+}
+
 type ExpireApprovals struct {
 	TenantID domain.TenantID
 	Limit    int
@@ -266,6 +279,10 @@ type Store interface {
 	RenewEffectLease(context.Context, EffectClaim, time.Time) error
 	CompleteEffect(context.Context, EffectClaim, CompleteEffectTx) (EffectCompletion, error)
 	ActivateRevision(context.Context, ActivateRevisionTx) error
+	ResolveExecutionReservation(
+		context.Context,
+		ResolveExecutionReservationTx,
+	) (domain.DispatchExecution, Replay, error)
 	ExpireApprovals(context.Context, ExpireApprovals) (int, error)
 	RequestRunCancellation(
 		context.Context,
@@ -368,6 +385,16 @@ type DecideApproval struct {
 	OverrideReason  string
 }
 
+type ResolveExecutionReservation struct {
+	TenantID              domain.TenantID
+	Actor                 Actor
+	IdempotencyKey        IdempotencyKey
+	ExecutionID           domain.ExecutionID
+	ExpectedVersion       uint64
+	Reason                string
+	CompensationReference string
+}
+
 type Commands interface {
 	CreateProblem(context.Context, CreateProblem) (domain.ProblemVersion, Replay, error)
 	RequestOptimization(context.Context, RequestOptimization) (
@@ -389,6 +416,10 @@ type Commands interface {
 		Replay,
 		error,
 	)
+	ResolveExecutionReservation(
+		context.Context,
+		ResolveExecutionReservation,
+	) (domain.DispatchExecution, Replay, error)
 }
 
 type Queries interface {

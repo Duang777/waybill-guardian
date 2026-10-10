@@ -51,6 +51,7 @@ const (
 	DeliveryArtifactRead Capability = "delivery.artifact.read"
 	DeliveryPolicyAdmin  Capability = "delivery.policy.admin"
 	DeliveryOverride     Capability = "delivery.override"
+	DeliveryReconcile    Capability = "delivery.reconcile"
 )
 
 const (
@@ -271,7 +272,7 @@ func roleFor(capability Capability) (Role, bool) {
 		DeliveryExecute,
 		DeliveryPolicyAdmin:
 		return RoleOperator, true
-	case DeliveryOverride:
+	case DeliveryOverride, DeliveryReconcile:
 		return RoleSupervisor, true
 	default:
 		return "", false

@@ -524,7 +524,7 @@ func TestDeliveryExecutionReservationSerializesCompetingApprovals(t *testing.T) 
 			t.Fatal(err)
 		}
 		now := time.Date(2026, time.October, 10, 17, 0, 0, 0, time.UTC)
-		fixture := prepareCompetingDeliveryApprovals(t, db, store, now, 2)
+		fixture := prepareCompetingDeliveryApprovals(t, db, store, now, 3)
 		winner, loser := confirmCompetingDeliveryApprovals(t, store, fixture)
 
 		first := claimOneDeliveryEffect(
@@ -584,6 +584,528 @@ func TestDeliveryExecutionReservationSerializesCompetingApprovals(t *testing.T) 
 			executionReservationReconciliationRequired,
 		)
 		assertCompetingDeliveryApprovalBlocked(t, store, fixture, loser)
+	})
+}
+
+func TestDeliveryExecutionReservationResolution(t *testing.T) {
+	t.Run("nonterminal and ambiguous effects keep the reservation", func(t *testing.T) {
+		db := openIntegrationDB(t)
+		store, err := NewDeliveryStore(db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		now := time.Date(2026, time.October, 10, 18, 0, 0, 0, time.UTC)
+		fixture := prepareCompetingDeliveryApprovals(t, db, store, now, 1)
+		winner, _ := confirmCompetingDeliveryApprovals(t, store, fixture)
+		executionID := fixture.commands[winner].Execution.ID
+
+		claim := claimOneDeliveryEffect(
+			t,
+			store,
+			fixture.tenantID,
+			"resolution-worker-dispatch",
+			now.Add(4*time.Minute),
+		)
+		if _, err := store.CompleteEffect(
+			t.Context(),
+			claim,
+			deliveryservice.CompleteEffectTx{
+				Status:        deliverydomain.EffectUnknown,
+				NextOperation: deliverydomain.EffectOperationLookup,
+				ErrorCode:     "transport_after_send",
+				ObservedAt:    now.Add(4 * time.Minute),
+			},
+		); err != nil {
+			t.Fatal(err)
+		}
+		execution, _, err := store.GetExecution(
+			t.Context(),
+			fixture.tenantID,
+			executionID,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = store.ResolveExecutionReservation(
+			t.Context(),
+			deliveryservice.ResolveExecutionReservationTx{
+				TenantID:              fixture.tenantID,
+				IdempotencyKey:        "resolve-unknown",
+				RequestDigest:         deliveryDigest("2"),
+				Actor:                 deliveryservice.Actor{Subject: "supervisor-1"},
+				ExecutionID:           executionID,
+				ExpectedVersion:       execution.Version,
+				Reason:                "provider outcome is still unknown",
+				CompensationReference: "case-unknown",
+				Now:                   now.Add(5 * time.Minute),
+			},
+		)
+		if !errors.Is(err, deliveryservice.ErrConflict) {
+			t.Fatalf("unknown resolution error = %v, want ErrConflict", err)
+		}
+
+		lookup := claimOneDeliveryEffect(
+			t,
+			store,
+			fixture.tenantID,
+			"resolution-worker-lookup",
+			now.Add(5*time.Minute),
+		)
+		retryAt := now.Add(7 * time.Minute)
+		if _, err := store.CompleteEffect(
+			t.Context(),
+			lookup,
+			deliveryservice.CompleteEffectTx{
+				Status:        deliverydomain.EffectRetryWait,
+				NextOperation: deliverydomain.EffectOperationLookup,
+				ErrorCode:     "provider_lookup_unavailable",
+				RetryAt:       &retryAt,
+				ObservedAt:    now.Add(6 * time.Minute),
+			},
+		); err != nil {
+			t.Fatal(err)
+		}
+		execution, _, err = store.GetExecution(
+			t.Context(),
+			fixture.tenantID,
+			executionID,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = store.ResolveExecutionReservation(
+			t.Context(),
+			deliveryservice.ResolveExecutionReservationTx{
+				TenantID:              fixture.tenantID,
+				IdempotencyKey:        "resolve-retry-wait",
+				RequestDigest:         deliveryDigest("3"),
+				Actor:                 deliveryservice.Actor{Subject: "supervisor-1"},
+				ExecutionID:           executionID,
+				ExpectedVersion:       execution.Version,
+				Reason:                "provider retry has not completed",
+				CompensationReference: "case-retry",
+				Now:                   now.Add(7 * time.Minute),
+			},
+		)
+		if !errors.Is(err, deliveryservice.ErrConflict) {
+			t.Fatalf("retry resolution error = %v, want ErrConflict", err)
+		}
+		assertDeliveryReservationStatus(
+			t,
+			db,
+			fixture.tenantID,
+			executionID,
+			executionReservationReconciliationRequired,
+		)
+		claims, err := store.ClaimEffects(
+			t.Context(),
+			deliveryservice.ClaimEffects{
+				TenantID: fixture.tenantID,
+				WorkerID: "resolution-expiry-worker",
+				Limit:    10,
+				LeaseTTL: time.Minute,
+				Now:      now.Add(49 * time.Hour),
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(claims) != 0 {
+			t.Fatalf("claims after key expiry = %+v", claims)
+		}
+		execution, effects, err := store.GetExecution(
+			t.Context(),
+			fixture.tenantID,
+			executionID,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if execution.Status != deliverydomain.ExecutionManualReview ||
+			len(effects) != 1 ||
+			effects[0].Status != deliverydomain.EffectManualReview ||
+			effects[0].DispatchStartedAt == nil {
+			t.Fatalf("expired ambiguous effect = execution:%+v effects:%+v", execution, effects)
+		}
+		command := deliveryservice.ResolveExecutionReservationTx{
+			TenantID:        fixture.tenantID,
+			IdempotencyKey:  "resolve-expired-unknown-without-reference",
+			RequestDigest:   deliveryDigest("4"),
+			Actor:           deliveryservice.Actor{Subject: "supervisor-1"},
+			ExecutionID:     executionID,
+			ExpectedVersion: execution.Version,
+			Reason:          "provider outcome was resolved manually",
+			Now:             now.Add(49*time.Hour + time.Minute),
+		}
+		_, _, err = store.ResolveExecutionReservation(t.Context(), command)
+		if !errors.Is(err, deliveryservice.ErrConflict) {
+			t.Fatalf("unreferenced ambiguous resolution error = %v, want ErrConflict", err)
+		}
+		command.IdempotencyKey = "resolve-expired-unknown"
+		command.RequestDigest = deliveryDigest("5")
+		command.CompensationReference = "ops-case-expired-unknown"
+		if _, _, err := store.ResolveExecutionReservation(
+			t.Context(),
+			command,
+		); err != nil {
+			t.Fatal(err)
+		}
+		assertDeliveryReservationStatus(
+			t,
+			db,
+			fixture.tenantID,
+			executionID,
+			executionReservationReleased,
+		)
+	})
+
+	t.Run("compensated terminal failure releases the plan", func(t *testing.T) {
+		db := openIntegrationDB(t)
+		store, err := NewDeliveryStore(db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		now := time.Date(2026, time.October, 10, 19, 0, 0, 0, time.UTC)
+		fixture := prepareCompetingDeliveryApprovals(t, db, store, now, 3)
+		winner, loser := confirmCompetingDeliveryApprovals(t, store, fixture)
+		executionID := fixture.commands[winner].Execution.ID
+
+		first := claimOneDeliveryEffect(
+			t,
+			store,
+			fixture.tenantID,
+			"resolution-terminal-worker-1",
+			now.Add(4*time.Minute),
+		)
+		if _, err := store.CompleteEffect(
+			t.Context(),
+			first,
+			deliveryservice.CompleteEffectTx{
+				Status:        deliverydomain.EffectSucceeded,
+				NextOperation: first.Operation,
+				ExternalRef:   "route-created",
+				ObservedAt:    now.Add(4 * time.Minute),
+			},
+		); err != nil {
+			t.Fatal(err)
+		}
+		second := claimOneDeliveryEffect(
+			t,
+			store,
+			fixture.tenantID,
+			"resolution-terminal-worker-2",
+			now.Add(5*time.Minute),
+		)
+		if _, err := store.CompleteEffect(
+			t.Context(),
+			second,
+			deliveryservice.CompleteEffectTx{
+				Status:        deliverydomain.EffectPermanentFailed,
+				NextOperation: second.Operation,
+				ErrorCode:     "provider_rejected_route",
+				ObservedAt:    now.Add(5 * time.Minute),
+			},
+		); err != nil {
+			t.Fatal(err)
+		}
+		execution, effects, err := store.GetExecution(
+			t.Context(),
+			fixture.tenantID,
+			executionID,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(effects) != 3 ||
+			effects[0].Status != deliverydomain.EffectSucceeded ||
+			effects[1].Status != deliverydomain.EffectPermanentFailed ||
+			effects[2].Status != deliverydomain.EffectManualReview ||
+			effects[2].ErrorCode != "blocked_by_required_failure" {
+			t.Fatalf("terminalized effects = %+v", effects)
+		}
+		revisionBefore, err := store.GetRevision(
+			t.Context(),
+			fixture.tenantID,
+			execution.RevisionID,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = store.ResolveExecutionReservation(
+			t.Context(),
+			deliveryservice.ResolveExecutionReservationTx{
+				TenantID:        fixture.tenantID,
+				IdempotencyKey:  "resolve-without-compensation",
+				RequestDigest:   deliveryDigest("4"),
+				Actor:           deliveryservice.Actor{Subject: "supervisor-1"},
+				ExecutionID:     executionID,
+				ExpectedVersion: execution.Version,
+				Reason:          "terminal effect review completed",
+				Now:             now.Add(6 * time.Minute),
+			},
+		)
+		if !errors.Is(err, deliveryservice.ErrConflict) {
+			t.Fatalf("uncompensated resolution error = %v, want ErrConflict", err)
+		}
+
+		command := deliveryservice.ResolveExecutionReservationTx{
+			TenantID:              fixture.tenantID,
+			IdempotencyKey:        "resolve-compensated",
+			RequestDigest:         deliveryDigest("5"),
+			Actor:                 deliveryservice.Actor{Subject: "supervisor-1"},
+			ExecutionID:           executionID,
+			ExpectedVersion:       execution.Version,
+			Reason:                "created route was cancelled after assignment failed",
+			CompensationReference: "ops-case-20261010-42",
+			Now:                   now.Add(7 * time.Minute),
+		}
+		type resolutionResult struct {
+			execution deliverydomain.DispatchExecution
+			replay    deliveryservice.Replay
+			err       error
+		}
+		const resolverCount = 20
+		results := make(chan resolutionResult, resolverCount)
+		var wait sync.WaitGroup
+		wait.Add(resolverCount)
+		for range resolverCount {
+			go func() {
+				defer wait.Done()
+				resolved, replay, resolveErr := store.ResolveExecutionReservation(
+					t.Context(),
+					command,
+				)
+				results <- resolutionResult{
+					execution: resolved,
+					replay:    replay,
+					err:       resolveErr,
+				}
+			}()
+		}
+		wait.Wait()
+		close(results)
+		mutations := 0
+		replays := 0
+		for result := range results {
+			if result.err != nil {
+				t.Fatal(result.err)
+			}
+			if result.execution.Status != deliverydomain.ExecutionPartiallyApplied ||
+				result.execution.Version != execution.Version+1 {
+				t.Fatalf(
+					"concurrent resolved execution = %+v replay=%+v",
+					result.execution,
+					result.replay,
+				)
+			}
+			if result.replay.Replayed {
+				replays++
+			} else {
+				mutations++
+			}
+		}
+		if mutations != 1 || replays != resolverCount-1 {
+			t.Fatalf(
+				"concurrent resolution mutations=%d replays=%d",
+				mutations,
+				replays,
+			)
+		}
+		assertDeliveryReservationStatus(
+			t,
+			db,
+			fixture.tenantID,
+			executionID,
+			executionReservationReleased,
+		)
+		revisionAfter, err := store.GetRevision(
+			t.Context(),
+			fixture.tenantID,
+			execution.RevisionID,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if revisionAfter.Status != revisionBefore.Status ||
+			revisionAfter.Version != revisionBefore.Version {
+			t.Fatalf(
+				"resolution changed terminal revision: before=%+v after=%+v",
+				revisionBefore,
+				revisionAfter,
+			)
+		}
+
+		stale := command
+		stale.IdempotencyKey = "resolve-stale-version"
+		stale.RequestDigest = deliveryDigest("6")
+		_, _, err = store.ResolveExecutionReservation(t.Context(), stale)
+		if !errors.Is(err, deliveryservice.ErrConflict) {
+			t.Fatalf("stale resolution error = %v, want ErrConflict", err)
+		}
+
+		executionEvents, err := store.Replay(
+			t.Context(),
+			deliveryservice.StreamCursor{
+				TenantID:      fixture.tenantID,
+				AggregateType: deliveryservice.AggregateExecution,
+				AggregateID:   string(executionID),
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		revisionEvents, err := store.Replay(
+			t.Context(),
+			deliveryservice.StreamCursor{
+				TenantID:      fixture.tenantID,
+				AggregateType: deliveryservice.AggregateRevision,
+				AggregateID:   string(execution.RevisionID),
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertSingleDeliveryEvent(
+			t,
+			executionEvents,
+			deliveryservice.EventExecutionReservationResolved,
+			"supervisor-1",
+		)
+		assertSingleDeliveryEvent(
+			t,
+			revisionEvents,
+			deliveryservice.EventExecutionReservationResolved,
+			"supervisor-1",
+		)
+
+		competing, replay, err := store.DecideAndCreateExecution(
+			t.Context(),
+			fixture.commands[loser],
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if replay.Replayed || competing.ID != fixture.commands[loser].Execution.ID {
+			t.Fatalf("competing confirmation = %+v replay=%+v", competing, replay)
+		}
+		assertDeliveryReservationStatus(
+			t,
+			db,
+			fixture.tenantID,
+			competing.ID,
+			executionReservationReserved,
+		)
+	})
+
+	t.Run("competing resolution keys use execution CAS", func(t *testing.T) {
+		db := openIntegrationDB(t)
+		store, err := NewDeliveryStore(db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		now := time.Date(2026, time.October, 10, 20, 0, 0, 0, time.UTC)
+		fixture := prepareCompetingDeliveryApprovals(t, db, store, now, 1)
+		winner, _ := confirmCompetingDeliveryApprovals(t, store, fixture)
+		executionID := fixture.commands[winner].Execution.ID
+
+		claim := claimOneDeliveryEffect(
+			t,
+			store,
+			fixture.tenantID,
+			"resolution-cas-worker",
+			now.Add(4*time.Minute),
+		)
+		if _, err := store.CompleteEffect(
+			t.Context(),
+			claim,
+			deliveryservice.CompleteEffectTx{
+				Status:        deliverydomain.EffectPermanentFailed,
+				NextOperation: claim.Operation,
+				ErrorCode:     "provider_rejected_route",
+				ObservedAt:    now.Add(4 * time.Minute),
+			},
+		); err != nil {
+			t.Fatal(err)
+		}
+		execution, _, err := store.GetExecution(
+			t.Context(),
+			fixture.tenantID,
+			executionID,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		commands := [2]deliveryservice.ResolveExecutionReservationTx{}
+		for index := range commands {
+			commands[index] = deliveryservice.ResolveExecutionReservationTx{
+				TenantID:        fixture.tenantID,
+				IdempotencyKey:  deliveryservice.IdempotencyKey(fmt.Sprintf("resolve-cas-%d", index)),
+				RequestDigest:   deliveryDigest(fmt.Sprintf("%x", index+7)),
+				Actor:           deliveryservice.Actor{Subject: "supervisor-1"},
+				ExecutionID:     executionID,
+				ExpectedVersion: execution.Version,
+				Reason:          "provider rejected the only external write",
+				Now:             now.Add(5 * time.Minute),
+			}
+		}
+		results := make(chan error, len(commands))
+		var wait sync.WaitGroup
+		wait.Add(len(commands))
+		for _, command := range commands {
+			go func() {
+				defer wait.Done()
+				_, _, resolveErr := store.ResolveExecutionReservation(
+					t.Context(),
+					command,
+				)
+				results <- resolveErr
+			}()
+		}
+		wait.Wait()
+		close(results)
+		successes := 0
+		conflicts := 0
+		for resolveErr := range results {
+			switch {
+			case resolveErr == nil:
+				successes++
+			case errors.Is(resolveErr, deliveryservice.ErrConflict):
+				conflicts++
+			default:
+				t.Fatal(resolveErr)
+			}
+		}
+		if successes != 1 || conflicts != 1 {
+			t.Fatalf(
+				"competing resolutions successes=%d conflicts=%d",
+				successes,
+				conflicts,
+			)
+		}
+		assertDeliveryReservationStatus(
+			t,
+			db,
+			fixture.tenantID,
+			executionID,
+			executionReservationReleased,
+		)
+		events, err := store.Replay(
+			t.Context(),
+			deliveryservice.StreamCursor{
+				TenantID:      fixture.tenantID,
+				AggregateType: deliveryservice.AggregateExecution,
+				AggregateID:   string(executionID),
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertSingleDeliveryEvent(
+			t,
+			events,
+			deliveryservice.EventExecutionReservationResolved,
+			"supervisor-1",
+		)
 	})
 }
 
@@ -1050,6 +1572,24 @@ func assertDeliveryEvent(
 		}
 	}
 	t.Fatalf("event %q by %q not found in %+v", eventType, actor, events)
+}
+
+func assertSingleDeliveryEvent(
+	t *testing.T,
+	events []deliveryservice.Event,
+	eventType deliveryservice.EventType,
+	actor string,
+) {
+	t.Helper()
+	count := 0
+	for _, event := range events {
+		if event.Type == eventType && event.Actor == actor {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("event %q by %q count = %d, want 1", eventType, actor, count)
+	}
 }
 
 func createValidatedDeliveryRevision(

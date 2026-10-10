@@ -39,6 +39,10 @@ func (a *api) mountDeliveryRoutes() {
 		a.decideDeliveryApproval,
 	)
 	a.mux.HandleFunc("GET /api/v1/delivery/executions/{id}", a.getDeliveryExecution)
+	a.mux.HandleFunc(
+		"POST /api/v1/delivery/executions/{id}/reservation-resolutions",
+		a.resolveDeliveryExecutionReservation,
+	)
 	a.mux.HandleFunc("GET /api/v1/delivery/artifacts/{digest}", a.getDeliveryArtifact)
 	a.mux.HandleFunc("GET /api/v1/delivery/problems/{id}/events", a.deliveryProblemEvents)
 	a.mux.HandleFunc("GET /api/v1/delivery/runs/{id}/events", a.deliveryRunEvents)
@@ -460,6 +464,72 @@ func (a *api) getDeliveryExecution(w http.ResponseWriter, r *http.Request) {
 		Execution: value,
 		Effects:   effects,
 	})
+}
+
+func (a *api) resolveDeliveryExecutionReservation(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	principal, _, ok := a.grant(w, r, httpauth.DeliveryReconcile)
+	if !ok {
+		return
+	}
+	if err := requireJSONContentType(r.Header.Get("Content-Type")); err != nil {
+		writeProblem(w, http.StatusUnsupportedMediaType, "invalid_content_type", err.Error())
+		return
+	}
+	key, err := deliveryIdempotencyKey(r)
+	if err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid_idempotency_key", err.Error())
+		return
+	}
+	expected, err := parseIfMatch(r.Header.Get("If-Match"))
+	if err != nil {
+		writeProblem(w, http.StatusPreconditionRequired, "if_match_required", err.Error())
+		return
+	}
+	var body struct {
+		Reason                string `json:"reason"`
+		CompensationReference string `json:"compensation_reference,omitempty"`
+	}
+	if err := decodeJSON(r.Body, &body); err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	body.Reason = strings.TrimSpace(body.Reason)
+	body.CompensationReference = strings.TrimSpace(body.CompensationReference)
+	if body.Reason == "" ||
+		len(body.Reason) > 1_000 ||
+		len(body.CompensationReference) > 1_000 {
+		writeProblem(
+			w,
+			http.StatusBadRequest,
+			"invalid_body",
+			"reason or compensation_reference is invalid",
+		)
+		return
+	}
+	value, replay, err := a.delivery.Commands().ResolveExecutionReservation(
+		r.Context(),
+		deliveryservice.ResolveExecutionReservation{
+			TenantID:              deliverydomain.TenantID(principal.TenantID()),
+			Actor:                 deliveryservice.Actor{Subject: principal.Subject()},
+			IdempotencyKey:        key,
+			ExecutionID:           deliverydomain.ExecutionID(r.PathValue("id")),
+			ExpectedVersion:       expected,
+			Reason:                body.Reason,
+			CompensationReference: body.CompensationReference,
+		},
+	)
+	if err != nil {
+		writeDeliveryError(w, err)
+		return
+	}
+	if replay.Replayed {
+		w.Header().Set("Idempotent-Replayed", "true")
+	}
+	w.Header().Set("ETag", quotedVersion(value.Version))
+	writeJSON(w, http.StatusOK, value)
 }
 
 func (a *api) getDeliveryArtifact(w http.ResponseWriter, r *http.Request) {
