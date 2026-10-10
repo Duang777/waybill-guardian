@@ -14,7 +14,7 @@
 <p align="center">An evidence-driven agent for abnormal waybills. Automated investigation, human decisions, idempotent execution, and complete auditability.</p>
 
 <p align="center">
-  <a href="https://go.dev/dl/"><img alt="Go 1.25.3" src="https://img.shields.io/badge/Go-1.25.3-00ADD8?logo=go&logoColor=white"></a>
+  <a href="https://go.dev/dl/"><img alt="Go 1.26.9" src="https://img.shields.io/badge/Go-1.26.9-00ADD8?logo=go&logoColor=white"></a>
   <a href="https://react.dev/"><img alt="React 19.3.0" src="https://img.shields.io/badge/React-19.3.0-087EA4?logo=react&logoColor=white"></a>
   <a href="https://nodejs.org/"><img alt="Node.js 22.12 or newer" src="https://img.shields.io/badge/Node.js-%3E%3D22.12-339933?logo=nodedotjs&logoColor=white"></a>
   <a href="https://github.com/Duang777/waybill-guardian/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Duang777/waybill-guardian/actions/workflows/ci.yml/badge.svg"></a>
@@ -209,6 +209,18 @@ The reference baseline verifies the data, digests, Validator, and reporting path
 measure production solver quality, prove global optimality, or certify physical loading safety.
 Publish production solver evidence only when `publication_gate.publication_ready=true`.
 
+The production acceptance tool fixes capacity scenarios with 100, 500, and 2,000 tasks. It also
+covers 300 cargo items per vehicle, 100 concurrent queries, 500 SSE connections, failure recovery,
+cross-tenant authorization, and supply-chain checks. The authoritative status is in
+[`delivery-acceptance.v1.json`](docs/reports/delivery-acceptance.v1.json). The generated table is in
+the [city delivery production acceptance report](docs/reports/delivery-acceptance.en.md). A probe
+without a production entry point remains `blocked` and does not count as a pass.
+
+```bash
+./scripts/delivery-acceptance/run.sh
+./scripts/delivery-acceptance/check.sh
+```
+
 ## Architecture
 
 ```mermaid
@@ -330,7 +342,7 @@ RECORD_RESOLUTION=1920x1080 npm run record:demo
 
 ## Quick start
 
-You need Go 1.25.3 or newer and Node.js 22.12 or newer.
+You need Go 1.26.9 or newer and Node.js 22.12 or newer.
 
 ```bash
 git clone https://github.com/Duang777/waybill-guardian.git
@@ -412,6 +424,7 @@ go vet ./...
 go build ./...
 ./scripts/check-history-governance.sh
 ./scripts/delivery-benchmark/check.sh
+./scripts/delivery-acceptance/check.sh
 ./scripts/licenses.sh
 ./scripts/test-postgres.sh
 
@@ -444,6 +457,7 @@ Browser verification covers investigation, approval, reassignment, notifications
 | `internal/tools` | Seven typed tools and output allow lists |
 | `internal/delivery` | City delivery contracts, snapshots, independent Validator, and artifact store |
 | `scripts/delivery-benchmark` | Fixed datasets, solver command protocol, 20 replays, and report generation |
+| `scripts/delivery-acceptance` | Capacity, security, high availability, recovery, and supply-chain acceptance |
 | `web` | React overview, workbench, maps, charts, and audit timeline |
 
 ## Open source
@@ -469,5 +483,6 @@ These repositories were used to compare interaction and domain structure. Their 
 - [City delivery API reference](docs/delivery-api-reference.md)
 - [City delivery operations](docs/delivery-operations.md)
 - [City delivery benchmark evidence](docs/reports/delivery-benchmark.en.md)
+- [City delivery production acceptance report](docs/reports/delivery-acceptance.en.md)
 - [Demo script](docs/demo-script.md)
 - [Module index](AGENTS.md)

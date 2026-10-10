@@ -17,7 +17,7 @@ RUN npx --yes license-checker-rseidelsohn@4.4.2 \
     --excludePrivatePackages \
     --files /out/licenses/web >/dev/null
 
-FROM golang:1.25-alpine AS server-build
+FROM golang:1.26-alpine AS server-build
 
 WORKDIR /src
 COPY go.mod go.sum ./

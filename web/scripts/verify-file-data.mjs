@@ -125,8 +125,9 @@ try {
   await page.goto(`${webURL}/waybills/YD2026101041`, { waitUntil: "networkidle" });
   const selector = page.getByLabel("选择异常运单");
   await page.getByText("南京 → 青岛", { exact: true }).waitFor();
+  const catalogOptions = selector.locator('option:not([value=""])');
   assert(
-    (await selector.locator("option").count()) === 2,
+    (await catalogOptions.count()) === 2,
     "file catalog did not expose both waybills",
   );
 

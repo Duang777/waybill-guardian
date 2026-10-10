@@ -1,0 +1,319 @@
+{
+  "schema_version": "delivery.acceptance.report.v1",
+  "generated_at": "2026-10-10T15:59:02Z",
+  "tool_sha256": "14a992d888c20afb8f67d7bca198a853ffee202b5805c2e11f91e6f6b91e119e",
+  "config_sha256": "b3f5c45e9ef13e830aa83915553d3e7e19b912744d56b2fff2e682fba7cbf29c",
+  "subject_sha256": "5dd760ddfa162276e3409d515ba4610afc97c6f7dc3fc7d1246453a19a07abe1",
+  "source_revision": "f921411b2698384c3d9519b6340b102f6556f221",
+  "environment": {
+    "goos": "darwin",
+    "goarch": "arm64",
+    "go_version": "go1.26.9",
+    "os_version": "Darwin 25.5.0",
+    "cpu_model": "Apple M5 Pro",
+    "memory_bytes": 51539607552
+  },
+  "probes": [
+    {
+      "id": "artifact-resilience",
+      "label": "Artifact isolation, integrity, and recovery",
+      "kind": "embedded_artifact",
+      "required_for_publication": true,
+      "status": "passed",
+      "checks": [
+        {
+          "id": "tenant_isolation",
+          "passed": true,
+          "detail": "a foreign tenant could not open the digest"
+        },
+        {
+          "id": "digest_integrity",
+          "passed": true,
+          "detail": "all stored digests reopened and verified"
+        },
+        {
+          "id": "corruption_detected",
+          "passed": true,
+          "detail": "tampered envelope returned ErrIntegrity"
+        },
+        {
+          "id": "backup_restore",
+          "passed": true,
+          "detail": "source and restored trees match; recovery_ns=300701542"
+        },
+        {
+          "id": "size_limit",
+          "passed": true,
+          "detail": "oversize artifact returned ErrTooLarge"
+        },
+        {
+          "id": "cancellation",
+          "passed": true,
+          "detail": "cancelled context stopped publication"
+        },
+        {
+          "id": "concurrent_put",
+          "passed": true,
+          "detail": "concurrent writers converged on one digest"
+        },
+        {
+          "id": "bounded_heap",
+          "passed": true,
+          "detail": "peak_heap_bytes=3431896 limit=134217728"
+        },
+        {
+          "id": "bounded_goroutines",
+          "passed": true,
+          "detail": "baseline=1 peak=33 final=1"
+        },
+        {
+          "id": "private_permissions",
+          "passed": true,
+          "detail": "artifact files and directories deny group and other access"
+        }
+      ],
+      "measurements": [
+        {
+          "id": "artifact-put",
+          "sample_count": 30,
+          "duration_ns": {
+            "minimum": 11888458,
+            "p50": 13690625,
+            "p95": 18556125,
+            "p99": 19175041,
+            "maximum": 19175041
+          },
+          "peak_memory_bytes": 3431896,
+          "peak_goroutines": 33,
+          "feasibility_ppm": 1000000
+        },
+        {
+          "id": "artifact-open",
+          "sample_count": 30,
+          "duration_ns": {
+            "minimum": 1237208,
+            "p50": 1436958,
+            "p95": 1887041,
+            "p99": 2113875,
+            "maximum": 2113875
+          },
+          "peak_memory_bytes": 3431896,
+          "peak_goroutines": 33,
+          "feasibility_ppm": 1000000
+        },
+        {
+          "id": "artifact-verify",
+          "sample_count": 30,
+          "duration_ns": {
+            "minimum": 1176083,
+            "p50": 1370667,
+            "p95": 1768625,
+            "p99": 2087875,
+            "maximum": 2087875
+          },
+          "peak_memory_bytes": 3431896,
+          "peak_goroutines": 33,
+          "feasibility_ppm": 1000000
+        },
+        {
+          "id": "artifact-restore",
+          "sample_count": 1,
+          "duration_ns": {
+            "minimum": 300701542,
+            "p50": 300701542,
+            "p95": 300701542,
+            "p99": 300701542,
+            "maximum": 300701542
+          },
+          "peak_memory_bytes": 3431896,
+          "peak_goroutines": 33,
+          "feasibility_ppm": 1000000,
+          "recovery_ns": 300701542
+        }
+      ],
+      "artifacts": [
+        {
+          "name": "artifact-tree",
+          "sha256": "53e4b7887ad8f7af22bea0b95bb2193c59cd9425a0c252ee6c3f9f9664a22230",
+          "bytes": 1971021
+        }
+      ]
+    },
+    {
+      "id": "browser-cargo",
+      "label": "300-item browser playback and resource release",
+      "kind": "browser",
+      "required_for_publication": true,
+      "status": "passed",
+      "checks": [
+        {
+          "id": "cargo_count",
+          "passed": true,
+          "detail": "verify:delivery completed its 300-item assertion"
+        },
+        {
+          "id": "instanced_rendering",
+          "passed": true,
+          "detail": "verify:delivery completed its InstancedMesh assertion"
+        },
+        {
+          "id": "nonblank_canvas",
+          "passed": true,
+          "detail": "colors=12 chromatic_pixels=13"
+        },
+        {
+          "id": "state_matrix",
+          "passed": true,
+          "detail": "states=20 expected=20"
+        },
+        {
+          "id": "remount_release",
+          "passed": true,
+          "detail": "samples=21 remount_cycles=20"
+        }
+      ],
+      "measurements": [],
+      "artifacts": [
+        {
+          "name": "delivery-console-1440.png",
+          "sha256": "b155d2d47bbd9e5d0288b49baa03181086e1562bc34e34afec91ffc73cc9b843",
+          "bytes": 255536
+        },
+        {
+          "name": "delivery-console-375.png",
+          "sha256": "d4fca52882686c996fa6494c9c5f65b48563e144ed43d40569f3f878853eac39",
+          "bytes": 211525
+        },
+        {
+          "name": "delivery-cargo-300.png",
+          "sha256": "0b253b8fe3dbded510045414f303fdfe8986c4b2416279a4525d947c473c3a22",
+          "bytes": 53386
+        }
+      ]
+    },
+    {
+      "id": "capacity-matrix",
+      "label": "Solver and Validator capacity matrix",
+      "kind": "command",
+      "required_for_publication": true,
+      "status": "blocked",
+      "reason": "command environment variable DELIVERY_ACCEPTANCE_CAPACITY_COMMAND is not set",
+      "command_source": "DELIVERY_ACCEPTANCE_CAPACITY_COMMAND",
+      "checks": [],
+      "measurements": [],
+      "artifacts": []
+    },
+    {
+      "id": "query-sse-capacity",
+      "label": "Concurrent workspace queries and SSE connections",
+      "kind": "command",
+      "required_for_publication": true,
+      "status": "blocked",
+      "reason": "command environment variable DELIVERY_ACCEPTANCE_CONCURRENCY_COMMAND is not set",
+      "command_source": "DELIVERY_ACCEPTANCE_CONCURRENCY_COMMAND",
+      "checks": [],
+      "measurements": [],
+      "artifacts": []
+    },
+    {
+      "id": "failure-recovery",
+      "label": "Database, solver, lease, artifact, and effect recovery",
+      "kind": "command",
+      "required_for_publication": true,
+      "status": "blocked",
+      "reason": "command environment variable DELIVERY_ACCEPTANCE_RECOVERY_COMMAND is not set",
+      "command_source": "DELIVERY_ACCEPTANCE_RECOVERY_COMMAND",
+      "checks": [],
+      "measurements": [],
+      "artifacts": []
+    },
+    {
+      "id": "authorization",
+      "label": "Cross-tenant and object authorization",
+      "kind": "command",
+      "required_for_publication": true,
+      "status": "blocked",
+      "reason": "command environment variable DELIVERY_ACCEPTANCE_AUTHORIZATION_COMMAND is not set",
+      "command_source": "DELIVERY_ACCEPTANCE_AUTHORIZATION_COMMAND",
+      "checks": [],
+      "measurements": [],
+      "artifacts": []
+    },
+    {
+      "id": "observability",
+      "label": "Metrics, logs, traces, SLOs, and alerts",
+      "kind": "command",
+      "required_for_publication": true,
+      "status": "blocked",
+      "reason": "command environment variable DELIVERY_ACCEPTANCE_OBSERVABILITY_COMMAND is not set",
+      "command_source": "DELIVERY_ACCEPTANCE_OBSERVABILITY_COMMAND",
+      "checks": [],
+      "measurements": [],
+      "artifacts": []
+    },
+    {
+      "id": "supply-chain",
+      "label": "Vulnerabilities, licenses, container contents, and SBOM",
+      "kind": "command",
+      "required_for_publication": true,
+      "status": "passed",
+      "command_source": "DELIVERY_ACCEPTANCE_SUPPLY_CHAIN_COMMAND",
+      "checks": [
+        {
+          "id": "go_vulnerabilities",
+          "passed": true,
+          "detail": "govulncheck reported no reachable vulnerability"
+        },
+        {
+          "id": "web_vulnerabilities",
+          "passed": true,
+          "detail": "npm audit reported no high or critical production vulnerability"
+        },
+        {
+          "id": "licenses",
+          "passed": true,
+          "detail": "committed Go and web license manifests are current"
+        },
+        {
+          "id": "container_contents",
+          "passed": true,
+          "detail": "runtime image contains licenses and excludes source and environment files"
+        },
+        {
+          "id": "container_vulnerabilities",
+          "passed": true,
+          "detail": "Trivy reported no fixable high or critical image vulnerability"
+        },
+        {
+          "id": "cyclonedx_sbom",
+          "passed": true,
+          "detail": "Syft generated a nonempty CycloneDX image SBOM"
+        }
+      ],
+      "measurements": [],
+      "artifacts": [
+        {
+          "name": "image.cdx.json",
+          "sha256": "2a9b3df919cf971a029b8eb37049695a16ac9e1343a22998750dda449ecc897d",
+          "bytes": 361441
+        }
+      ]
+    }
+  ],
+  "publication_gate": {
+    "publication_ready": false,
+    "passed_probes": [
+      "artifact-resilience",
+      "browser-cargo",
+      "supply-chain"
+    ],
+    "blocking_probes": [
+      "authorization",
+      "capacity-matrix",
+      "failure-recovery",
+      "observability",
+      "query-sse-capacity"
+    ],
+    "failed_probes": []
+  }
+}

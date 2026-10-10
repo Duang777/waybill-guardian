@@ -1,0 +1,202 @@
+{
+  "schema_version": "delivery.acceptance.config.v1",
+  "artifact": {
+    "iterations": 30,
+    "payload_bytes": 65536,
+    "max_artifact_bytes": 131072,
+    "oversize_bytes": 196608,
+    "concurrent_writers": 32,
+    "max_peak_heap_bytes": 134217728,
+    "max_recovery_ns": 5000000000
+  },
+  "browser": {
+    "cargo_items": 300,
+    "remount_cycles": 20,
+    "state_count": 20,
+    "timeout_seconds": 300
+  },
+  "command_timeout_seconds": 900,
+  "probes": [
+    {
+      "id": "artifact-resilience",
+      "label": "Artifact isolation, integrity, and recovery",
+      "kind": "embedded_artifact",
+      "required_for_publication": true,
+      "expected_checks": [
+        "tenant_isolation",
+        "digest_integrity",
+        "corruption_detected",
+        "backup_restore",
+        "size_limit",
+        "cancellation",
+        "concurrent_put",
+        "bounded_heap",
+        "bounded_goroutines",
+        "private_permissions"
+      ]
+    },
+    {
+      "id": "browser-cargo",
+      "label": "300-item browser playback and resource release",
+      "kind": "browser",
+      "required_for_publication": true,
+      "expected_checks": [
+        "cargo_count",
+        "instanced_rendering",
+        "nonblank_canvas",
+        "state_matrix",
+        "remount_release"
+      ]
+    },
+    {
+      "id": "capacity-matrix",
+      "label": "Solver and Validator capacity matrix",
+      "kind": "command",
+      "command_env": "DELIVERY_ACCEPTANCE_CAPACITY_COMMAND",
+      "required_for_publication": true,
+      "expected_checks": [
+        "stable_overload_error",
+        "bounded_goroutines",
+        "bounded_queue",
+        "digest_stable",
+        "hard_constraints_zero",
+        "required_units_assigned"
+      ],
+      "expected_measurements": [
+        {
+          "id": "tasks-100",
+          "task_count": 100,
+          "vehicle_count": 10,
+          "depot_count": 1,
+          "cargo_per_vehicle": 300,
+          "minimum_samples": 20,
+          "require_quality": true
+        },
+        {
+          "id": "tasks-500",
+          "task_count": 500,
+          "vehicle_count": 50,
+          "depot_count": 5,
+          "cargo_per_vehicle": 300,
+          "minimum_samples": 20,
+          "require_quality": true
+        },
+        {
+          "id": "tasks-2000",
+          "task_count": 2000,
+          "vehicle_count": 200,
+          "depot_count": 20,
+          "cargo_per_vehicle": 300,
+          "minimum_samples": 20,
+          "require_quality": true
+        }
+      ]
+    },
+    {
+      "id": "query-sse-capacity",
+      "label": "Concurrent workspace queries and SSE connections",
+      "kind": "command",
+      "command_env": "DELIVERY_ACCEPTANCE_CONCURRENCY_COMMAND",
+      "required_for_publication": true,
+      "expected_checks": [
+        "stable_capacity_error",
+        "bounded_goroutines",
+        "bounded_queue",
+        "bounded_memory",
+        "cursor_resume",
+        "no_event_gap",
+        "no_logical_duplicate"
+      ],
+      "expected_measurements": [
+        {
+          "id": "queries-100-sse-500",
+          "query_concurrency": 100,
+          "sse_connections": 500,
+          "minimum_samples": 20
+        }
+      ]
+    },
+    {
+      "id": "failure-recovery",
+      "label": "Database, solver, lease, artifact, and effect recovery",
+      "kind": "command",
+      "command_env": "DELIVERY_ACCEPTANCE_RECOVERY_COMMAND",
+      "required_for_publication": true,
+      "expected_checks": [
+        "postgres_failover",
+        "artifact_latency",
+        "artifact_corruption",
+        "solver_timeout",
+        "lease_loss",
+        "stale_fence_rejected",
+        "effect_unknown",
+        "query_before_retry",
+        "no_duplicate_effect",
+        "audit_chain_restored"
+      ],
+      "expected_measurements": [
+        {
+          "id": "postgres-failover",
+          "minimum_samples": 5,
+          "require_recovery": true
+        },
+        {
+          "id": "artifact-restore",
+          "minimum_samples": 5,
+          "require_recovery": true
+        },
+        {
+          "id": "effect-reconciliation",
+          "minimum_samples": 5,
+          "require_recovery": true
+        }
+      ]
+    },
+    {
+      "id": "authorization",
+      "label": "Cross-tenant and object authorization",
+      "kind": "command",
+      "command_env": "DELIVERY_ACCEPTANCE_AUTHORIZATION_COMMAND",
+      "required_for_publication": true,
+      "expected_checks": [
+        "tenant_id_rejected",
+        "artifact_digest_rejected",
+        "sse_cursor_rejected",
+        "approval_rejected",
+        "effect_rejected",
+        "error_envelope_stable",
+        "no_resource_existence_leak"
+      ]
+    },
+    {
+      "id": "observability",
+      "label": "Metrics, logs, traces, SLOs, and alerts",
+      "kind": "command",
+      "command_env": "DELIVERY_ACCEPTANCE_OBSERVABILITY_COMMAND",
+      "required_for_publication": true,
+      "expected_checks": [
+        "low_cardinality_metrics",
+        "structured_logs",
+        "trace_correlation",
+        "sensitive_fields_excluded",
+        "slo_defined",
+        "alerts_defined"
+      ]
+    },
+    {
+      "id": "supply-chain",
+      "label": "Vulnerabilities, licenses, container contents, and SBOM",
+      "kind": "command",
+      "command_env": "DELIVERY_ACCEPTANCE_SUPPLY_CHAIN_COMMAND",
+      "required_for_publication": true,
+      "expected_checks": [
+        "go_vulnerabilities",
+        "web_vulnerabilities",
+        "licenses",
+        "container_contents",
+        "container_vulnerabilities",
+        "cyclonedx_sbom"
+      ]
+    }
+  ]
+}

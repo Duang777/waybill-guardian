@@ -192,6 +192,24 @@ adapter 指定一个环境变量。变量值是 JSON 字符串数组。runner �
 20 次计划摘要和校验报告摘要一致。完整命令见
 [`scripts/delivery-benchmark/README.md`](../scripts/delivery-benchmark/README.md)。
 
+## Production acceptance command 协议
+
+[`scripts/delivery-acceptance/config.json`](../scripts/delivery-acceptance/config.json) 固定容量、
+恢复、安全、可观测性和供应链检查。外部命令仍使用 JSON 字符串数组，runner 不通过 shell
+执行命令。
+
+命令必须包含 `{result}`。runner 还支持 `{config}`、`{root}` 和 `{probe}`。命令要在
+`{result}` 写入严格的 `delivery.acceptance.command-result.v1`，其中包含：
+
+- 与配置完全相同的 `probe_id`。
+- 配置声明的全部检查及其证据。
+- 配置声明的全部测量场景、p50、p95、p99、峰值内存、可行率、质量差距和恢复时间。
+- 可选的证据文件名称、SHA-256 和字节数。
+
+runner 拒绝未知字段、重复检查、额外场景、缺失维度、分位数倒序、样本不足和任一必需检查失败。
+完整 schema 示例见
+[`scripts/delivery-acceptance/README.md`](../scripts/delivery-acceptance/README.md)。
+
 ## 版本管理
 
 以下 schema 已提交并受测试保护：
@@ -205,6 +223,9 @@ adapter 指定一个环境变量。变量值是 JSON 字符串数组。runner �
 - `delivery.benchmark.config.v1`
 - `delivery.benchmark.manifest.v1`
 - `delivery.benchmark.report.v1`
+- `delivery.acceptance.config.v1`
+- `delivery.acceptance.command-result.v1`
+- `delivery.acceptance.report.v1`
 
 字段语义变化需要新 schema version。新增可选字段也要先更新生产者、浏览器 Zod 契约、fixture、
 契约测试和本文。

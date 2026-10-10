@@ -63,6 +63,20 @@ ECharts 的 NOTICE 原文保存在
 
 `web/package-lock.json` 固定直接依赖和传递依赖。各 npm 包自带许可证文件。
 
+## CI 和验收工具
+
+下列工具只在 CI 或 `scripts/delivery-acceptance/supply-chain-probe.sh` 中运行，不进入应用
+运行时镜像：
+
+| 工具 | 版本 | 许可证 | 用途 |
+|---|---|---|---|
+| [golang.org/x/vuln](https://github.com/golang/vuln) | `v1.8.0` | BSD-3-Clause | 扫描 Go 调用图中的已知漏洞 |
+| [Anchore Syft](https://github.com/anchore/syft) | `v1.54.1` | Apache-2.0 | 从最终容器镜像生成 CycloneDX SBOM |
+| [Aqua Trivy](https://github.com/aquasecurity/trivy) | `v0.75.0` | Apache-2.0 | 扫描最终容器镜像中的高危和严重漏洞 |
+
+GitHub Actions 对 `anchore/sbom-action` 和 `aquasecurity/trivy-action` 使用固定 commit。CI
+上传 CycloneDX JSON 作为构建证据，但应用不会读取该文件。
+
 ## 改编组件
 
 `web/src/components/ui/` 中的按钮、徽标、进度、分段控件、数字和计时器改编自

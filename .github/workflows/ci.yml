@@ -27,11 +27,17 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      - name: Scan Go vulnerabilities
+        run: |
+          GOBIN="$RUNNER_TEMP/go-tools" \
+            go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          "$RUNNER_TEMP/go-tools/govulncheck" ./...
       - run: go vet ./...
       - run: go test -race -count=1 ./...
       - run: ./scripts/check-delivery-boundaries.sh
       - run: ./scripts/check-production-fixture-literals.sh
       - run: ./scripts/delivery-benchmark/check.sh
+      - run: ./scripts/delivery-acceptance/check.sh
 
   recovery-stability:
     name: Recovery stability
@@ -141,6 +147,29 @@ jobs:
           docker compose --profile prod config --quiet
       - name: Build image
         run: docker build --tag waybill-guardian:ci .
+      - name: Generate CycloneDX image SBOM
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: waybill-guardian:ci
+          format: cyclonedx-json
+          output-file: image.cdx.json
+          syft-version: v1.54.1
+          upload-artifact: false
+      - name: Verify image SBOM
+        run: >-
+          jq -e
+          '.bomFormat == "CycloneDX"
+          and (.specVersion | type == "string")
+          and (.components | type == "array" and length > 0)'
+          image.cdx.json
+      - name: Scan image vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: waybill-guardian:ci
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          version: v0.75.0
       - name: Verify image contents and size
         run: |
           set -euo pipefail
@@ -171,6 +200,14 @@ jobs:
             sleep 0.25
           done
           curl --fail --silent http://127.0.0.1:18080/ | grep -F '<title>Waybill Guardian</title>'
+      - name: Upload image SBOM
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: image-cyclonedx-sbom
+          path: image.cdx.json
+          if-no-files-found: error
+          retention-days: 30
 
   e2e:
     name: Browser E2E
@@ -203,6 +240,8 @@ jobs:
       - run: npm run verify:overview
         working-directory: web
       - run: npm run verify:motion
+        working-directory: web
+      - run: npm run verify:delivery
         working-directory: web
       - name: Upload screenshots
         if: always()

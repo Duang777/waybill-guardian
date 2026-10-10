@@ -14,7 +14,7 @@
 <p align="center">证据驱动的异常运单处置 Agent。自动调查，人工决策，幂等执行，全程审计。</p>
 
 <p align="center">
-  <a href="https://go.dev/dl/"><img alt="Go 1.25.3" src="https://img.shields.io/badge/Go-1.25.3-00ADD8?logo=go&logoColor=white"></a>
+  <a href="https://go.dev/dl/"><img alt="Go 1.26.9" src="https://img.shields.io/badge/Go-1.26.9-00ADD8?logo=go&logoColor=white"></a>
   <a href="https://react.dev/"><img alt="React 19.3.0" src="https://img.shields.io/badge/React-19.3.0-087EA4?logo=react&logoColor=white"></a>
   <a href="https://nodejs.org/"><img alt="Node.js 22.12 或更高版本" src="https://img.shields.io/badge/Node.js-%3E%3D22.12-339933?logo=nodedotjs&logoColor=white"></a>
   <a href="https://github.com/Duang777/waybill-guardian/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Duang777/waybill-guardian/actions/workflows/ci.yml/badge.svg"></a>
@@ -217,6 +217,17 @@ reference baseline 用于验证数据、摘要、Validator 和报告链路，不
 全局最优，也不构成物理装载安全认证。生产 solver 的证据只有在报告
 `publication_gate.publication_ready=true` 时才可发布。
 
+生产验收工具固定 100、500 和 2,000 个任务的容量矩阵，并覆盖每车 300 件货物、
+100 个并发查询、500 个 SSE 连接、故障恢复、跨租户授权和供应链检查。权威状态见
+[`delivery-acceptance.v1.json`](docs/reports/delivery-acceptance.v1.json)，可读报告见
+[`城市配送生产验收报告`](docs/reports/delivery-acceptance.md)。缺少生产入口的探针保持
+`blocked`，不会计入通过。
+
+```bash
+./scripts/delivery-acceptance/run.sh
+./scripts/delivery-acceptance/check.sh
+```
+
 ## 系统架构
 
 ```mermaid
@@ -377,7 +388,7 @@ RECORD_RESOLUTION=1920x1080 npm run record:demo
 
 ### 本地工具链
 
-需要 Go 1.25.3 或更高版本，以及 Node.js 22.12 或更高版本。
+需要 Go 1.26.9 或更高版本，以及 Node.js 22.12 或更高版本。
 
 ```bash
 git clone https://github.com/Duang777/waybill-guardian.git
@@ -531,6 +542,7 @@ go vet ./...
 go build ./...
 ./scripts/check-history-governance.sh
 ./scripts/delivery-benchmark/check.sh
+./scripts/delivery-acceptance/check.sh
 ./scripts/licenses.sh
 ```
 
@@ -572,6 +584,7 @@ npm run verify:overview
 | `internal/tools` | 七个 typed tools 和字段白名单 |
 | `internal/delivery` | 城市配送领域契约、快照、独立 Validator 和 artifact store |
 | `scripts/delivery-benchmark` | 固定数据、solver 采集协议、20 次重放和报告生成 |
+| `scripts/delivery-acceptance` | 容量、安全、高可用、灾备和供应链验收 |
 | `web` | React 经营总览、工作台、地图、图表和审计时间线 |
 
 ## 开源声明
@@ -597,5 +610,6 @@ hastekit `agent-sdk-go` v0.0.24 以 Go module 引入。本仓库没有复制其�
 - [城市配送接口参考](docs/delivery-api-reference.md)
 - [城市配送运维手册](docs/delivery-operations.md)
 - [城市配送基准证据](docs/reports/delivery-benchmark.md)
+- [城市配送生产验收报告](docs/reports/delivery-acceptance.md)
 - [演示脚本](docs/demo-script.md)
 - [模块索引](AGENTS.md)
