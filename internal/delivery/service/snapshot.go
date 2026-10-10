@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Duang777/waybill-guardian/internal/delivery/domain"
 )
@@ -241,6 +242,45 @@ func normalizeCommitments(value *domain.CommitmentSet) {
 	for index := range value.Soft {
 		value.Soft[index].PlannedServiceAt = value.Soft[index].PlannedServiceAt.UTC()
 	}
+	value.SoftCargo = ensureSlice(value.SoftCargo)
+	slices.SortFunc(value.SoftCargo, func(
+		left,
+		right domain.SoftCargoCommitment,
+	) int {
+		if result := strings.Compare(
+			string(left.CargoID),
+			string(right.CargoID),
+		); result != 0 {
+			return result
+		}
+		switch {
+		case left.AfterStopIndex < right.AfterStopIndex:
+			return -1
+		case left.AfterStopIndex > right.AfterStopIndex:
+			return 1
+		default:
+			return 0
+		}
+	})
+	if value.FreezeOverride == nil {
+		return
+	}
+	override := value.FreezeOverride
+	override.Scopes = ensureSlice(override.Scopes)
+	slices.SortFunc(override.Scopes, func(
+		left,
+		right domain.FreezeOverrideScope,
+	) int {
+		return strings.Compare(string(left.TaskID), string(right.TaskID))
+	})
+	for index := range override.Scopes {
+		scope := &override.Scopes[index]
+		scope.Before.PromisedServiceAt = scope.Before.PromisedServiceAt.UTC()
+		scope.AllowedVehicleIDs = normalizeIDs(scope.AllowedVehicleIDs)
+		scope.AllowedDriverIDs = normalizeIDs(scope.AllowedDriverIDs)
+		scope.CargoIDs = normalizeIDs(scope.CargoIDs)
+		scope.AllowedCompartmentIDs = normalizeIDs(scope.AllowedCompartmentIDs)
+	}
 }
 
 func validateProblem(value domain.ProblemSnapshot) error {
@@ -332,14 +372,309 @@ func validateProblem(value domain.ProblemSnapshot) error {
 			"policy rehandle_seconds_per_cargo must be positive when rehandles are allowed",
 		)
 	}
-	if len(value.SourceRefs) == 0 {
-		return fmt.Errorf("at least one source_ref is required")
+	if value.Policy.Stability.VehicleChangeCents < 0 ||
+		value.Policy.Stability.DriverChangeCents < 0 ||
+		value.Policy.Stability.SequenceChangeCents < 0 ||
+		value.Policy.Stability.ETADriftCentsPerSec < 0 ||
+		value.Policy.Stability.ReloadCents < 0 {
+		return fmt.Errorf("stability penalties must be non-negative")
+	}
+	if err := validateCommitmentReferences(value); err != nil {
+		return err
+	}
+	if err := validateSoftCargoCommitments(value); err != nil {
+		return err
+	}
+	if err := validateFreezeOverrideConstraint(value); err != nil {
+		return err
+	}
+	if err := validateSourceRefs(value.SourceRefs, value.CreatedAt); err != nil {
+		return err
 	}
 	_, err = domain.CanonicalJSON(value)
 	if err != nil {
 		return fmt.Errorf("problem is not canonicalizable: %w", err)
 	}
 	return nil
+}
+
+func validateSourceRefs(values []domain.SourceRef, createdAt time.Time) error {
+	if len(values) == 0 {
+		return fmt.Errorf("at least one source_ref is required")
+	}
+	seen := make(map[string]struct{}, len(values))
+	for index, value := range values {
+		if strings.TrimSpace(value.System) == "" ||
+			strings.TrimSpace(value.ResourceType) == "" ||
+			strings.TrimSpace(value.ResourceID) == "" ||
+			strings.TrimSpace(value.Version) == "" ||
+			value.ObservedAt.IsZero() ||
+			value.ObservedAt.After(createdAt) {
+			return fmt.Errorf("source_ref %d is incomplete or observed after snapshot", index)
+		}
+		key := strings.Join([]string{
+			value.System,
+			value.ResourceType,
+			value.ResourceID,
+			value.Version,
+		}, "\x00")
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("duplicate source_ref at index %d", index)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func validateCommitmentReferences(value domain.ProblemSnapshot) error {
+	if !domain.ValidArtifactDigest(
+		domain.ArtifactDigest(value.Commitments.FactWatermark),
+	) {
+		return fmt.Errorf(
+			"commitment fact_watermark must be a lowercase SHA-256 digest",
+		)
+	}
+	executed := make(map[domain.TaskID]struct{}, len(value.Commitments.Executed))
+	for _, commitment := range value.Commitments.Executed {
+		if _, duplicate := executed[commitment.TaskID]; duplicate {
+			return fmt.Errorf("duplicate executed task commitment %q", commitment.TaskID)
+		}
+		executed[commitment.TaskID] = struct{}{}
+		if !problemHasTask(value, commitment.TaskID) ||
+			!problemHasVehicle(value, commitment.VehicleID) ||
+			!problemHasDriver(value, commitment.DriverID) ||
+			commitment.CompletedAt.IsZero() ||
+			commitment.CompletedAt.After(value.CreatedAt) {
+			return fmt.Errorf(
+				"executed task commitment %q references invalid state",
+				commitment.TaskID,
+			)
+		}
+	}
+	frozen := make(map[domain.TaskID]struct{}, len(value.Commitments.Frozen))
+	for _, commitment := range value.Commitments.Frozen {
+		if _, duplicate := frozen[commitment.TaskID]; duplicate {
+			return fmt.Errorf("duplicate frozen task commitment %q", commitment.TaskID)
+		}
+		frozen[commitment.TaskID] = struct{}{}
+		if _, done := executed[commitment.TaskID]; done {
+			return fmt.Errorf(
+				"task %q cannot be both executed and frozen",
+				commitment.TaskID,
+			)
+		}
+		if !problemHasTask(value, commitment.TaskID) ||
+			!problemHasVehicle(value, commitment.VehicleID) ||
+			!problemHasDriver(value, commitment.DriverID) ||
+			commitment.PromisedServiceAt.IsZero() ||
+			commitment.ToleranceSeconds < 0 {
+			return fmt.Errorf(
+				"frozen task commitment %q references invalid state",
+				commitment.TaskID,
+			)
+		}
+	}
+	inTransit := make(map[domain.CargoID]struct{}, len(value.Commitments.InTransit))
+	for _, commitment := range value.Commitments.InTransit {
+		if _, duplicate := inTransit[commitment.CargoID]; duplicate {
+			return fmt.Errorf(
+				"duplicate in-transit cargo commitment %q",
+				commitment.CargoID,
+			)
+		}
+		inTransit[commitment.CargoID] = struct{}{}
+		if !problemHasCargo(value, commitment.CargoID) ||
+			!problemHasVehicle(value, commitment.VehicleID) ||
+			!problemHasVehicleCompartment(
+				value,
+				commitment.VehicleID,
+				commitment.CompartmentID,
+			) {
+			return fmt.Errorf(
+				"in-transit cargo commitment %q references invalid state",
+				commitment.CargoID,
+			)
+		}
+	}
+	soft := make(map[domain.TaskID]struct{}, len(value.Commitments.Soft))
+	for _, commitment := range value.Commitments.Soft {
+		if _, duplicate := soft[commitment.TaskID]; duplicate {
+			return fmt.Errorf("duplicate soft task commitment %q", commitment.TaskID)
+		}
+		soft[commitment.TaskID] = struct{}{}
+		if _, done := executed[commitment.TaskID]; done {
+			return fmt.Errorf(
+				"task %q cannot be both executed and soft",
+				commitment.TaskID,
+			)
+		}
+		if !problemHasTask(value, commitment.TaskID) ||
+			!problemHasVehicle(value, commitment.VehicleID) ||
+			!problemHasDriver(value, commitment.DriverID) ||
+			commitment.PlannedServiceAt.IsZero() {
+			return fmt.Errorf(
+				"soft task commitment %q references invalid state",
+				commitment.TaskID,
+			)
+		}
+	}
+	return nil
+}
+
+func validateSoftCargoCommitments(value domain.ProblemSnapshot) error {
+	type cargoStage struct {
+		cargoID domain.CargoID
+		stage   uint32
+	}
+	seen := make(map[cargoStage]struct{}, len(value.Commitments.SoftCargo))
+	for _, commitment := range value.Commitments.SoftCargo {
+		if commitment.CargoID == "" ||
+			commitment.VehicleID == "" ||
+			commitment.CompartmentID == "" ||
+			commitment.DoorID == "" {
+			return fmt.Errorf("soft cargo commitment is incomplete")
+		}
+		key := cargoStage{
+			cargoID: commitment.CargoID,
+			stage:   commitment.AfterStopIndex,
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf(
+				"duplicate soft cargo commitment %q at stage %d",
+				commitment.CargoID,
+				commitment.AfterStopIndex,
+			)
+		}
+		seen[key] = struct{}{}
+		if !problemHasCargo(value, commitment.CargoID) ||
+			!problemHasVehicle(value, commitment.VehicleID) ||
+			!problemHasCompartment(value, commitment.CompartmentID) {
+			return fmt.Errorf(
+				"soft cargo commitment %q references unknown resources",
+				commitment.CargoID,
+			)
+		}
+		foundDoor := false
+		for _, vehicle := range value.Vehicles {
+			if vehicle.ID != commitment.VehicleID {
+				continue
+			}
+			for _, door := range vehicle.Doors {
+				if door.ID == commitment.DoorID &&
+					door.CompartmentID == commitment.CompartmentID {
+					foundDoor = true
+				}
+			}
+		}
+		if !foundDoor {
+			return fmt.Errorf(
+				"soft cargo commitment %q references an incompatible door",
+				commitment.CargoID,
+			)
+		}
+	}
+	return nil
+}
+
+func validateFreezeOverrideConstraint(value domain.ProblemSnapshot) error {
+	override := value.Commitments.FreezeOverride
+	if override == nil {
+		return nil
+	}
+	if override.ApprovalID == "" ||
+		!domain.ValidArtifactDigest(override.GrantDigest) {
+		return fmt.Errorf("freeze override approval and grant digest are required")
+	}
+	if err := validateFreezeOverrideScopes(
+		override.Scopes,
+		value.Commitments.Frozen,
+		value.Commitments.Executed,
+	); err != nil {
+		return err
+	}
+	inTransit := make(map[domain.CargoID]struct{}, len(value.Commitments.InTransit))
+	for _, commitment := range value.Commitments.InTransit {
+		inTransit[commitment.CargoID] = struct{}{}
+	}
+	for _, scope := range override.Scopes {
+		if !problemHasTask(value, scope.TaskID) {
+			return fmt.Errorf(
+				"freeze override references unknown task %q",
+				scope.TaskID,
+			)
+		}
+		for _, vehicleID := range scope.AllowedVehicleIDs {
+			if !problemHasVehicle(value, vehicleID) {
+				return fmt.Errorf(
+					"freeze override references unknown vehicle %q",
+					vehicleID,
+				)
+			}
+		}
+		for _, driverID := range scope.AllowedDriverIDs {
+			if !problemHasDriver(value, driverID) {
+				return fmt.Errorf(
+					"freeze override references unknown driver %q",
+					driverID,
+				)
+			}
+		}
+		for _, cargoID := range scope.CargoIDs {
+			if !problemHasCargo(value, cargoID) {
+				return fmt.Errorf(
+					"freeze override references unknown cargo %q",
+					cargoID,
+				)
+			}
+			if _, physicallyPinned := inTransit[cargoID]; physicallyPinned {
+				return fmt.Errorf(
+					"freeze override cannot move in-transit cargo %q without a transfer fact",
+					cargoID,
+				)
+			}
+		}
+		for _, compartmentID := range scope.AllowedCompartmentIDs {
+			if !problemHasCompartment(value, compartmentID) {
+				return fmt.Errorf(
+					"freeze override references unknown compartment %q",
+					compartmentID,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func problemHasCompartment(
+	problem domain.ProblemSnapshot,
+	compartmentID domain.CompartmentID,
+) bool {
+	for _, vehicle := range problem.Vehicles {
+		for _, compartment := range vehicle.Compartments {
+			if compartment.ID == compartmentID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func problemHasVehicleCompartment(
+	problem domain.ProblemSnapshot,
+	vehicleID domain.VehicleID,
+	compartmentID domain.CompartmentID,
+) bool {
+	for _, vehicle := range problem.Vehicles {
+		if vehicle.ID != vehicleID {
+			continue
+		}
+		for _, compartment := range vehicle.Compartments {
+			if compartment.ID == compartmentID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func indexLocations(values []domain.Location) (map[domain.LocationID]domain.Location, error) {

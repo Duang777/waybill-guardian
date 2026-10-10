@@ -212,7 +212,7 @@ func solverProblem(t testing.TB) domain.ProblemSnapshot {
 			AllowedMixedCargoClasses:  [][]string{},
 		},
 		Commitments: domain.CommitmentSet{
-			FactWatermark: "facts-1",
+			FactWatermark: "d5f23858772d4e210159e466608aa60da417f12bc3c27d7d1ebcc77d831710fb",
 			Executed:      []domain.ExecutedTaskCommitment{},
 			Frozen:        []domain.FrozenTaskCommitment{},
 			InTransit:     []domain.InTransitCargoCommitment{},

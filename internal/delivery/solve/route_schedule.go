@@ -116,7 +116,7 @@ func (engine *engine) checkCommitmentAssignment(
 	}
 	for _, commitment := range engine.problem.Commitments.Frozen {
 		if _, applies := taskIDs[commitment.TaskID]; applies &&
-			(commitment.VehicleID != vehicleID || commitment.DriverID != driverID) {
+			!engine.frozenAssignmentAllowed(commitment, vehicleID, driverID) {
 			return fmt.Errorf("frozen commitment fixes another vehicle or driver")
 		}
 	}
@@ -222,10 +222,46 @@ func (engine *engine) orderTasks(
 func (engine *engine) frozenSequence(taskID domain.TaskID) (bool, uint32) {
 	for _, commitment := range engine.problem.Commitments.Frozen {
 		if commitment.TaskID == taskID {
+			if scope, exists := engine.freezeOverrideScope(taskID); exists && scope.MaxSequenceShift > 0 {
+				return false, 0
+			}
 			return true, commitment.Sequence
 		}
 	}
 	return false, 0
+}
+
+func (engine *engine) frozenAssignmentAllowed(
+	commitment domain.FrozenTaskCommitment,
+	vehicleID domain.VehicleID,
+	driverID domain.DriverID,
+) bool {
+	scope, overridden := engine.freezeOverrideScope(commitment.TaskID)
+	vehicleAllowed := commitment.VehicleID == vehicleID
+	driverAllowed := commitment.DriverID == driverID
+	if overridden {
+		vehicleAllowed = vehicleAllowed ||
+			(scope.AllowVehicleChange &&
+				slices.Contains(scope.AllowedVehicleIDs, vehicleID))
+		driverAllowed = driverAllowed ||
+			(scope.AllowDriverChange &&
+				slices.Contains(scope.AllowedDriverIDs, driverID))
+	}
+	return vehicleAllowed && driverAllowed
+}
+
+func (engine *engine) freezeOverrideScope(
+	taskID domain.TaskID,
+) (domain.FreezeOverrideScope, bool) {
+	if engine.problem.Commitments.FreezeOverride == nil {
+		return domain.FreezeOverrideScope{}, false
+	}
+	for _, scope := range engine.problem.Commitments.FreezeOverride.Scopes {
+		if scope.TaskID == taskID {
+			return scope, true
+		}
+	}
+	return domain.FreezeOverrideScope{}, false
 }
 
 func earliestDeadline(windows []domain.TimeRange) time.Time {

@@ -29,6 +29,82 @@ func TestValidatorAcceptsCompletePlanAndProducesStableReport(t *testing.T) {
 	}
 }
 
+func TestValidatorEnforcesBoundedFreezeOverride(t *testing.T) {
+	problem, plan, at := validCase(t)
+	deliveryStop := plan.Duties[0].Trips[0].Stops[1]
+	before := domain.FrozenTaskCommitment{
+		TaskID:            "delivery-1",
+		VehicleID:         "vehicle-1",
+		DriverID:          "driver-1",
+		Sequence:          0,
+		PromisedServiceAt: deliveryStop.ServiceAt,
+		ToleranceSeconds:  300,
+	}
+	grantDigest, err := domain.Digest("freeze-override-grant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	problem.Commitments.Frozen = []domain.FrozenTaskCommitment{before}
+	problem.Commitments.FreezeOverride = &domain.FreezeOverrideConstraint{
+		ApprovalID:  "approval-override-1",
+		GrantDigest: grantDigest,
+		Scopes: []domain.FreezeOverrideScope{{
+			TaskID:           "delivery-1",
+			Before:           before,
+			MaxSequenceShift: 1,
+		}},
+	}
+	rebuildProblemAndBind(t, &problem, &plan)
+	report := New(domain.ValidatorIdentity{
+		Name: "independent", Version: "1.0.0", Build: "test",
+	}).Validate(problem, plan, at)
+	if !report.Valid {
+		t.Fatalf("bounded sequence override was rejected: %+v", report.Violations)
+	}
+
+	problem.Commitments.FreezeOverride = nil
+	rebuildProblemAndBind(t, &problem, &plan)
+	report = New(domain.ValidatorIdentity{
+		Name: "independent", Version: "1.0.0", Build: "test",
+	}).Validate(problem, plan, at)
+	if report.Valid || !hasViolationCode(report, "V1101") {
+		t.Fatalf("unapproved frozen change was accepted: %+v", report.Violations)
+	}
+}
+
+func TestValidatorChargesReloadStabilityPenalty(t *testing.T) {
+	problem, plan, at := validCase(t)
+	secondDoor := problem.Vehicles[0].Doors[0]
+	secondDoor.ID = "door-2"
+	problem.Vehicles[0].Doors = append(problem.Vehicles[0].Doors, secondDoor)
+	placement := plan.Duties[0].Trips[0].LoadStages[0].Placements[0]
+	problem.Policy.Stability.ReloadCents = 250
+	problem.Commitments.SoftCargo = []domain.SoftCargoCommitment{{
+		CargoID:       placement.CargoID,
+		VehicleID:     "vehicle-1",
+		CompartmentID: placement.CompartmentID,
+		DoorID:        placement.DoorID,
+		PositionMM:    placement.PositionMM,
+		Orientation:   placement.Orientation,
+	}}
+	rebuildProblemAndBind(t, &problem, &plan)
+
+	plan.Duties[0].Trips[0].LoadStages[0].Placements[0].DoorID = "door-2"
+	plan.Metrics.StabilityCostCents = 250
+	plan.Metrics.TotalCostCents += 250
+	plan.Objective.StabilityCostCents = 250
+	plan.Objective.TotalCostCents += 250
+	sealPlan(t, &plan)
+	report := New(domain.ValidatorIdentity{
+		Name: "independent", Version: "1.0.0", Build: "test",
+	}).Validate(problem, plan, at)
+	if !report.Valid ||
+		report.Metrics.StabilityCostCents != 250 ||
+		report.Metrics.TotalCostCents != plan.Metrics.TotalCostCents {
+		t.Fatalf("reload stability report = %+v", report)
+	}
+}
+
 func TestValidatorGoldenReport(t *testing.T) {
 	problem, plan, at := validCase(t)
 	report := New(domain.ValidatorIdentity{
@@ -180,6 +256,9 @@ func TestValidatorCoversEveryRuleFamily(t *testing.T) {
 			name: "V11 frozen commitment",
 			code: "V1101",
 			mutate: func(problem *domain.ProblemSnapshot, plan *domain.Plan) {
+				otherVehicle := problem.Vehicles[0]
+				otherVehicle.ID = "vehicle-other"
+				problem.Vehicles = append(problem.Vehicles, otherVehicle)
 				problem.Commitments.Frozen = []domain.FrozenTaskCommitment{{
 					TaskID:            "delivery-1",
 					VehicleID:         "vehicle-other",

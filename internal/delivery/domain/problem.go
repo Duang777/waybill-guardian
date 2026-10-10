@@ -243,6 +243,16 @@ type SoftTaskCommitment struct {
 	PlannedServiceAt time.Time `json:"planned_service_at"`
 }
 
+type SoftCargoCommitment struct {
+	CargoID        CargoID       `json:"cargo_id"`
+	VehicleID      VehicleID     `json:"vehicle_id"`
+	AfterStopIndex uint32        `json:"after_stop_index"`
+	CompartmentID  CompartmentID `json:"compartment_id"`
+	DoorID         DoorID        `json:"door_id"`
+	PositionMM     Point3        `json:"position_mm"`
+	Orientation    Orientation   `json:"orientation"`
+}
+
 type CommitmentSet struct {
 	BasePlanDigest ArtifactDigest             `json:"base_plan_digest"`
 	FactWatermark  string                     `json:"fact_watermark"`
@@ -250,6 +260,8 @@ type CommitmentSet struct {
 	Frozen         []FrozenTaskCommitment     `json:"frozen"`
 	InTransit      []InTransitCargoCommitment `json:"in_transit"`
 	Soft           []SoftTaskCommitment       `json:"soft"`
+	SoftCargo      []SoftCargoCommitment      `json:"soft_cargo,omitempty"`
+	FreezeOverride *FreezeOverrideConstraint  `json:"freeze_override,omitempty"`
 }
 
 type SourceRef struct {

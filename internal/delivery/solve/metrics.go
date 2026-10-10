@@ -29,7 +29,10 @@ func (engine *engine) recomputePlanMetrics(plan domain.Plan) (domain.PlanMetrics
 					}
 					visits[taskID] = append(visits[taskID], planTaskVisit{
 						vehicleID: duty.VehicleID,
-						driverIDs: append([]domain.DriverID{}, duty.DriverIDs...),
+						driverIDs: planDriversForTask(
+							trip.Schedule,
+							taskID,
+						),
 						stopIndex: stopIndex,
 						serviceAt: stop.ServiceAt,
 					})
@@ -225,7 +228,7 @@ func (engine *engine) recomputePlanMetrics(plan domain.Plan) (domain.PlanMetrics
 		metrics.MeanPayloadUtilizationPPM = planMean(payloadUtilizations)
 		metrics.MaxPayloadUtilizationPPM = slices.Max(payloadUtilizations)
 	}
-	metrics.StabilityCostCents = engine.planStabilityCost(visits)
+	metrics.StabilityCostCents = engine.planStabilityCost(plan, visits)
 	metrics.TotalCostCents += metrics.StabilityCostCents
 	return metrics, nil
 }
@@ -247,7 +250,10 @@ func (engine *engine) objectiveForPlan(
 	}
 }
 
-func (engine *engine) planStabilityCost(visits map[domain.TaskID][]planTaskVisit) int64 {
+func (engine *engine) planStabilityCost(
+	plan domain.Plan,
+	visits map[domain.TaskID][]planTaskVisit,
+) int64 {
 	var result int64
 	for _, commitment := range engine.problem.Commitments.Soft {
 		taskVisits := visits[commitment.TaskID]
@@ -267,6 +273,62 @@ func (engine *engine) planStabilityCost(visits map[domain.TaskID][]planTaskVisit
 		result += planAbsoluteSeconds(visit.serviceAt.Sub(commitment.PlannedServiceAt)) *
 			engine.problem.Policy.Stability.ETADriftCentsPerSec
 	}
+	type cargoStage struct {
+		cargoID domain.CargoID
+		stage   uint32
+	}
+	cargoPlacements := make(map[cargoStage]domain.SoftCargoCommitment)
+	for _, duty := range plan.Duties {
+		for _, trip := range duty.Trips {
+			for _, stage := range trip.LoadStages {
+				for _, placement := range stage.Placements {
+					key := cargoStage{
+						cargoID: placement.CargoID,
+						stage:   stage.AfterStopIndex,
+					}
+					if _, exists := cargoPlacements[key]; exists {
+						continue
+					}
+					cargoPlacements[key] = domain.SoftCargoCommitment{
+						CargoID:        placement.CargoID,
+						VehicleID:      duty.VehicleID,
+						AfterStopIndex: stage.AfterStopIndex,
+						CompartmentID:  placement.CompartmentID,
+						DoorID:         placement.DoorID,
+						PositionMM:     placement.PositionMM,
+						Orientation:    placement.Orientation,
+					}
+				}
+			}
+		}
+	}
+	reloaded := make(map[domain.CargoID]struct{})
+	for _, commitment := range engine.problem.Commitments.SoftCargo {
+		key := cargoStage{
+			cargoID: commitment.CargoID,
+			stage:   commitment.AfterStopIndex,
+		}
+		if current, exists := cargoPlacements[key]; !exists || current != commitment {
+			reloaded[commitment.CargoID] = struct{}{}
+		}
+	}
+	result += int64(len(reloaded)) * engine.problem.Policy.Stability.ReloadCents
+	return result
+}
+
+func planDriversForTask(
+	schedule []domain.DutySegment,
+	taskID domain.TaskID,
+) []domain.DriverID {
+	result := make([]domain.DriverID, 0, 1)
+	for _, segment := range schedule {
+		if segment.DriverID != "" &&
+			slices.Contains(segment.TaskIDs, taskID) &&
+			!slices.Contains(result, segment.DriverID) {
+			result = append(result, segment.DriverID)
+		}
+	}
+	slices.Sort(result)
 	return result
 }
 

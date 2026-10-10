@@ -194,6 +194,7 @@ Rules:
 type SuccessorBuildInput struct {
 	BaseProblem        domain.ProblemSnapshot
 	ActiveRevisionID   domain.PlanRevisionID
+	BaseActiveVersion  uint64
 	ActivePlan         domain.Plan
 	BaseFrontier       domain.FactFrontier
 	TargetFrontier     domain.FactFrontier
@@ -419,14 +420,38 @@ execution, and marks the reservation committed in one transaction.
 ## Module map
 
 ```text
+internal/delivery/domain/fact_ledger.go
+  canonical facts, frontier validation, replay, gaps, conflicts, and epochs
+
 internal/delivery/domain/reoptimization.go
   fact streams, positions, frontier, ledger references, override artifacts
 
 internal/delivery/service/reoptimization.go
-  public commands, outcomes, pure successor construction
+  successor input validation, exact frontier coverage, and epoch transitions
+
+internal/delivery/service/reoptimization_reduce.go
+  pure operational-fact reducer and immutable execution updates
+
+internal/delivery/service/reoptimization_commitments.go
+  protected execution closure and successor commitment derivation
+
+internal/delivery/service/freeze_override.go
+  private store-facing override verification and bounded scopes
+
+internal/delivery/service/execution_reservation.go
+  pre-effect reservation and activation state transitions
 
 internal/delivery/service/reoptimization_diff.go
-  complete comparison, attribution, Agent-3 projection
+  comparison artifact contracts, validation, and digest binding
+
+internal/delivery/service/reoptimization_diff_flatten.go
+  route, schedule, energy, load, effect, and metric leaves
+
+internal/delivery/service/reoptimization_diff_override.go
+  exact post-solve override-use compiler
+
+internal/delivery/service/reoptimization_diff_projection.go
+  strict six-kind Agent-3 projection
 
 internal/delivery/service/platform.go
   additive operation-level Store and Commands contracts

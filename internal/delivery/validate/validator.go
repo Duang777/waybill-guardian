@@ -173,14 +173,33 @@ func newValidationState(
 						tripIndex: tripIndex,
 						stopIndex: stopIndex,
 						vehicleID: duty.VehicleID,
-						driverIDs: append([]domain.DriverID(nil), duty.DriverIDs...),
-						stop:      stop,
+						driverIDs: scheduledTaskDrivers(
+							trip.Schedule,
+							taskID,
+						),
+						stop: stop,
 					})
 				}
 			}
 		}
 	}
 	return state
+}
+
+func scheduledTaskDrivers(
+	schedule []domain.DutySegment,
+	taskID domain.TaskID,
+) []domain.DriverID {
+	result := make([]domain.DriverID, 0, 1)
+	for _, segment := range schedule {
+		if segment.DriverID != "" &&
+			slices.Contains(segment.TaskIDs, taskID) &&
+			!slices.Contains(result, segment.DriverID) {
+			result = append(result, segment.DriverID)
+		}
+	}
+	slices.Sort(result)
+	return result
 }
 
 type position struct {

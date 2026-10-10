@@ -32,7 +32,7 @@ func TestBuiltinProducesValidatorAcceptedRouteAndLoadPlan(t *testing.T) {
 		t.Fatalf("solve status = %q, violations = %+v", result.Status, result.Validation.Violations)
 	}
 	if result.Plan.PlanDigest !=
-		"24ccadbbd50af9f01abc242ddee472719aa88973a329b6854557caf04d383a86" {
+		"eb855809be40f8c3d3855da23e21829c51019963c267a03f3bfbadb1afd8de0f" {
 		t.Fatalf("plan digest = %q, want stable solved artifact", result.Plan.PlanDigest)
 	}
 	if len(result.Plan.Duties) != 1 || len(result.Plan.Duties[0].Trips) != 1 {

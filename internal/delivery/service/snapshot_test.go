@@ -137,6 +137,75 @@ func TestBuildProblemSnapshotRejectsBrokenBoundaryData(t *testing.T) {
 			},
 			want: "rehandle_cost_cents_per_cargo must be non-negative",
 		},
+		{
+			name: "negative stability cost",
+			mutate: func(value *domain.ProblemSnapshot) {
+				value.Policy.Stability.ReloadCents = -1
+			},
+			want: "stability penalties must be non-negative",
+		},
+		{
+			name: "unknown frozen task",
+			mutate: func(value *domain.ProblemSnapshot) {
+				value.Commitments.Frozen = []domain.FrozenTaskCommitment{{
+					TaskID:            "task-unknown",
+					VehicleID:         "vehicle-1",
+					DriverID:          "driver-1",
+					PromisedServiceAt: value.Horizon.Start,
+				}}
+			},
+			want: "frozen task commitment",
+		},
+		{
+			name: "executed and frozen task",
+			mutate: func(value *domain.ProblemSnapshot) {
+				value.Commitments.Executed = []domain.ExecutedTaskCommitment{{
+					TaskID:      "pickup-1",
+					VehicleID:   "vehicle-1",
+					DriverID:    "driver-1",
+					CompletedAt: value.CreatedAt,
+				}}
+				value.Commitments.Frozen = []domain.FrozenTaskCommitment{{
+					TaskID:            "pickup-1",
+					VehicleID:         "vehicle-1",
+					DriverID:          "driver-1",
+					PromisedServiceAt: value.Horizon.Start,
+				}}
+			},
+			want: "both executed and frozen",
+		},
+		{
+			name: "in-transit cargo wrong compartment",
+			mutate: func(value *domain.ProblemSnapshot) {
+				value.Commitments.InTransit = []domain.InTransitCargoCommitment{{
+					CargoID:       "cargo-1",
+					VehicleID:     "vehicle-1",
+					CompartmentID: "compartment-unknown",
+				}}
+			},
+			want: "in-transit cargo commitment",
+		},
+		{
+			name: "empty fact watermark",
+			mutate: func(value *domain.ProblemSnapshot) {
+				value.Commitments.FactWatermark = ""
+			},
+			want: "fact_watermark must be a lowercase SHA-256 digest",
+		},
+		{
+			name: "non-digest fact watermark",
+			mutate: func(value *domain.ProblemSnapshot) {
+				value.Commitments.FactWatermark = "facts-1"
+			},
+			want: "fact_watermark must be a lowercase SHA-256 digest",
+		},
+		{
+			name: "future source ref",
+			mutate: func(value *domain.ProblemSnapshot) {
+				value.SourceRefs[0].ObservedAt = value.CreatedAt.Add(time.Second)
+			},
+			want: "observed after snapshot",
+		},
 	}
 
 	for _, test := range tests {
@@ -295,7 +364,7 @@ func validProblemDraft() domain.ProblemSnapshot {
 			AllowedMixedCargoClasses:  [][]string{},
 		},
 		Commitments: domain.CommitmentSet{
-			FactWatermark: "facts-1",
+			FactWatermark: "d5f23858772d4e210159e466608aa60da417f12bc3c27d7d1ebcc77d831710fb",
 			Executed:      []domain.ExecutedTaskCommitment{},
 			Frozen:        []domain.FrozenTaskCommitment{},
 			InTransit:     []domain.InTransitCargoCommitment{},

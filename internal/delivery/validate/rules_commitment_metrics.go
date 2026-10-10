@@ -22,12 +22,7 @@ func (state *validationState) validateCommitments() {
 	}
 	for _, commitment := range state.problem.Commitments.Frozen {
 		visit, exists := state.singleVisit(commitment.TaskID)
-		if !exists ||
-			visit.vehicleID != commitment.VehicleID ||
-			!slices.Contains(visit.driverIDs, commitment.DriverID) ||
-			visit.stopIndex != int(commitment.Sequence) ||
-			absoluteSeconds(visit.stop.ServiceAt.Sub(commitment.PromisedServiceAt)) >
-				commitment.ToleranceSeconds {
+		if !exists || !state.frozenCommitmentAllows(commitment, visit) {
 			state.add("V1101", domain.SeverityError, "task", ref(commitment.TaskID),
 				"frozen assignment, sequence, and ETA remain within tolerance",
 				"frozen commitment changed", noPosition())
@@ -57,6 +52,68 @@ func (state *validationState) validateCommitments() {
 				"cargo commitment is missing", noPosition())
 		}
 	}
+}
+
+func (state *validationState) frozenCommitmentAllows(
+	commitment domain.FrozenTaskCommitment,
+	visit taskVisit,
+) bool {
+	vehicleAllowed := visit.vehicleID == commitment.VehicleID
+	driverAllowed := slices.Contains(visit.driverIDs, commitment.DriverID)
+	maxSequenceShift := uint32(0)
+	maxETADriftSeconds := commitment.ToleranceSeconds
+	if scope, exists := state.freezeOverrideScope(commitment.TaskID); exists {
+		vehicleAllowed = vehicleAllowed ||
+			(scope.AllowVehicleChange &&
+				slices.Contains(scope.AllowedVehicleIDs, visit.vehicleID))
+		if !driverAllowed && scope.AllowDriverChange {
+			for _, driverID := range visit.driverIDs {
+				if slices.Contains(scope.AllowedDriverIDs, driverID) {
+					driverAllowed = true
+					break
+				}
+			}
+		}
+		maxSequenceShift = scope.MaxSequenceShift
+		if scope.MaxETADriftSeconds > maxETADriftSeconds {
+			maxETADriftSeconds = scope.MaxETADriftSeconds
+		}
+	}
+	return vehicleAllowed &&
+		driverAllowed &&
+		sequenceShift(commitment.Sequence, visit.stopIndex) <= maxSequenceShift &&
+		absoluteSeconds(visit.stop.ServiceAt.Sub(commitment.PromisedServiceAt)) <=
+			maxETADriftSeconds
+}
+
+func (state *validationState) freezeOverrideScope(
+	taskID domain.TaskID,
+) (domain.FreezeOverrideScope, bool) {
+	if state.problem.Commitments.FreezeOverride == nil {
+		return domain.FreezeOverrideScope{}, false
+	}
+	for _, scope := range state.problem.Commitments.FreezeOverride.Scopes {
+		if scope.TaskID == taskID {
+			return scope, true
+		}
+	}
+	return domain.FreezeOverrideScope{}, false
+}
+
+func sequenceShift(before uint32, after int) uint32 {
+	if after < 0 {
+		return ^uint32(0)
+	}
+	current := uint64(after)
+	expected := uint64(before)
+	if current >= expected {
+		difference := current - expected
+		if difference > uint64(^uint32(0)) {
+			return ^uint32(0)
+		}
+		return uint32(difference)
+	}
+	return uint32(expected - current)
 }
 
 func (state *validationState) singleVisit(taskID domain.TaskID) (taskVisit, bool) {
@@ -328,6 +385,46 @@ func (state *validationState) stabilityCost() int64 {
 		cost += absoluteSeconds(visit.stop.ServiceAt.Sub(commitment.PlannedServiceAt)) *
 			state.problem.Policy.Stability.ETADriftCentsPerSec
 	}
+	type cargoStage struct {
+		cargoID domain.CargoID
+		stage   uint32
+	}
+	cargoPlacements := make(map[cargoStage]domain.SoftCargoCommitment)
+	for _, duty := range state.plan.Duties {
+		for _, trip := range duty.Trips {
+			for _, stage := range trip.LoadStages {
+				for _, placement := range stage.Placements {
+					key := cargoStage{
+						cargoID: placement.CargoID,
+						stage:   stage.AfterStopIndex,
+					}
+					if _, exists := cargoPlacements[key]; exists {
+						continue
+					}
+					cargoPlacements[key] = domain.SoftCargoCommitment{
+						CargoID:        placement.CargoID,
+						VehicleID:      duty.VehicleID,
+						AfterStopIndex: stage.AfterStopIndex,
+						CompartmentID:  placement.CompartmentID,
+						DoorID:         placement.DoorID,
+						PositionMM:     placement.PositionMM,
+						Orientation:    placement.Orientation,
+					}
+				}
+			}
+		}
+	}
+	reloaded := make(map[domain.CargoID]struct{})
+	for _, commitment := range state.problem.Commitments.SoftCargo {
+		key := cargoStage{
+			cargoID: commitment.CargoID,
+			stage:   commitment.AfterStopIndex,
+		}
+		if current, exists := cargoPlacements[key]; !exists || current != commitment {
+			reloaded[commitment.CargoID] = struct{}{}
+		}
+	}
+	cost += int64(len(reloaded)) * state.problem.Policy.Stability.ReloadCents
 	return cost
 }
 
