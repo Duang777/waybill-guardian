@@ -28,6 +28,8 @@ const (
 	KindLoad             Kind = "load"
 	KindEvidence         Kind = "evidence"
 	KindEffect           Kind = "effect"
+	KindRouteSeedRequest Kind = "route_seed_request"
+	KindRouteSeedJob     Kind = "route_seed_job"
 )
 
 type Artifact struct {
@@ -162,7 +164,15 @@ func parseEnvelope(raw []byte, expected domain.ArtifactDigest) (Artifact, error)
 
 func validKind(value Kind) bool {
 	switch value {
-	case KindProblem, KindPlan, KindValidationReport, KindMatrix, KindLoad, KindEvidence, KindEffect:
+	case KindProblem,
+		KindPlan,
+		KindValidationReport,
+		KindMatrix,
+		KindLoad,
+		KindEvidence,
+		KindEffect,
+		KindRouteSeedRequest,
+		KindRouteSeedJob:
 		return true
 	default:
 		return false

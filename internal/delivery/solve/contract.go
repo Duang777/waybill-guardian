@@ -10,16 +10,22 @@ import (
 )
 
 const (
-	SolveConfigSchemaVersion = "delivery.solve-config.v1"
-	SolveEvidenceVersion     = "delivery.solve-evidence.v2"
-	RouteSeedSchemaVersion   = "delivery.route-seed.v1"
+	SolveConfigSchemaVersion      = "delivery.solve-config.v1"
+	SolveEvidenceVersion          = "delivery.solve-evidence.v2"
+	SolverCapabilitiesVersion     = "delivery.solver-capabilities.v1"
+	RouteSeedSchemaVersion        = "delivery.route-seed.v1"
+	RouteSeedRequestSchemaVersion = "delivery.route-seed-request.v1"
+	RouteSeedJobSchemaVersion     = "delivery.route-seed-job.v1"
 )
 
 var (
-	ErrAborted          = errors.New("solve aborted")
-	ErrCapability       = errors.New("solver capability mismatch")
-	ErrInvalidConfig    = errors.New("invalid solve configuration")
-	ErrInvalidRouteSeed = errors.New("invalid route seed")
+	ErrAborted              = errors.New("solve aborted")
+	ErrCapability           = errors.New("solver capability mismatch")
+	ErrInvalidConfig        = errors.New("invalid solve configuration")
+	ErrInvalidRouteSeed     = errors.New("invalid route seed")
+	ErrRouteSeedUnavailable = errors.New("route seed provider unavailable")
+	ErrRouteSeedRejected    = errors.New("route seed request rejected")
+	ErrRouteSeedIntegrity   = errors.New("route seed integrity check failed")
 )
 
 type EvaluationBudget uint64
@@ -29,6 +35,85 @@ type SolveStatus string
 type TerminationReason string
 
 type SearchPhase string
+
+type RouteSeedErrorCode string
+
+type RouteSeedProtocol string
+
+const (
+	RouteSeedVROOM   RouteSeedProtocol = "vroom"
+	RouteSeedORTools RouteSeedProtocol = "ortools"
+)
+
+const (
+	RouteSeedErrorCapability       RouteSeedErrorCode = "capability_mismatch"
+	RouteSeedErrorCanceled         RouteSeedErrorCode = "canceled"
+	RouteSeedErrorDeadline         RouteSeedErrorCode = "deadline_exceeded"
+	RouteSeedErrorUnavailable      RouteSeedErrorCode = "unavailable"
+	RouteSeedErrorUnauthorized     RouteSeedErrorCode = "unauthorized"
+	RouteSeedErrorRejected         RouteSeedErrorCode = "rejected"
+	RouteSeedErrorProtocol         RouteSeedErrorCode = "protocol_invalid"
+	RouteSeedErrorBinding          RouteSeedErrorCode = "binding_mismatch"
+	RouteSeedErrorInvalidPersisted RouteSeedErrorCode = "invalid_persisted_job"
+)
+
+type RouteSeedError struct {
+	Code         RouteSeedErrorCode
+	Operation    string
+	HTTPStatus   int
+	Retryable    bool
+	ManualReview bool
+	cause        error
+}
+
+func (value *RouteSeedError) Error() string {
+	if value == nil {
+		return "<nil>"
+	}
+	message := "route seed " + value.Operation + ": " + string(value.Code)
+	if value.HTTPStatus != 0 {
+		message = fmt.Sprintf("%s (HTTP %d)", message, value.HTTPStatus)
+	}
+	if value.cause != nil {
+		message += ": " + value.cause.Error()
+	}
+	return message
+}
+
+func (value *RouteSeedError) Unwrap() error {
+	if value == nil {
+		return nil
+	}
+	return value.cause
+}
+
+func (value *RouteSeedError) Is(target error) bool {
+	if value == nil {
+		return false
+	}
+	switch target {
+	case ErrCapability:
+		return value.Code == RouteSeedErrorCapability
+	case ErrInvalidRouteSeed:
+		return value.Code == RouteSeedErrorProtocol ||
+			value.Code == RouteSeedErrorBinding ||
+			value.Code == RouteSeedErrorInvalidPersisted
+	case ErrRouteSeedUnavailable:
+		return value.Code == RouteSeedErrorDeadline ||
+			value.Code == RouteSeedErrorUnavailable
+	case ErrRouteSeedRejected:
+		return value.Code == RouteSeedErrorUnauthorized ||
+			value.Code == RouteSeedErrorRejected
+	case ErrRouteSeedIntegrity:
+		return value.Code == RouteSeedErrorBinding
+	case context.Canceled:
+		return value.Code == RouteSeedErrorCanceled
+	case context.DeadlineExceeded:
+		return value.Code == RouteSeedErrorDeadline
+	default:
+		return false
+	}
+}
 
 const (
 	SolveCompleted    SolveStatus = "completed"
@@ -84,6 +169,22 @@ type Capabilities struct {
 	DynamicCommitments    bool   `json:"dynamic_commitments"`
 	DeterministicReplay   bool   `json:"deterministic_replay"`
 	RemoteJobContinuation bool   `json:"remote_job_continuation"`
+}
+
+type RouteSeedRequest struct {
+	SchemaVersion string                 `json:"schema_version"`
+	Protocol      RouteSeedProtocol      `json:"protocol"`
+	Provider      domain.SolverIdentity  `json:"provider"`
+	ProblemDigest domain.ArtifactDigest  `json:"problem_digest"`
+	Problem       domain.ProblemSnapshot `json:"problem"`
+	RequestDigest domain.ArtifactDigest  `json:"request_digest"`
+}
+
+func ComputeRouteSeedRequestDigest(
+	value RouteSeedRequest,
+) (domain.ArtifactDigest, error) {
+	value.RequestDigest = ""
+	return domain.Digest(value)
 }
 
 type SolveConfig struct {
@@ -262,9 +363,11 @@ const (
 	RouteSeedPending   RouteSeedJobStatus = "pending"
 	RouteSeedCompleted RouteSeedJobStatus = "completed"
 	RouteSeedFailed    RouteSeedJobStatus = "failed"
+	RouteSeedCanceled  RouteSeedJobStatus = "canceled"
 )
 
 type RouteSeedJob struct {
+	SchemaVersion  string                `json:"schema_version"`
 	Provider       domain.SolverIdentity `json:"provider"`
 	RemoteJobID    string                `json:"remote_job_id"`
 	Status         RouteSeedJobStatus    `json:"status"`
@@ -272,13 +375,22 @@ type RouteSeedJob struct {
 	RequestDigest  domain.ArtifactDigest `json:"request_digest"`
 	ResponseDigest domain.ArtifactDigest `json:"response_digest"`
 	BackendVersion string                `json:"backend_version"`
+	BackendBuild   string                `json:"backend_build"`
 	Seed           RouteSeed             `json:"seed"`
 	FailureCode    string                `json:"failure_code"`
+	JobDigest      domain.ArtifactDigest `json:"job_digest"`
+}
+
+func ComputeRouteSeedJobDigest(value RouteSeedJob) (domain.ArtifactDigest, error) {
+	value.JobDigest = ""
+	return domain.Digest(value)
 }
 
 type RouteSeedProvider interface {
 	Identity() domain.SolverIdentity
 	Capabilities(context.Context) (Capabilities, error)
-	Submit(context.Context, domain.ProblemSnapshot) (RouteSeedJob, error)
+	Prepare(context.Context, domain.ProblemSnapshot) (RouteSeedRequest, error)
+	Submit(context.Context, RouteSeedRequest) (RouteSeedJob, error)
 	Poll(context.Context, RouteSeedJob) (RouteSeedJob, error)
+	Cancel(context.Context, RouteSeedJob) (RouteSeedJob, error)
 }
