@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -297,6 +298,12 @@ func validateProblem(value domain.ProblemSnapshot) error {
 	if err := validateEnergyMatrix(value.Energy, locations); err != nil {
 		return err
 	}
+	if !slices.Equal(value.Travel.NodeIDs, value.Energy.NodeIDs) {
+		return fmt.Errorf("travel and energy matrices must use the same ordered nodes")
+	}
+	if err := validateMatrixCoverage(value.Travel.NodeIDs, locations); err != nil {
+		return err
+	}
 	energyProfiles := make(map[string]struct{}, len(value.Energy.Profiles))
 	for _, profile := range value.Energy.Profiles {
 		energyProfiles[profile.ProfileID] = struct{}{}
@@ -319,6 +326,15 @@ func validateProblem(value domain.ProblemSnapshot) error {
 	if value.Policy.DefaultMinSupportPPM < 0 ||
 		value.Policy.DefaultMinSupportPPM > 1_000_000 {
 		return fmt.Errorf("policy default_min_support_ppm must be between 0 and 1000000")
+	}
+	if err := validateCommitments(
+		value.Commitments,
+		value.Requests,
+		value.Vehicles,
+		value.Drivers,
+		value.Cargo,
+	); err != nil {
+		return err
 	}
 	if len(value.SourceRefs) == 0 {
 		return fmt.Errorf("at least one source_ref is required")
@@ -389,12 +405,23 @@ func validateRequests(
 	units map[domain.FulfillmentUnitID]domain.FulfillmentUnit,
 ) error {
 	requests := make(map[domain.RequestID]struct{}, len(values))
+	requestUnits := make(
+		map[domain.RequestID]map[domain.FulfillmentUnitID]struct{},
+		len(values),
+	)
 	tasks := make(map[domain.TaskID]struct{})
 	for _, request := range values {
+		if err := requiredID("request id", string(request.ID)); err != nil {
+			return err
+		}
 		if _, exists := requests[request.ID]; exists {
 			return fmt.Errorf("duplicate request %q", request.ID)
 		}
 		requests[request.ID] = struct{}{}
+		requestUnits[request.ID] = make(
+			map[domain.FulfillmentUnitID]struct{},
+			len(request.UnitIDs),
+		)
 		switch request.Split.Mode {
 		case domain.SplitForbidden:
 			if request.Split.MaxSplits != 1 {
@@ -412,8 +439,12 @@ func validateRequests(
 			if !exists || unit.RequestID != request.ID {
 				return fmt.Errorf("request %q references unknown or foreign unit %q", request.ID, unitID)
 			}
+			requestUnits[request.ID][unitID] = struct{}{}
 		}
 		for _, task := range request.Tasks {
+			if err := requiredID("task id", string(task.ID)); err != nil {
+				return err
+			}
 			if _, exists := tasks[task.ID]; exists {
 				return fmt.Errorf("duplicate task %q", task.ID)
 			}
@@ -430,8 +461,13 @@ func validateRequests(
 				}
 			}
 			for _, unitID := range task.UnitIDs {
-				if _, exists := units[unitID]; !exists {
-					return fmt.Errorf("task %q references unknown unit %q", task.ID, unitID)
+				unit, exists := units[unitID]
+				if !exists || unit.RequestID != request.ID {
+					return fmt.Errorf(
+						"task %q references unknown or foreign unit %q",
+						task.ID,
+						unitID,
+					)
 				}
 			}
 		}
@@ -449,6 +485,13 @@ func validateRequests(
 	for _, unit := range units {
 		if _, exists := requests[unit.RequestID]; !exists {
 			return fmt.Errorf("unit %q references unknown request %q", unit.ID, unit.RequestID)
+		}
+		if _, listed := requestUnits[unit.RequestID][unit.ID]; !listed {
+			return fmt.Errorf(
+				"unit %q is not listed by request %q",
+				unit.ID,
+				unit.RequestID,
+			)
 		}
 	}
 	return nil
@@ -502,11 +545,13 @@ func validateCargo(
 	units map[domain.FulfillmentUnitID]domain.FulfillmentUnit,
 ) error {
 	seen := make(map[domain.CargoID]struct{}, len(values))
+	owners := make(map[domain.CargoID]domain.FulfillmentUnitID, len(values))
 	for _, value := range values {
 		if _, exists := seen[value.ID]; exists {
 			return fmt.Errorf("duplicate cargo %q", value.ID)
 		}
 		seen[value.ID] = struct{}{}
+		owners[value.ID] = value.UnitID
 		if _, exists := units[value.UnitID]; !exists {
 			return fmt.Errorf("cargo %q references unknown unit %q", value.ID, value.UnitID)
 		}
@@ -517,11 +562,34 @@ func validateCargo(
 			return fmt.Errorf("cargo %q has invalid support ratio", value.ID)
 		}
 	}
+	referenced := make(map[domain.CargoID]domain.FulfillmentUnitID, len(values))
 	for _, unit := range units {
 		for _, cargoID := range unit.CargoIDs {
 			if _, exists := seen[cargoID]; !exists {
 				return fmt.Errorf("unit %q references unknown cargo %q", unit.ID, cargoID)
 			}
+			if owners[cargoID] != unit.ID {
+				return fmt.Errorf(
+					"unit %q references cargo %q owned by unit %q",
+					unit.ID,
+					cargoID,
+					owners[cargoID],
+				)
+			}
+			if previous, exists := referenced[cargoID]; exists {
+				return fmt.Errorf(
+					"cargo %q is listed by units %q and %q",
+					cargoID,
+					previous,
+					unit.ID,
+				)
+			}
+			referenced[cargoID] = unit.ID
+		}
+	}
+	for cargoID, owner := range owners {
+		if referenced[cargoID] != owner {
+			return fmt.Errorf("cargo %q is not listed by owning unit %q", cargoID, owner)
 		}
 	}
 	return nil
@@ -543,6 +611,11 @@ func validateVehicles(
 		if value.MaxTrips == 0 || len(value.Compartments) == 0 ||
 			value.MaxGrossWeightG <= value.TareWeightG {
 			return fmt.Errorf("vehicle %q has invalid trips, compartments, or gross weight", value.ID)
+		}
+		for _, availability := range value.Availability {
+			if err := validRange("vehicle availability", availability); err != nil {
+				return fmt.Errorf("vehicle %q: %w", value.ID, err)
+			}
 		}
 		switch value.Energy.Kind {
 		case domain.EnergyCombustion:
@@ -614,6 +687,15 @@ func validateDrivers(
 		if _, exists := locations[value.StartLocation]; !exists {
 			return fmt.Errorf("driver %q references unknown start location", value.ID)
 		}
+		for _, locationID := range value.EndLocations {
+			if _, exists := locations[locationID]; !exists {
+				return fmt.Errorf(
+					"driver %q references unknown end location %q",
+					value.ID,
+					locationID,
+				)
+			}
+		}
 		if err := validRange("driver shift", value.Shift); err != nil {
 			return fmt.Errorf("driver %q: %w", value.ID, err)
 		}
@@ -640,6 +722,11 @@ func validateChargers(
 		if value.Capacity == 0 || value.MaxPowerW <= 0 {
 			return fmt.Errorf("charger %q has invalid capacity or power", value.ID)
 		}
+		for _, availability := range value.Availability {
+			if err := validRange("charger availability", availability); err != nil {
+				return fmt.Errorf("charger %q: %w", value.ID, err)
+			}
+		}
 	}
 	return nil
 }
@@ -653,6 +740,9 @@ func validateMatrix(
 	size := len(nodes)
 	if size == 0 {
 		return fmt.Errorf("%s has no nodes", name)
+	}
+	if size > int(^uint(0)>>1)/size {
+		return fmt.Errorf("%s cardinality overflows platform integer", name)
 	}
 	seen := make(map[domain.LocationID]struct{}, size)
 	for _, nodeID := range nodes {
@@ -675,6 +765,169 @@ func validateMatrix(
 		}
 	}
 	return nil
+}
+
+func validateMatrixCoverage(
+	nodes []domain.LocationID,
+	locations map[domain.LocationID]domain.Location,
+) error {
+	if len(nodes) != len(locations) {
+		return fmt.Errorf(
+			"travel and energy matrices have %d nodes, want all %d locations",
+			len(nodes),
+			len(locations),
+		)
+	}
+	return nil
+}
+
+func validateCommitments(
+	value domain.CommitmentSet,
+	requests []domain.TransportRequest,
+	vehicles []domain.Vehicle,
+	drivers []domain.Driver,
+	cargo []domain.CargoItem,
+) error {
+	tasks := make(map[domain.TaskID]struct{})
+	for _, request := range requests {
+		for _, task := range request.Tasks {
+			tasks[task.ID] = struct{}{}
+		}
+	}
+	vehicleCompartments := make(
+		map[domain.VehicleID]map[domain.CompartmentID]struct{},
+		len(vehicles),
+	)
+	for _, vehicle := range vehicles {
+		compartments := make(map[domain.CompartmentID]struct{}, len(vehicle.Compartments))
+		for _, compartment := range vehicle.Compartments {
+			compartments[compartment.ID] = struct{}{}
+		}
+		vehicleCompartments[vehicle.ID] = compartments
+	}
+	driverIDs := make(map[domain.DriverID]struct{}, len(drivers))
+	for _, driver := range drivers {
+		driverIDs[driver.ID] = struct{}{}
+	}
+	cargoIDs := make(map[domain.CargoID]struct{}, len(cargo))
+	for _, item := range cargo {
+		cargoIDs[item.ID] = struct{}{}
+	}
+	if value.BasePlanDigest != "" && !validArtifactDigest(value.BasePlanDigest) {
+		return fmt.Errorf("commitment base_plan_digest must be a lowercase SHA-256 value")
+	}
+	hasFacts := len(value.Executed) > 0 ||
+		len(value.Frozen) > 0 ||
+		len(value.InTransit) > 0 ||
+		len(value.Soft) > 0
+	if hasFacts && strings.TrimSpace(value.FactWatermark) == "" {
+		return fmt.Errorf("commitment fact_watermark is required when facts are present")
+	}
+
+	committedTasks := make(map[domain.TaskID]string)
+	checkTask := func(
+		taskID domain.TaskID,
+		vehicleID domain.VehicleID,
+		driverID domain.DriverID,
+		kind string,
+	) error {
+		if _, exists := tasks[taskID]; !exists {
+			return fmt.Errorf("%s commitment references unknown task %q", kind, taskID)
+		}
+		if _, exists := vehicleCompartments[vehicleID]; !exists {
+			return fmt.Errorf("%s commitment references unknown vehicle %q", kind, vehicleID)
+		}
+		if _, exists := driverIDs[driverID]; !exists {
+			return fmt.Errorf("%s commitment references unknown driver %q", kind, driverID)
+		}
+		if previous, exists := committedTasks[taskID]; exists {
+			return fmt.Errorf(
+				"task %q has both %s and %s commitments",
+				taskID,
+				previous,
+				kind,
+			)
+		}
+		committedTasks[taskID] = kind
+		return nil
+	}
+	for _, commitment := range value.Executed {
+		if err := checkTask(
+			commitment.TaskID,
+			commitment.VehicleID,
+			commitment.DriverID,
+			"executed",
+		); err != nil {
+			return err
+		}
+		if commitment.CompletedAt.IsZero() {
+			return fmt.Errorf("executed commitment %q has no completed_at", commitment.TaskID)
+		}
+	}
+	for _, commitment := range value.Frozen {
+		if err := checkTask(
+			commitment.TaskID,
+			commitment.VehicleID,
+			commitment.DriverID,
+			"frozen",
+		); err != nil {
+			return err
+		}
+		if commitment.PromisedServiceAt.IsZero() || commitment.ToleranceSeconds < 0 {
+			return fmt.Errorf("frozen commitment %q has invalid promise", commitment.TaskID)
+		}
+	}
+	for _, commitment := range value.Soft {
+		if err := checkTask(
+			commitment.TaskID,
+			commitment.VehicleID,
+			commitment.DriverID,
+			"soft",
+		); err != nil {
+			return err
+		}
+		if commitment.PlannedServiceAt.IsZero() {
+			return fmt.Errorf("soft commitment %q has no planned_service_at", commitment.TaskID)
+		}
+	}
+	committedCargo := make(map[domain.CargoID]struct{}, len(value.InTransit))
+	for _, commitment := range value.InTransit {
+		if _, exists := cargoIDs[commitment.CargoID]; !exists {
+			return fmt.Errorf(
+				"in-transit commitment references unknown cargo %q",
+				commitment.CargoID,
+			)
+		}
+		compartments, exists := vehicleCompartments[commitment.VehicleID]
+		if !exists {
+			return fmt.Errorf(
+				"in-transit commitment references unknown vehicle %q",
+				commitment.VehicleID,
+			)
+		}
+		if _, exists := compartments[commitment.CompartmentID]; !exists {
+			return fmt.Errorf(
+				"in-transit commitment references unknown compartment %q on vehicle %q",
+				commitment.CompartmentID,
+				commitment.VehicleID,
+			)
+		}
+		if _, exists := committedCargo[commitment.CargoID]; exists {
+			return fmt.Errorf(
+				"cargo %q has duplicate in-transit commitments",
+				commitment.CargoID,
+			)
+		}
+		committedCargo[commitment.CargoID] = struct{}{}
+	}
+	return nil
+}
+
+func validArtifactDigest(value domain.ArtifactDigest) bool {
+	decoded, err := hex.DecodeString(string(value))
+	return err == nil &&
+		len(decoded) == 32 &&
+		strings.ToLower(string(value)) == string(value)
 }
 
 func validateEnergyMatrix(

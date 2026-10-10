@@ -59,6 +59,8 @@ func TestBuildProblemSnapshotPreservesOrderedMatrixMeaning(t *testing.T) {
 	changedDraft := validProblemDraft()
 	changedDraft.Travel.NodeIDs[0], changedDraft.Travel.NodeIDs[1] =
 		changedDraft.Travel.NodeIDs[1], changedDraft.Travel.NodeIDs[0]
+	changedDraft.Energy.NodeIDs[0], changedDraft.Energy.NodeIDs[1] =
+		changedDraft.Energy.NodeIDs[1], changedDraft.Energy.NodeIDs[0]
 	changed, err := BuildProblemSnapshot(changedDraft)
 	if err != nil {
 		t.Fatal(err)
@@ -117,6 +119,90 @@ func TestBuildProblemSnapshotRejectsBrokenBoundaryData(t *testing.T) {
 			want: "contains a cycle",
 		},
 		{
+			name: "unit not listed by request",
+			mutate: func(value *domain.ProblemSnapshot) {
+				value.Requests[0].UnitIDs = nil
+			},
+			want: "is not listed by request",
+		},
+		{
+			name: "cargo not listed by unit",
+			mutate: func(value *domain.ProblemSnapshot) {
+				value.Units[0].CargoIDs = nil
+			},
+			want: "is not listed by owning unit",
+		},
+		{
+			name: "unknown driver end",
+			mutate: func(value *domain.ProblemSnapshot) {
+				value.Drivers[0].EndLocations = []domain.LocationID{"unknown"}
+			},
+			want: "unknown end location",
+		},
+		{
+			name: "different energy node order",
+			mutate: func(value *domain.ProblemSnapshot) {
+				value.Energy.NodeIDs[0], value.Energy.NodeIDs[1] =
+					value.Energy.NodeIDs[1], value.Energy.NodeIDs[0]
+			},
+			want: "same ordered nodes",
+		},
+		{
+			name: "matrix omits location",
+			mutate: func(value *domain.ProblemSnapshot) {
+				value.Travel.NodeIDs = value.Travel.NodeIDs[:1]
+				value.Travel.DistanceMeters = []int64{0}
+				value.Travel.TravelSeconds = []int64{0}
+				value.Energy.NodeIDs = value.Energy.NodeIDs[:1]
+			},
+			want: "want all 2 locations",
+		},
+		{
+			name: "commitment unknown task",
+			mutate: func(value *domain.ProblemSnapshot) {
+				value.Commitments.FactWatermark = "facts-2"
+				value.Commitments.Executed = []domain.ExecutedTaskCommitment{{
+					TaskID:      "unknown",
+					VehicleID:   "vehicle-1",
+					DriverID:    "driver-1",
+					CompletedAt: value.CreatedAt,
+				}}
+			},
+			want: "unknown task",
+		},
+		{
+			name: "commitment wrong compartment",
+			mutate: func(value *domain.ProblemSnapshot) {
+				value.Commitments.FactWatermark = "facts-2"
+				value.Commitments.InTransit = []domain.InTransitCargoCommitment{{
+					CargoID:       "cargo-1",
+					VehicleID:     "vehicle-1",
+					CompartmentID: "unknown",
+				}}
+			},
+			want: "unknown compartment",
+		},
+		{
+			name: "commitment missing watermark",
+			mutate: func(value *domain.ProblemSnapshot) {
+				value.Commitments.FactWatermark = ""
+				value.Commitments.Soft = []domain.SoftTaskCommitment{{
+					TaskID:           "delivery-1",
+					VehicleID:        "vehicle-1",
+					DriverID:         "driver-1",
+					PlannedServiceAt: value.CreatedAt,
+				}}
+			},
+			want: "fact_watermark",
+		},
+		{
+			name: "invalid base plan digest",
+			mutate: func(value *domain.ProblemSnapshot) {
+				value.Commitments.BasePlanDigest = "invalid"
+			},
+			want: "base_plan_digest",
+		},
+		{
 			name: "contradictory split policy",
 			mutate: func(value *domain.ProblemSnapshot) {
 				value.Requests[0].Split.MaxSplits = 2
@@ -134,6 +220,42 @@ func TestBuildProblemSnapshotRejectsBrokenBoundaryData(t *testing.T) {
 				t.Fatalf("BuildProblemSnapshot error = %v, want substring %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestBuildProblemSnapshotAcceptsBoundCommitments(t *testing.T) {
+	draft := validProblemDraft()
+	draft.Commitments = domain.CommitmentSet{
+		BasePlanDigest: domain.ArtifactDigest(strings.Repeat("a", 64)),
+		FactWatermark:  "facts-2",
+		Executed: []domain.ExecutedTaskCommitment{{
+			TaskID:      "pickup-1",
+			VehicleID:   "vehicle-1",
+			DriverID:    "driver-1",
+			CompletedAt: draft.CreatedAt,
+		}},
+		Frozen: []domain.FrozenTaskCommitment{{
+			TaskID:            "delivery-1",
+			VehicleID:         "vehicle-1",
+			DriverID:          "driver-1",
+			Sequence:          1,
+			PromisedServiceAt: draft.CreatedAt.Add(time.Hour),
+			ToleranceSeconds:  300,
+		}},
+		InTransit: []domain.InTransitCargoCommitment{{
+			CargoID:       "cargo-1",
+			VehicleID:     "vehicle-1",
+			CompartmentID: "compartment-1",
+		}},
+		Soft: []domain.SoftTaskCommitment{},
+	}
+
+	snapshot, err := BuildProblemSnapshot(draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.CommitmentDigest == "" {
+		t.Fatal("commitment digest is empty")
 	}
 }
 

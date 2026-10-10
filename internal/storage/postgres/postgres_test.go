@@ -12,14 +12,15 @@ func TestLoadMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 7 ||
+	if len(migrations) != 8 ||
 		migrations[0].Version != 1 ||
 		migrations[1].Version != 2 ||
 		migrations[2].Version != 3 ||
 		migrations[3].Version != 4 ||
 		migrations[4].Version != 5 ||
 		migrations[5].Version != 6 ||
-		migrations[6].Version != 7 {
+		migrations[6].Version != 7 ||
+		migrations[7].Version != 8 {
 		t.Fatalf("migrations = %+v", migrations)
 	}
 	if migrations[0].Name != "000001_initial.sql" ||
@@ -29,13 +30,15 @@ func TestLoadMigrations(t *testing.T) {
 		migrations[4].Name != "000005_event_ingestion.sql" ||
 		migrations[5].Name != "000006_real_write_effects.sql" ||
 		migrations[6].Name != "000007_model_proposals.sql" ||
+		migrations[7].Name != "000008_delivery_source_snapshots.sql" ||
 		len(migrations[0].Checksum) != 64 ||
 		len(migrations[1].Checksum) != 64 ||
 		len(migrations[2].Checksum) != 64 ||
 		len(migrations[3].Checksum) != 64 ||
 		len(migrations[4].Checksum) != 64 ||
 		len(migrations[5].Checksum) != 64 ||
-		len(migrations[6].Checksum) != 64 {
+		len(migrations[6].Checksum) != 64 ||
+		len(migrations[7].Checksum) != 64 {
 		t.Fatalf("migration metadata = %+v", migrations[0])
 	}
 }

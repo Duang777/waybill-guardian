@@ -182,13 +182,15 @@ func TestValidatorCoversEveryRuleFamily(t *testing.T) {
 			mutate: func(problem *domain.ProblemSnapshot, plan *domain.Plan) {
 				problem.Commitments.Frozen = []domain.FrozenTaskCommitment{{
 					TaskID:            "delivery-1",
-					VehicleID:         "vehicle-other",
+					VehicleID:         "vehicle-1",
 					DriverID:          "driver-1",
 					Sequence:          1,
 					PromisedServiceAt: plan.Duties[0].Trips[0].Stops[1].ServiceAt,
 					ToleranceSeconds:  300,
 				}}
 				rebuildProblemAndBind(t, problem, plan)
+				plan.Duties[0].VehicleID = "vehicle-other"
+				sealPlan(t, plan)
 			},
 		},
 		{
