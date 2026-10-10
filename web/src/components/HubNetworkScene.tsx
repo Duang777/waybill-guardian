@@ -182,6 +182,11 @@ const coordinateBounds = {
 const sceneWidth = 22;
 const sceneDepth = 12;
 const maxFlowMarkersPerRoute = 4;
+const networkCameraOffset: [number, number, number] = [2.4, 22, 9.5];
+const networkFacilityScale = 0.68;
+const networkZoomMultiplier = 1.22;
+const criticalRouteRiskThreshold = 50;
+const maxEmphasizedRiskHubs = 6;
 const transform = new Object3D();
 const markerTransform = new Matrix4();
 const markerPoint = new Vector3();
@@ -432,7 +437,12 @@ export default function HubNetworkScene({
   return (
     <Canvas
       orthographic
-      camera={{ position: [11, 18, 15], near: 0.1, far: 100, zoom: 34 }}
+      camera={{
+        position: networkCameraOffset,
+        near: 0.1,
+        far: 100,
+        zoom: 34,
+      }}
       dpr={[1, 1.5]}
       frameloop={reducedMotion || paused ? "demand" : "always"}
       gl={{
@@ -456,7 +466,7 @@ export default function HubNetworkScene({
           <RouteLines routes={view.routes} />
           <HubFacilities
             parts={view.facilityParts}
-            scaleMultiplier={1}
+            scaleMultiplier={networkFacilityScale}
             interactive
             onSelectHub={onSelectHub}
           />
@@ -483,6 +493,7 @@ export default function HubNetworkScene({
         />
       )}
       <CameraRig
+        networkHubs={model.hubs}
         selectedHub={view.selectedHub}
         detail={view.detail}
         preset={cameraPreset}
@@ -502,14 +513,14 @@ export default function HubNetworkScene({
 function StrategyTable() {
   return (
     <group>
-      <mesh position={[0, -0.32, 0]}>
-        <boxGeometry args={[26, 0.2, 16]} />
-        <meshStandardMaterial color="#e9ece8" roughness={1} />
+      <mesh position={[0, -0.265, 0]}>
+        <boxGeometry args={[24.8, 0.08, 14.4]} />
+        <meshStandardMaterial color="#ecefeb" roughness={1} />
       </mesh>
       <gridHelper
-        args={[26, 26, "#9caaa7", "#d2d8d4"]}
-        position={[0, -0.19, 0]}
-        scale={[1, 1, 0.615]}
+        args={[24, 16, "#b6c0bd", "#dce1de"]}
+        position={[0, -0.21, 0]}
+        scale={[1, 1, 0.58]}
       />
     </group>
   );
@@ -1198,34 +1209,59 @@ function RouteLines({ routes }: { routes: readonly SceneRoute[] }) {
     () => createRouteGeometry(routes.filter((item) => item.route.anomalies === 0)),
     [routes],
   );
-  const riskGeometry = useMemo(
-    () => createRouteGeometry(routes.filter((item) => item.route.anomalies > 0)),
+  const elevatedRiskGeometry = useMemo(
+    () =>
+      createRouteGeometry(
+        routes.filter(
+          (item) =>
+            item.route.anomalies > 0 &&
+            item.route.max_risk < criticalRouteRiskThreshold,
+        ),
+      ),
+    [routes],
+  );
+  const criticalRiskGeometry = useMemo(
+    () =>
+      createRouteGeometry(
+        routes.filter(
+          (item) => item.route.max_risk >= criticalRouteRiskThreshold,
+        ),
+      ),
     [routes],
   );
 
   useEffect(
     () => () => {
       normalGeometry.dispose();
-      riskGeometry.dispose();
+      elevatedRiskGeometry.dispose();
+      criticalRiskGeometry.dispose();
     },
-    [normalGeometry, riskGeometry],
+    [criticalRiskGeometry, elevatedRiskGeometry, normalGeometry],
   );
 
   return (
     <group>
       <lineSegments geometry={normalGeometry}>
         <lineBasicMaterial
-          color="#5e6e6a"
+          color="#687a76"
           transparent
-          opacity={0.2}
+          opacity={0.13}
           toneMapped={false}
         />
       </lineSegments>
-      <lineSegments geometry={riskGeometry}>
+      <lineSegments geometry={elevatedRiskGeometry}>
         <lineBasicMaterial
-          color="#df3f30"
+          color="#b88379"
           transparent
-          opacity={0.88}
+          opacity={0.14}
+          toneMapped={false}
+        />
+      </lineSegments>
+      <lineSegments geometry={criticalRiskGeometry}>
+        <lineBasicMaterial
+          color="#c93f32"
+          transparent
+          opacity={0.68}
           toneMapped={false}
         />
       </lineSegments>
@@ -1247,24 +1283,42 @@ function FlowMarkers({
   const normalMarkers = markers.filter(
     (marker) => marker.route.anomaly === undefined,
   );
-  const riskMarkers = markers.filter(
-    (marker) => marker.route.anomaly !== undefined,
+  const elevatedRiskMarkers = markers.filter(
+    (marker) =>
+      marker.route.anomaly !== undefined &&
+      marker.route.route.max_risk < criticalRouteRiskThreshold,
+  );
+  const criticalRiskMarkers = markers.filter(
+    (marker) =>
+      marker.route.anomaly !== undefined &&
+      marker.route.route.max_risk >= criticalRouteRiskThreshold,
   );
 
   return (
     <group>
       <FlowMarkerInstances
         markers={normalMarkers}
-        color="#176e68"
-        scale={0.72}
+        color="#547c77"
+        scale={0.38}
+        opacity={0.4}
         reducedMotion={reducedMotion}
         paused={paused}
         onSelectWaybill={onSelectWaybill}
       />
       <FlowMarkerInstances
-        markers={riskMarkers}
-        color="#ef3f2f"
-        scale={1.15}
+        markers={elevatedRiskMarkers}
+        color="#b66f63"
+        scale={0.46}
+        opacity={0.4}
+        reducedMotion={reducedMotion}
+        paused={paused}
+        onSelectWaybill={onSelectWaybill}
+      />
+      <FlowMarkerInstances
+        markers={criticalRiskMarkers}
+        color="#d9473a"
+        scale={0.7}
+        opacity={0.94}
         reducedMotion={reducedMotion}
         paused={paused}
         onSelectWaybill={onSelectWaybill}
@@ -1277,6 +1331,7 @@ function FlowMarkerInstances({
   markers,
   color,
   scale,
+  opacity,
   reducedMotion,
   paused,
   onSelectWaybill,
@@ -1284,6 +1339,7 @@ function FlowMarkerInstances({
   markers: readonly FlowMarker[];
   color: string;
   scale: number;
+  opacity: number;
   reducedMotion: boolean;
   paused: boolean;
   onSelectWaybill: (waybillID: WaybillID) => void;
@@ -1355,7 +1411,12 @@ function FlowMarkerInstances({
       onPointerOut={() => setCursor("default")}
     >
       <sphereGeometry args={[0.072, 8, 6]} />
-      <meshBasicMaterial color={color} toneMapped={false} />
+      <meshBasicMaterial
+        color={color}
+        transparent={opacity < 1}
+        opacity={opacity}
+        toneMapped={false}
+      />
     </instancedMesh>
   );
 }
@@ -1371,27 +1432,31 @@ function RiskRings({
 }) {
   const mesh = useRef<InstancedMesh>(null);
   const elapsed = useRef(0);
+  const emphasizedHubs = useMemo(
+    () => hubs.slice(0, maxEmphasizedRiskHubs),
+    [hubs],
+  );
 
   const updateRings = useCallback(
     (time: number) => {
       if (mesh.current === null) {
         return;
       }
-      hubs.forEach((hub, index) => {
+      emphasizedHubs.forEach((hub, index) => {
         const pulse = reducedMotion
           ? 1
-          : 0.88 + ((Math.sin(time * 2.4 + index * 0.62) + 1) / 2) * 0.5;
+          : 0.94 + ((Math.sin(time * 2 + index * 0.62) + 1) / 2) * 0.16;
         transform.position.set(hub.position.x, -0.11, hub.position.z);
         transform.rotation.set(Math.PI / 2, 0, 0);
         transform.scale.setScalar(
-          pulse * hub.scale * (0.82 + hub.signalHeight),
+          pulse * hub.scale * (0.68 + hub.signalHeight * 0.55),
         );
         transform.updateMatrix();
         mesh.current?.setMatrixAt(index, transform.matrix);
       });
       mesh.current.instanceMatrix.needsUpdate = true;
     },
-    [hubs, reducedMotion],
+    [emphasizedHubs, reducedMotion],
   );
 
   useLayoutEffect(() => {
@@ -1409,11 +1474,11 @@ function RiskRings({
   return (
     <instancedMesh
       ref={mesh}
-      args={[undefined, undefined, hubs.length]}
+      args={[undefined, undefined, emphasizedHubs.length]}
       frustumCulled={false}
     >
-      <torusGeometry args={[0.22, 0.018, 6, 20]} />
-      <meshBasicMaterial color="#e13f30" transparent opacity={0.76} />
+      <torusGeometry args={[0.2, 0.012, 6, 20]} />
+      <meshBasicMaterial color="#d54a3d" transparent opacity={0.52} />
     </instancedMesh>
   );
 }
@@ -1502,6 +1567,7 @@ export function resolveFacilityCameraTarget(
 }
 
 function CameraRig({
+  networkHubs,
   selectedHub,
   detail,
   preset,
@@ -1509,6 +1575,7 @@ function CameraRig({
   reducedMotion,
   paused,
 }: {
+  networkHubs: readonly SceneHub[];
   selectedHub: SceneHub | undefined;
   detail: FacilityLayout | undefined;
   preset: FacilityCameraPreset;
@@ -1521,16 +1588,38 @@ function CameraRig({
   const elapsed = useRef(0);
   const currentFocus = useRef(new Vector3());
   const desiredFocus = useRef(new Vector3());
-  const desiredPosition = useRef(new Vector3(11, 18, 15));
+  const desiredPosition = useRef(new Vector3(...networkCameraOffset));
   const desiredZoom = useRef(1);
+  const networkFocus = useMemo(() => {
+    if (networkHubs.length === 0) {
+      return new Vector3();
+    }
+    const xValues = networkHubs.map((hub) => hub.position.x);
+    const zValues = networkHubs.map((hub) => hub.position.z);
+    const boundsCenterX =
+      (Math.min(...xValues) + Math.max(...xValues)) / 2;
+    const boundsCenterZ =
+      (Math.min(...zValues) + Math.max(...zValues)) / 2;
+    const centroidX =
+      xValues.reduce((sum, value) => sum + value, 0) / xValues.length;
+    const centroidZ =
+      zValues.reduce((sum, value) => sum + value, 0) / zValues.length;
+    return new Vector3(
+      MathUtils.lerp(boundsCenterX, centroidX, 0.5),
+      0,
+      MathUtils.lerp(boundsCenterZ, centroidZ, 0.5),
+    );
+  }, [networkHubs]);
 
   const updateDesiredView = useCallback(
     (time: number) => {
       const baseZoom = Math.min(size.width / 23, size.height / 14);
       if (selectedHub === undefined || detail === undefined) {
-        desiredFocus.current.set(0, 0, 0);
-        desiredPosition.current.set(11, 18, 15);
-        desiredZoom.current = baseZoom;
+        desiredFocus.current.copy(networkFocus);
+        desiredPosition.current
+          .set(...networkCameraOffset)
+          .add(networkFocus);
+        desiredZoom.current = baseZoom * networkZoomMultiplier;
       } else {
         const target = resolveFacilityCameraTarget(
           detail,
@@ -1563,7 +1652,16 @@ function CameraRig({
           .join(",");
       }
     },
-    [detail, gl, preset, selectedHub, selection, size.height, size.width],
+    [
+      detail,
+      gl,
+      networkFocus,
+      preset,
+      selectedHub,
+      selection,
+      size.height,
+      size.width,
+    ],
   );
 
   useEffect(() => {
