@@ -4,8 +4,8 @@
 
 ## Runtime environment
 
-- Generated at: `2026-10-10T15:59:02Z`
-- Source revision: `f921411b2698384c3d9519b6340b102f6556f221`
+- Generated at: `2026-10-10T16:13:36Z`
+- Source revision: `6d7887cade546bf33887883800c9fe2209196037`
 - Acceptance tool SHA-256: `14a992d888c20afb8f67d7bca198a853ffee202b5805c2e11f91e6f6b91e119e`
 - Tested source SHA-256: `5dd760ddfa162276e3409d515ba4610afc97c6f7dc3fc7d1246453a19a07abe1`
 - Go: `go1.26.9`; platform: `darwin/arm64`
@@ -29,10 +29,10 @@
 
 | Probe | Scenario | Samples | Tasks/vehicles/depots/cargo per vehicle | Queries/SSE | p50 | p95 | p99 | Peak memory | Feasibility | Quality gap | Recovery |
 |---|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|
-| `artifact-resilience` | `artifact-put` | 30 | - | - | 13.691 ms | 18.556 ms | 19.175 ms | 3.27 MiB | 1000000 ppm | 0 ppm | - |
-| `artifact-resilience` | `artifact-open` | 30 | - | - | 1.437 ms | 1.887 ms | 2.114 ms | 3.27 MiB | 1000000 ppm | 0 ppm | - |
-| `artifact-resilience` | `artifact-verify` | 30 | - | - | 1.371 ms | 1.769 ms | 2.088 ms | 3.27 MiB | 1000000 ppm | 0 ppm | - |
-| `artifact-resilience` | `artifact-restore` | 1 | - | - | 300.702 ms | 300.702 ms | 300.702 ms | 3.27 MiB | 1000000 ppm | 0 ppm | 300.702 ms |
+| `artifact-resilience` | `artifact-put` | 30 | - | - | 12.560 ms | 13.781 ms | 14.509 ms | 3.29 MiB | 1000000 ppm | 0 ppm | - |
+| `artifact-resilience` | `artifact-open` | 30 | - | - | 1.474 ms | 1.633 ms | 1.899 ms | 3.29 MiB | 1000000 ppm | 0 ppm | - |
+| `artifact-resilience` | `artifact-verify` | 30 | - | - | 1.349 ms | 1.444 ms | 1.460 ms | 3.29 MiB | 1000000 ppm | 0 ppm | - |
+| `artifact-resilience` | `artifact-restore` | 1 | - | - | 266.551 ms | 266.551 ms | 266.551 ms | 3.29 MiB | 1000000 ppm | 0 ppm | 266.551 ms |
 
 ## Check results
 
@@ -41,11 +41,11 @@
 | `artifact-resilience` | `tenant_isolation` | pass | a foreign tenant could not open the digest |
 | `artifact-resilience` | `digest_integrity` | pass | all stored digests reopened and verified |
 | `artifact-resilience` | `corruption_detected` | pass | tampered envelope returned ErrIntegrity |
-| `artifact-resilience` | `backup_restore` | pass | source and restored trees match; recovery_ns=300701542 |
+| `artifact-resilience` | `backup_restore` | pass | source and restored trees match; recovery_ns=266551333 |
 | `artifact-resilience` | `size_limit` | pass | oversize artifact returned ErrTooLarge |
 | `artifact-resilience` | `cancellation` | pass | cancelled context stopped publication |
 | `artifact-resilience` | `concurrent_put` | pass | concurrent writers converged on one digest |
-| `artifact-resilience` | `bounded_heap` | pass | peak_heap_bytes=3431896 limit=134217728 |
+| `artifact-resilience` | `bounded_heap` | pass | peak_heap_bytes=3445016 limit=134217728 |
 | `artifact-resilience` | `bounded_goroutines` | pass | baseline=1 peak=33 final=1 |
 | `artifact-resilience` | `private_permissions` | pass | artifact files and directories deny group and other access |
 | `browser-cargo` | `cargo_count` | pass | verify:delivery completed its 300-item assertion |

@@ -1,10 +1,10 @@
 {
   "schema_version": "delivery.acceptance.report.v1",
-  "generated_at": "2026-10-10T15:59:02Z",
+  "generated_at": "2026-10-10T16:13:36Z",
   "tool_sha256": "14a992d888c20afb8f67d7bca198a853ffee202b5805c2e11f91e6f6b91e119e",
   "config_sha256": "b3f5c45e9ef13e830aa83915553d3e7e19b912744d56b2fff2e682fba7cbf29c",
   "subject_sha256": "5dd760ddfa162276e3409d515ba4610afc97c6f7dc3fc7d1246453a19a07abe1",
-  "source_revision": "f921411b2698384c3d9519b6340b102f6556f221",
+  "source_revision": "6d7887cade546bf33887883800c9fe2209196037",
   "environment": {
     "goos": "darwin",
     "goarch": "arm64",
@@ -39,7 +39,7 @@
         {
           "id": "backup_restore",
           "passed": true,
-          "detail": "source and restored trees match; recovery_ns=300701542"
+          "detail": "source and restored trees match; recovery_ns=266551333"
         },
         {
           "id": "size_limit",
@@ -59,7 +59,7 @@
         {
           "id": "bounded_heap",
           "passed": true,
-          "detail": "peak_heap_bytes=3431896 limit=134217728"
+          "detail": "peak_heap_bytes=3445016 limit=134217728"
         },
         {
           "id": "bounded_goroutines",
@@ -77,13 +77,13 @@
           "id": "artifact-put",
           "sample_count": 30,
           "duration_ns": {
-            "minimum": 11888458,
-            "p50": 13690625,
-            "p95": 18556125,
-            "p99": 19175041,
-            "maximum": 19175041
+            "minimum": 11613334,
+            "p50": 12560041,
+            "p95": 13781208,
+            "p99": 14509458,
+            "maximum": 14509458
           },
-          "peak_memory_bytes": 3431896,
+          "peak_memory_bytes": 3445016,
           "peak_goroutines": 33,
           "feasibility_ppm": 1000000
         },
@@ -91,13 +91,13 @@
           "id": "artifact-open",
           "sample_count": 30,
           "duration_ns": {
-            "minimum": 1237208,
-            "p50": 1436958,
-            "p95": 1887041,
-            "p99": 2113875,
-            "maximum": 2113875
+            "minimum": 1276583,
+            "p50": 1473583,
+            "p95": 1632708,
+            "p99": 1899042,
+            "maximum": 1899042
           },
-          "peak_memory_bytes": 3431896,
+          "peak_memory_bytes": 3445016,
           "peak_goroutines": 33,
           "feasibility_ppm": 1000000
         },
@@ -105,13 +105,13 @@
           "id": "artifact-verify",
           "sample_count": 30,
           "duration_ns": {
-            "minimum": 1176083,
-            "p50": 1370667,
-            "p95": 1768625,
-            "p99": 2087875,
-            "maximum": 2087875
+            "minimum": 1206875,
+            "p50": 1349208,
+            "p95": 1443584,
+            "p99": 1460125,
+            "maximum": 1460125
           },
-          "peak_memory_bytes": 3431896,
+          "peak_memory_bytes": 3445016,
           "peak_goroutines": 33,
           "feasibility_ppm": 1000000
         },
@@ -119,16 +119,16 @@
           "id": "artifact-restore",
           "sample_count": 1,
           "duration_ns": {
-            "minimum": 300701542,
-            "p50": 300701542,
-            "p95": 300701542,
-            "p99": 300701542,
-            "maximum": 300701542
+            "minimum": 266551333,
+            "p50": 266551333,
+            "p95": 266551333,
+            "p99": 266551333,
+            "maximum": 266551333
           },
-          "peak_memory_bytes": 3431896,
+          "peak_memory_bytes": 3445016,
           "peak_goroutines": 33,
           "feasibility_ppm": 1000000,
-          "recovery_ns": 300701542
+          "recovery_ns": 266551333
         }
       ],
       "artifacts": [
@@ -294,7 +294,7 @@
       "artifacts": [
         {
           "name": "image.cdx.json",
-          "sha256": "2a9b3df919cf971a029b8eb37049695a16ac9e1343a22998750dda449ecc897d",
+          "sha256": "1e6edb2da6a6f1e7b199fc405d567e780511df1f8c84b771b7b8d4e8f619319b",
           "bytes": 361441
         }
       ]
