@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { Toaster } from "./components/ui/toaster";
 import { MotionRoot } from "./motion/MotionRoot";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./global.css";
@@ -14,6 +15,7 @@ createRoot(root).render(
   <StrictMode>
     <MotionRoot>
       <App />
+      <Toaster />
     </MotionRoot>
   </StrictMode>,
 );

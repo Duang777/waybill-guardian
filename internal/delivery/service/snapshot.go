@@ -1,0 +1,1109 @@
+package service
+
+import (
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/Duang777/waybill-guardian/internal/delivery/domain"
+)
+
+func BuildProblemSnapshot(draft domain.ProblemSnapshot) (domain.ProblemSnapshot, error) {
+	snapshot, err := cloneProblem(draft)
+	if err != nil {
+		return domain.ProblemSnapshot{}, err
+	}
+	normalizeProblem(&snapshot)
+	if err := validateProblem(snapshot); err != nil {
+		return domain.ProblemSnapshot{}, err
+	}
+
+	snapshot.PolicyDigest, err = domain.ComputePolicyDigest(snapshot.Policy)
+	if err != nil {
+		return domain.ProblemSnapshot{}, fmt.Errorf("digest policy: %w", err)
+	}
+	snapshot.CommitmentDigest, err = domain.ComputeCommitmentDigest(snapshot.Commitments)
+	if err != nil {
+		return domain.ProblemSnapshot{}, fmt.Errorf("digest commitments: %w", err)
+	}
+	snapshot.ProblemDigest = ""
+	snapshot.ProblemDigest, err = domain.ComputeProblemDigest(snapshot)
+	if err != nil {
+		return domain.ProblemSnapshot{}, fmt.Errorf("digest problem: %w", err)
+	}
+	return snapshot, nil
+}
+
+func cloneProblem(value domain.ProblemSnapshot) (domain.ProblemSnapshot, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return domain.ProblemSnapshot{}, fmt.Errorf("copy problem: %w", err)
+	}
+	var result domain.ProblemSnapshot
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return domain.ProblemSnapshot{}, fmt.Errorf("copy problem: %w", err)
+	}
+	return result, nil
+}
+
+func normalizeProblem(value *domain.ProblemSnapshot) {
+	value.Horizon = utcRange(value.Horizon)
+	value.CreatedAt = value.CreatedAt.UTC()
+	value.ProblemDigest = ""
+	value.PolicyDigest = ""
+	value.CommitmentDigest = ""
+
+	value.Locations = ensureSlice(value.Locations)
+	slices.SortFunc(value.Locations, func(left, right domain.Location) int {
+		return strings.Compare(string(left.ID), string(right.ID))
+	})
+	value.Depots = ensureSlice(value.Depots)
+	slices.SortFunc(value.Depots, func(left, right domain.Depot) int {
+		return strings.Compare(string(left.ID), string(right.ID))
+	})
+	for depotIndex := range value.Depots {
+		depot := &value.Depots[depotIndex]
+		depot.Docks = ensureSlice(depot.Docks)
+		slices.SortFunc(depot.Docks, func(left, right domain.Dock) int {
+			return strings.Compare(string(left.ID), string(right.ID))
+		})
+		for dockIndex := range depot.Docks {
+			dock := &depot.Docks[dockIndex]
+			dock.Availability = normalizeRanges(dock.Availability)
+		}
+	}
+
+	value.Requests = ensureSlice(value.Requests)
+	slices.SortFunc(value.Requests, func(left, right domain.TransportRequest) int {
+		return strings.Compare(string(left.ID), string(right.ID))
+	})
+	for requestIndex := range value.Requests {
+		request := &value.Requests[requestIndex]
+		request.RequiredSkills = normalizeStrings(request.RequiredSkills)
+		request.UnitIDs = normalizeIDs(request.UnitIDs)
+		request.Tasks = ensureSlice(request.Tasks)
+		slices.SortFunc(request.Tasks, func(left, right domain.ServiceTask) int {
+			return strings.Compare(string(left.ID), string(right.ID))
+		})
+		for taskIndex := range request.Tasks {
+			task := &request.Tasks[taskIndex]
+			task.HardWindows = normalizeRanges(task.HardWindows)
+			task.SoftWindows = ensureSlice(task.SoftWindows)
+			slices.SortFunc(task.SoftWindows, func(left, right domain.SoftTimeWindow) int {
+				return left.Window.Start.Compare(right.Window.Start)
+			})
+			for windowIndex := range task.SoftWindows {
+				task.SoftWindows[windowIndex].Window =
+					utcRange(task.SoftWindows[windowIndex].Window)
+			}
+			task.PredecessorIDs = normalizeIDs(task.PredecessorIDs)
+			task.UnitIDs = normalizeIDs(task.UnitIDs)
+			task.RequiredSkills = normalizeStrings(task.RequiredSkills)
+		}
+	}
+
+	value.Units = ensureSlice(value.Units)
+	slices.SortFunc(value.Units, func(left, right domain.FulfillmentUnit) int {
+		return strings.Compare(string(left.ID), string(right.ID))
+	})
+	for index := range value.Units {
+		value.Units[index].CargoIDs = normalizeIDs(value.Units[index].CargoIDs)
+	}
+
+	value.Cargo = ensureSlice(value.Cargo)
+	slices.SortFunc(value.Cargo, func(left, right domain.CargoItem) int {
+		return strings.Compare(string(left.ID), string(right.ID))
+	})
+	for index := range value.Cargo {
+		value.Cargo[index].AllowedOrientations =
+			normalizeStrings(value.Cargo[index].AllowedOrientations)
+		value.Cargo[index].IncompatibleClasses =
+			normalizeStrings(value.Cargo[index].IncompatibleClasses)
+	}
+
+	value.Vehicles = ensureSlice(value.Vehicles)
+	slices.SortFunc(value.Vehicles, func(left, right domain.Vehicle) int {
+		return strings.Compare(string(left.ID), string(right.ID))
+	})
+	for vehicleIndex := range value.Vehicles {
+		vehicle := &value.Vehicles[vehicleIndex]
+		vehicle.Availability = normalizeRanges(vehicle.Availability)
+		vehicle.Skills = normalizeStrings(vehicle.Skills)
+		vehicle.Compartments = ensureSlice(vehicle.Compartments)
+		slices.SortFunc(vehicle.Compartments, func(left, right domain.Compartment) int {
+			return strings.Compare(string(left.ID), string(right.ID))
+		})
+		for compartmentIndex := range vehicle.Compartments {
+			compartment := &vehicle.Compartments[compartmentIndex]
+			compartment.TemperatureZones = normalizeStrings(compartment.TemperatureZones)
+			compartment.AllowedCargoClasses =
+				normalizeStrings(compartment.AllowedCargoClasses)
+			compartment.Obstacles = ensureSlice(compartment.Obstacles)
+		}
+		vehicle.Doors = ensureSlice(vehicle.Doors)
+		slices.SortFunc(vehicle.Doors, func(left, right domain.Door) int {
+			return strings.Compare(string(left.ID), string(right.ID))
+		})
+		vehicle.Axles = ensureSlice(vehicle.Axles)
+		slices.SortFunc(vehicle.Axles, func(left, right domain.Axle) int {
+			return strings.Compare(string(left.ID), string(right.ID))
+		})
+		vehicle.Energy.ConnectorTypes = normalizeStrings(vehicle.Energy.ConnectorTypes)
+		vehicle.Energy.ChargingCurve = ensureSlice(vehicle.Energy.ChargingCurve)
+		slices.SortFunc(vehicle.Energy.ChargingCurve, func(left, right domain.ChargingBand) int {
+			if left.FromSOCPPM < right.FromSOCPPM {
+				return -1
+			}
+			if left.FromSOCPPM > right.FromSOCPPM {
+				return 1
+			}
+			return 0
+		})
+	}
+
+	value.Drivers = ensureSlice(value.Drivers)
+	slices.SortFunc(value.Drivers, func(left, right domain.Driver) int {
+		return strings.Compare(string(left.ID), string(right.ID))
+	})
+	for index := range value.Drivers {
+		value.Drivers[index].Skills = normalizeStrings(value.Drivers[index].Skills)
+		value.Drivers[index].EndLocations = normalizeIDs(value.Drivers[index].EndLocations)
+		value.Drivers[index].Shift = utcRange(value.Drivers[index].Shift)
+	}
+
+	value.Chargers = ensureSlice(value.Chargers)
+	slices.SortFunc(value.Chargers, func(left, right domain.ChargingStation) int {
+		return strings.Compare(string(left.ID), string(right.ID))
+	})
+	for index := range value.Chargers {
+		value.Chargers[index].ConnectorTypes =
+			normalizeStrings(value.Chargers[index].ConnectorTypes)
+		value.Chargers[index].Availability =
+			normalizeRanges(value.Chargers[index].Availability)
+	}
+
+	value.Travel.NodeIDs = ensureSlice(value.Travel.NodeIDs)
+	value.Travel.DistanceMeters = ensureSlice(value.Travel.DistanceMeters)
+	value.Travel.TravelSeconds = ensureSlice(value.Travel.TravelSeconds)
+	value.Energy.NodeIDs = ensureSlice(value.Energy.NodeIDs)
+	value.Energy.Profiles = ensureSlice(value.Energy.Profiles)
+	slices.SortFunc(value.Energy.Profiles, func(left, right domain.EnergyProfileMatrix) int {
+		return strings.Compare(left.ProfileID, right.ProfileID)
+	})
+	for index := range value.Energy.Profiles {
+		value.Energy.Profiles[index].BaseWh = ensureSlice(value.Energy.Profiles[index].BaseWh)
+		value.Energy.Profiles[index].LoadWhPerTonne =
+			ensureSlice(value.Energy.Profiles[index].LoadWhPerTonne)
+	}
+
+	value.Policy.AllowedMixedCargoClasses =
+		normalizeStringGroups(value.Policy.AllowedMixedCargoClasses)
+	normalizeCommitments(&value.Commitments)
+	value.SourceRefs = ensureSlice(value.SourceRefs)
+	slices.SortFunc(value.SourceRefs, func(left, right domain.SourceRef) int {
+		if result := strings.Compare(left.System, right.System); result != 0 {
+			return result
+		}
+		if result := strings.Compare(left.ResourceType, right.ResourceType); result != 0 {
+			return result
+		}
+		return strings.Compare(left.ResourceID, right.ResourceID)
+	})
+	for index := range value.SourceRefs {
+		value.SourceRefs[index].ObservedAt = value.SourceRefs[index].ObservedAt.UTC()
+	}
+}
+
+func normalizeCommitments(value *domain.CommitmentSet) {
+	value.Executed = ensureSlice(value.Executed)
+	slices.SortFunc(value.Executed, func(left, right domain.ExecutedTaskCommitment) int {
+		return strings.Compare(string(left.TaskID), string(right.TaskID))
+	})
+	for index := range value.Executed {
+		value.Executed[index].CompletedAt = value.Executed[index].CompletedAt.UTC()
+	}
+	value.Frozen = ensureSlice(value.Frozen)
+	slices.SortFunc(value.Frozen, func(left, right domain.FrozenTaskCommitment) int {
+		return strings.Compare(string(left.TaskID), string(right.TaskID))
+	})
+	for index := range value.Frozen {
+		value.Frozen[index].PromisedServiceAt = value.Frozen[index].PromisedServiceAt.UTC()
+	}
+	value.InTransit = ensureSlice(value.InTransit)
+	slices.SortFunc(value.InTransit, func(left, right domain.InTransitCargoCommitment) int {
+		return strings.Compare(string(left.CargoID), string(right.CargoID))
+	})
+	value.Soft = ensureSlice(value.Soft)
+	slices.SortFunc(value.Soft, func(left, right domain.SoftTaskCommitment) int {
+		return strings.Compare(string(left.TaskID), string(right.TaskID))
+	})
+	for index := range value.Soft {
+		value.Soft[index].PlannedServiceAt = value.Soft[index].PlannedServiceAt.UTC()
+	}
+	value.SoftCargo = ensureSlice(value.SoftCargo)
+	slices.SortFunc(value.SoftCargo, func(
+		left,
+		right domain.SoftCargoCommitment,
+	) int {
+		if result := strings.Compare(
+			string(left.CargoID),
+			string(right.CargoID),
+		); result != 0 {
+			return result
+		}
+		switch {
+		case left.AfterStopIndex < right.AfterStopIndex:
+			return -1
+		case left.AfterStopIndex > right.AfterStopIndex:
+			return 1
+		default:
+			return 0
+		}
+	})
+	if value.FreezeOverride == nil {
+		return
+	}
+	override := value.FreezeOverride
+	override.Scopes = ensureSlice(override.Scopes)
+	slices.SortFunc(override.Scopes, func(
+		left,
+		right domain.FreezeOverrideScope,
+	) int {
+		return strings.Compare(string(left.TaskID), string(right.TaskID))
+	})
+	for index := range override.Scopes {
+		scope := &override.Scopes[index]
+		scope.Before.PromisedServiceAt = scope.Before.PromisedServiceAt.UTC()
+		scope.AllowedVehicleIDs = normalizeIDs(scope.AllowedVehicleIDs)
+		scope.AllowedDriverIDs = normalizeIDs(scope.AllowedDriverIDs)
+		scope.CargoIDs = normalizeIDs(scope.CargoIDs)
+		scope.AllowedCompartmentIDs = normalizeIDs(scope.AllowedCompartmentIDs)
+	}
+}
+
+func validateProblem(value domain.ProblemSnapshot) error {
+	if value.SchemaVersion != domain.ProblemSchemaVersion {
+		return fmt.Errorf("schema_version must be %q", domain.ProblemSchemaVersion)
+	}
+	if err := requiredID("tenant_id", string(value.TenantID)); err != nil {
+		return err
+	}
+	if err := requiredID("problem_id", string(value.ProblemID)); err != nil {
+		return err
+	}
+	if value.Version == 0 {
+		return fmt.Errorf("version must be positive")
+	}
+	if err := validRange("horizon", value.Horizon); err != nil {
+		return err
+	}
+	if value.CreatedAt.IsZero() {
+		return fmt.Errorf("created_at is required")
+	}
+
+	locations, err := indexLocations(value.Locations)
+	if err != nil {
+		return err
+	}
+	depots, err := indexDepots(value.Depots, locations)
+	if err != nil {
+		return err
+	}
+	units, err := indexUnits(value.Units)
+	if err != nil {
+		return err
+	}
+	if err := validateRequests(value.Requests, locations, units); err != nil {
+		return err
+	}
+	if err := validateCargo(value.Cargo, units); err != nil {
+		return err
+	}
+	if err := validateVehicles(value.Vehicles, depots); err != nil {
+		return err
+	}
+	if err := validateDrivers(value.Drivers, locations); err != nil {
+		return err
+	}
+	if err := validateChargers(value.Chargers, locations); err != nil {
+		return err
+	}
+	if err := validateMatrix("travel matrix", value.Travel.NodeIDs, locations,
+		value.Travel.DistanceMeters, value.Travel.TravelSeconds); err != nil {
+		return err
+	}
+	if err := validateEnergyMatrix(value.Energy, locations); err != nil {
+		return err
+	}
+	energyProfiles := make(map[string]struct{}, len(value.Energy.Profiles))
+	for _, profile := range value.Energy.Profiles {
+		energyProfiles[profile.ProfileID] = struct{}{}
+	}
+	for _, vehicle := range value.Vehicles {
+		if vehicle.Energy.Kind != domain.EnergyElectric {
+			continue
+		}
+		if _, exists := energyProfiles[vehicle.Energy.MatrixProfileID]; !exists {
+			return fmt.Errorf(
+				"vehicle %q references unknown energy profile %q",
+				vehicle.ID,
+				vehicle.Energy.MatrixProfileID,
+			)
+		}
+	}
+	if value.Policy.ID == "" || value.Policy.Version == 0 {
+		return fmt.Errorf("policy identity and version are required")
+	}
+	if value.Policy.DefaultMinSupportPPM < 0 ||
+		value.Policy.DefaultMinSupportPPM > 1_000_000 {
+		return fmt.Errorf("policy default_min_support_ppm must be between 0 and 1000000")
+	}
+	if value.Policy.RehandleSecondsPerCargo < 0 {
+		return fmt.Errorf("policy rehandle_seconds_per_cargo must be non-negative")
+	}
+	if value.Policy.RehandleCostCentsPerCargo < 0 {
+		return fmt.Errorf("policy rehandle_cost_cents_per_cargo must be non-negative")
+	}
+	if value.Policy.MaxRehandlesPerStop > 0 &&
+		value.Policy.RehandleSecondsPerCargo == 0 {
+		return fmt.Errorf(
+			"policy rehandle_seconds_per_cargo must be positive when rehandles are allowed",
+		)
+	}
+	if value.Policy.Stability.VehicleChangeCents < 0 ||
+		value.Policy.Stability.DriverChangeCents < 0 ||
+		value.Policy.Stability.SequenceChangeCents < 0 ||
+		value.Policy.Stability.ETADriftCentsPerSec < 0 ||
+		value.Policy.Stability.ReloadCents < 0 {
+		return fmt.Errorf("stability penalties must be non-negative")
+	}
+	if err := validateCommitmentReferences(value); err != nil {
+		return err
+	}
+	if err := validateSoftCargoCommitments(value); err != nil {
+		return err
+	}
+	if err := validateFreezeOverrideConstraint(value); err != nil {
+		return err
+	}
+	if err := validateSourceRefs(value.SourceRefs, value.CreatedAt); err != nil {
+		return err
+	}
+	_, err = domain.CanonicalJSON(value)
+	if err != nil {
+		return fmt.Errorf("problem is not canonicalizable: %w", err)
+	}
+	return nil
+}
+
+func validateSourceRefs(values []domain.SourceRef, createdAt time.Time) error {
+	if len(values) == 0 {
+		return fmt.Errorf("at least one source_ref is required")
+	}
+	seen := make(map[string]struct{}, len(values))
+	for index, value := range values {
+		if strings.TrimSpace(value.System) == "" ||
+			strings.TrimSpace(value.ResourceType) == "" ||
+			strings.TrimSpace(value.ResourceID) == "" ||
+			strings.TrimSpace(value.Version) == "" ||
+			value.ObservedAt.IsZero() ||
+			value.ObservedAt.After(createdAt) {
+			return fmt.Errorf("source_ref %d is incomplete or observed after snapshot", index)
+		}
+		key := strings.Join([]string{
+			value.System,
+			value.ResourceType,
+			value.ResourceID,
+			value.Version,
+		}, "\x00")
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("duplicate source_ref at index %d", index)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func validateCommitmentReferences(value domain.ProblemSnapshot) error {
+	if !domain.ValidArtifactDigest(
+		domain.ArtifactDigest(value.Commitments.FactWatermark),
+	) {
+		return fmt.Errorf(
+			"commitment fact_watermark must be a lowercase SHA-256 digest",
+		)
+	}
+	executed := make(map[domain.TaskID]struct{}, len(value.Commitments.Executed))
+	for _, commitment := range value.Commitments.Executed {
+		if _, duplicate := executed[commitment.TaskID]; duplicate {
+			return fmt.Errorf("duplicate executed task commitment %q", commitment.TaskID)
+		}
+		executed[commitment.TaskID] = struct{}{}
+		if !problemHasTask(value, commitment.TaskID) ||
+			!problemHasVehicle(value, commitment.VehicleID) ||
+			!problemHasDriver(value, commitment.DriverID) ||
+			commitment.CompletedAt.IsZero() ||
+			commitment.CompletedAt.After(value.CreatedAt) {
+			return fmt.Errorf(
+				"executed task commitment %q references invalid state",
+				commitment.TaskID,
+			)
+		}
+	}
+	frozen := make(map[domain.TaskID]struct{}, len(value.Commitments.Frozen))
+	for _, commitment := range value.Commitments.Frozen {
+		if _, duplicate := frozen[commitment.TaskID]; duplicate {
+			return fmt.Errorf("duplicate frozen task commitment %q", commitment.TaskID)
+		}
+		frozen[commitment.TaskID] = struct{}{}
+		if _, done := executed[commitment.TaskID]; done {
+			return fmt.Errorf(
+				"task %q cannot be both executed and frozen",
+				commitment.TaskID,
+			)
+		}
+		if !problemHasTask(value, commitment.TaskID) ||
+			!problemHasVehicle(value, commitment.VehicleID) ||
+			!problemHasDriver(value, commitment.DriverID) ||
+			commitment.PromisedServiceAt.IsZero() ||
+			commitment.ToleranceSeconds < 0 {
+			return fmt.Errorf(
+				"frozen task commitment %q references invalid state",
+				commitment.TaskID,
+			)
+		}
+	}
+	inTransit := make(map[domain.CargoID]struct{}, len(value.Commitments.InTransit))
+	for _, commitment := range value.Commitments.InTransit {
+		if _, duplicate := inTransit[commitment.CargoID]; duplicate {
+			return fmt.Errorf(
+				"duplicate in-transit cargo commitment %q",
+				commitment.CargoID,
+			)
+		}
+		inTransit[commitment.CargoID] = struct{}{}
+		if !problemHasCargo(value, commitment.CargoID) ||
+			!problemHasVehicle(value, commitment.VehicleID) ||
+			!problemHasVehicleCompartment(
+				value,
+				commitment.VehicleID,
+				commitment.CompartmentID,
+			) {
+			return fmt.Errorf(
+				"in-transit cargo commitment %q references invalid state",
+				commitment.CargoID,
+			)
+		}
+	}
+	soft := make(map[domain.TaskID]struct{}, len(value.Commitments.Soft))
+	for _, commitment := range value.Commitments.Soft {
+		if _, duplicate := soft[commitment.TaskID]; duplicate {
+			return fmt.Errorf("duplicate soft task commitment %q", commitment.TaskID)
+		}
+		soft[commitment.TaskID] = struct{}{}
+		if _, done := executed[commitment.TaskID]; done {
+			return fmt.Errorf(
+				"task %q cannot be both executed and soft",
+				commitment.TaskID,
+			)
+		}
+		if !problemHasTask(value, commitment.TaskID) ||
+			!problemHasVehicle(value, commitment.VehicleID) ||
+			!problemHasDriver(value, commitment.DriverID) ||
+			commitment.PlannedServiceAt.IsZero() {
+			return fmt.Errorf(
+				"soft task commitment %q references invalid state",
+				commitment.TaskID,
+			)
+		}
+	}
+	return nil
+}
+
+func validateSoftCargoCommitments(value domain.ProblemSnapshot) error {
+	type cargoStage struct {
+		cargoID domain.CargoID
+		stage   uint32
+	}
+	seen := make(map[cargoStage]struct{}, len(value.Commitments.SoftCargo))
+	for _, commitment := range value.Commitments.SoftCargo {
+		if commitment.CargoID == "" ||
+			commitment.VehicleID == "" ||
+			commitment.CompartmentID == "" ||
+			commitment.DoorID == "" {
+			return fmt.Errorf("soft cargo commitment is incomplete")
+		}
+		key := cargoStage{
+			cargoID: commitment.CargoID,
+			stage:   commitment.AfterStopIndex,
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf(
+				"duplicate soft cargo commitment %q at stage %d",
+				commitment.CargoID,
+				commitment.AfterStopIndex,
+			)
+		}
+		seen[key] = struct{}{}
+		if !problemHasCargo(value, commitment.CargoID) ||
+			!problemHasVehicle(value, commitment.VehicleID) ||
+			!problemHasCompartment(value, commitment.CompartmentID) {
+			return fmt.Errorf(
+				"soft cargo commitment %q references unknown resources",
+				commitment.CargoID,
+			)
+		}
+		foundDoor := false
+		for _, vehicle := range value.Vehicles {
+			if vehicle.ID != commitment.VehicleID {
+				continue
+			}
+			for _, door := range vehicle.Doors {
+				if door.ID == commitment.DoorID &&
+					door.CompartmentID == commitment.CompartmentID {
+					foundDoor = true
+				}
+			}
+		}
+		if !foundDoor {
+			return fmt.Errorf(
+				"soft cargo commitment %q references an incompatible door",
+				commitment.CargoID,
+			)
+		}
+	}
+	return nil
+}
+
+func validateFreezeOverrideConstraint(value domain.ProblemSnapshot) error {
+	override := value.Commitments.FreezeOverride
+	if override == nil {
+		return nil
+	}
+	if override.ApprovalID == "" ||
+		!domain.ValidArtifactDigest(override.GrantDigest) {
+		return fmt.Errorf("freeze override approval and grant digest are required")
+	}
+	if err := validateFreezeOverrideScopes(
+		override.Scopes,
+		value.Commitments.Frozen,
+		value.Commitments.Executed,
+	); err != nil {
+		return err
+	}
+	inTransit := make(map[domain.CargoID]struct{}, len(value.Commitments.InTransit))
+	for _, commitment := range value.Commitments.InTransit {
+		inTransit[commitment.CargoID] = struct{}{}
+	}
+	for _, scope := range override.Scopes {
+		if !problemHasTask(value, scope.TaskID) {
+			return fmt.Errorf(
+				"freeze override references unknown task %q",
+				scope.TaskID,
+			)
+		}
+		for _, vehicleID := range scope.AllowedVehicleIDs {
+			if !problemHasVehicle(value, vehicleID) {
+				return fmt.Errorf(
+					"freeze override references unknown vehicle %q",
+					vehicleID,
+				)
+			}
+		}
+		for _, driverID := range scope.AllowedDriverIDs {
+			if !problemHasDriver(value, driverID) {
+				return fmt.Errorf(
+					"freeze override references unknown driver %q",
+					driverID,
+				)
+			}
+		}
+		for _, cargoID := range scope.CargoIDs {
+			if !problemHasCargo(value, cargoID) {
+				return fmt.Errorf(
+					"freeze override references unknown cargo %q",
+					cargoID,
+				)
+			}
+			if _, physicallyPinned := inTransit[cargoID]; physicallyPinned {
+				return fmt.Errorf(
+					"freeze override cannot move in-transit cargo %q without a transfer fact",
+					cargoID,
+				)
+			}
+		}
+		for _, compartmentID := range scope.AllowedCompartmentIDs {
+			if !problemHasCompartment(value, compartmentID) {
+				return fmt.Errorf(
+					"freeze override references unknown compartment %q",
+					compartmentID,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func problemHasCompartment(
+	problem domain.ProblemSnapshot,
+	compartmentID domain.CompartmentID,
+) bool {
+	for _, vehicle := range problem.Vehicles {
+		for _, compartment := range vehicle.Compartments {
+			if compartment.ID == compartmentID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func problemHasVehicleCompartment(
+	problem domain.ProblemSnapshot,
+	vehicleID domain.VehicleID,
+	compartmentID domain.CompartmentID,
+) bool {
+	for _, vehicle := range problem.Vehicles {
+		if vehicle.ID != vehicleID {
+			continue
+		}
+		for _, compartment := range vehicle.Compartments {
+			if compartment.ID == compartmentID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func indexLocations(values []domain.Location) (map[domain.LocationID]domain.Location, error) {
+	result := make(map[domain.LocationID]domain.Location, len(values))
+	for _, value := range values {
+		if err := requiredID("location id", string(value.ID)); err != nil {
+			return nil, err
+		}
+		if _, exists := result[value.ID]; exists {
+			return nil, fmt.Errorf("duplicate location %q", value.ID)
+		}
+		result[value.ID] = value
+	}
+	if len(result) == 0 {
+		return nil, fmt.Errorf("at least one location is required")
+	}
+	return result, nil
+}
+
+func indexDepots(
+	values []domain.Depot,
+	locations map[domain.LocationID]domain.Location,
+) (map[domain.DepotID]domain.Depot, error) {
+	result := make(map[domain.DepotID]domain.Depot, len(values))
+	for _, value := range values {
+		if _, exists := result[value.ID]; exists {
+			return nil, fmt.Errorf("duplicate depot %q", value.ID)
+		}
+		if _, exists := locations[value.LocationID]; !exists {
+			return nil, fmt.Errorf("depot %q references unknown location %q", value.ID, value.LocationID)
+		}
+		result[value.ID] = value
+	}
+	if len(result) == 0 {
+		return nil, fmt.Errorf("at least one depot is required")
+	}
+	return result, nil
+}
+
+func indexUnits(
+	values []domain.FulfillmentUnit,
+) (map[domain.FulfillmentUnitID]domain.FulfillmentUnit, error) {
+	result := make(map[domain.FulfillmentUnitID]domain.FulfillmentUnit, len(values))
+	for _, value := range values {
+		if _, exists := result[value.ID]; exists {
+			return nil, fmt.Errorf("duplicate unit %q", value.ID)
+		}
+		if value.ID == "" || value.RequestID == "" || value.Quantity <= 0 {
+			return nil, fmt.Errorf("unit %q has invalid identity, request, or quantity", value.ID)
+		}
+		result[value.ID] = value
+	}
+	return result, nil
+}
+
+func validateRequests(
+	values []domain.TransportRequest,
+	locations map[domain.LocationID]domain.Location,
+	units map[domain.FulfillmentUnitID]domain.FulfillmentUnit,
+) error {
+	requests := make(map[domain.RequestID]struct{}, len(values))
+	tasks := make(map[domain.TaskID]struct{})
+	for _, request := range values {
+		if _, exists := requests[request.ID]; exists {
+			return fmt.Errorf("duplicate request %q", request.ID)
+		}
+		requests[request.ID] = struct{}{}
+		switch request.Split.Mode {
+		case domain.SplitForbidden:
+			if request.Split.MaxSplits != 1 {
+				return fmt.Errorf("request %q forbids splitting but max_splits is not 1", request.ID)
+			}
+		case domain.SplitByUnit:
+			if request.Split.MinUnitsPerSplit == 0 || request.Split.MaxSplits == 0 {
+				return fmt.Errorf("request %q has an incomplete split policy", request.ID)
+			}
+		default:
+			return fmt.Errorf("request %q has unsupported split mode %q", request.ID, request.Split.Mode)
+		}
+		for _, unitID := range request.UnitIDs {
+			unit, exists := units[unitID]
+			if !exists || unit.RequestID != request.ID {
+				return fmt.Errorf("request %q references unknown or foreign unit %q", request.ID, unitID)
+			}
+		}
+		for _, task := range request.Tasks {
+			if _, exists := tasks[task.ID]; exists {
+				return fmt.Errorf("duplicate task %q", task.ID)
+			}
+			tasks[task.ID] = struct{}{}
+			if _, exists := locations[task.LocationID]; !exists {
+				return fmt.Errorf("task %q references unknown location %q", task.ID, task.LocationID)
+			}
+			if task.ServiceSeconds < 0 {
+				return fmt.Errorf("task %q has negative service time", task.ID)
+			}
+			for _, window := range task.HardWindows {
+				if err := validRange("task hard window", window); err != nil {
+					return fmt.Errorf("task %q: %w", task.ID, err)
+				}
+			}
+			for _, unitID := range task.UnitIDs {
+				if _, exists := units[unitID]; !exists {
+					return fmt.Errorf("task %q references unknown unit %q", task.ID, unitID)
+				}
+			}
+		}
+		for _, task := range request.Tasks {
+			for _, predecessorID := range task.PredecessorIDs {
+				if _, exists := tasks[predecessorID]; !exists {
+					return fmt.Errorf("task %q references unknown predecessor %q", task.ID, predecessorID)
+				}
+			}
+		}
+		if err := validateTaskGraph(request); err != nil {
+			return err
+		}
+	}
+	for _, unit := range units {
+		if _, exists := requests[unit.RequestID]; !exists {
+			return fmt.Errorf("unit %q references unknown request %q", unit.ID, unit.RequestID)
+		}
+	}
+	return nil
+}
+
+func validateTaskGraph(request domain.TransportRequest) error {
+	tasks := make(map[domain.TaskID]domain.ServiceTask, len(request.Tasks))
+	for _, task := range request.Tasks {
+		tasks[task.ID] = task
+	}
+	const (
+		unvisited = iota
+		visiting
+		visited
+	)
+	state := make(map[domain.TaskID]int, len(tasks))
+	var visit func(domain.TaskID) error
+	visit = func(taskID domain.TaskID) error {
+		switch state[taskID] {
+		case visiting:
+			return fmt.Errorf("request %q task graph contains a cycle at %q", request.ID, taskID)
+		case visited:
+			return nil
+		}
+		state[taskID] = visiting
+		for _, predecessorID := range tasks[taskID].PredecessorIDs {
+			if _, exists := tasks[predecessorID]; !exists {
+				return fmt.Errorf(
+					"request %q task %q references predecessor outside the request",
+					request.ID,
+					taskID,
+				)
+			}
+			if err := visit(predecessorID); err != nil {
+				return err
+			}
+		}
+		state[taskID] = visited
+		return nil
+	}
+	for taskID := range tasks {
+		if err := visit(taskID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateCargo(
+	values []domain.CargoItem,
+	units map[domain.FulfillmentUnitID]domain.FulfillmentUnit,
+) error {
+	seen := make(map[domain.CargoID]struct{}, len(values))
+	for _, value := range values {
+		if _, exists := seen[value.ID]; exists {
+			return fmt.Errorf("duplicate cargo %q", value.ID)
+		}
+		seen[value.ID] = struct{}{}
+		if _, exists := units[value.UnitID]; !exists {
+			return fmt.Errorf("cargo %q references unknown unit %q", value.ID, value.UnitID)
+		}
+		if !value.SizeMM.Valid() || value.WeightG <= 0 || len(value.AllowedOrientations) == 0 {
+			return fmt.Errorf("cargo %q has invalid size, weight, or orientations", value.ID)
+		}
+		if value.MinSupportPPM < 0 || value.MinSupportPPM > 1_000_000 {
+			return fmt.Errorf("cargo %q has invalid support ratio", value.ID)
+		}
+	}
+	for _, unit := range units {
+		for _, cargoID := range unit.CargoIDs {
+			if _, exists := seen[cargoID]; !exists {
+				return fmt.Errorf("unit %q references unknown cargo %q", unit.ID, cargoID)
+			}
+		}
+	}
+	return nil
+}
+
+func validateVehicles(
+	values []domain.Vehicle,
+	depots map[domain.DepotID]domain.Depot,
+) error {
+	seen := make(map[domain.VehicleID]struct{}, len(values))
+	for _, value := range values {
+		if _, exists := seen[value.ID]; exists {
+			return fmt.Errorf("duplicate vehicle %q", value.ID)
+		}
+		seen[value.ID] = struct{}{}
+		if _, exists := depots[value.HomeDepotID]; !exists {
+			return fmt.Errorf("vehicle %q references unknown home depot %q", value.ID, value.HomeDepotID)
+		}
+		if value.MaxTrips == 0 || len(value.Compartments) == 0 ||
+			value.MaxGrossWeightG <= value.TareWeightG {
+			return fmt.Errorf("vehicle %q has invalid trips, compartments, or gross weight", value.ID)
+		}
+		switch value.Energy.Kind {
+		case domain.EnergyCombustion:
+			if value.Energy.ConsumptionWhPerKM < 0 ||
+				value.Energy.LoadWhPerKMPerTonne < 0 {
+				return fmt.Errorf("vehicle %q has invalid combustion energy coefficients", value.ID)
+			}
+		case domain.EnergyElectric:
+			if value.Energy.MatrixProfileID == "" ||
+				value.Energy.BatteryCapacityWh <= 0 ||
+				value.Energy.InitialSOCWh < value.Energy.ReserveSOCWh ||
+				value.Energy.InitialSOCWh > value.Energy.BatteryCapacityWh ||
+				value.Energy.ReserveSOCWh < 0 ||
+				len(value.Energy.ConnectorTypes) == 0 ||
+				len(value.Energy.ChargingCurve) == 0 {
+				return fmt.Errorf("vehicle %q has an incomplete electric energy specification", value.ID)
+			}
+			expectedFrom := int64(0)
+			for _, band := range value.Energy.ChargingCurve {
+				if band.FromSOCPPM != expectedFrom ||
+					band.ToSOCPPM <= band.FromSOCPPM ||
+					band.ToSOCPPM > 1_000_000 ||
+					band.PowerW <= 0 {
+					return fmt.Errorf("vehicle %q has an invalid charging curve", value.ID)
+				}
+				expectedFrom = band.ToSOCPPM
+			}
+			if expectedFrom != 1_000_000 {
+				return fmt.Errorf("vehicle %q charging curve does not cover the full SOC range", value.ID)
+			}
+		default:
+			return fmt.Errorf("vehicle %q has unsupported energy kind %q", value.ID, value.Energy.Kind)
+		}
+		compartments := make(map[domain.CompartmentID]struct{}, len(value.Compartments))
+		for _, compartment := range value.Compartments {
+			if _, exists := compartments[compartment.ID]; exists {
+				return fmt.Errorf("vehicle %q has duplicate compartment %q", value.ID, compartment.ID)
+			}
+			compartments[compartment.ID] = struct{}{}
+			if !compartment.Bounds.Size.Valid() || compartment.MaxPayloadG <= 0 {
+				return fmt.Errorf("vehicle %q compartment %q is invalid", value.ID, compartment.ID)
+			}
+		}
+		for _, door := range value.Doors {
+			if _, exists := compartments[door.CompartmentID]; !exists {
+				return fmt.Errorf("vehicle %q door %q references unknown compartment", value.ID, door.ID)
+			}
+			if door.Direction != -1 && door.Direction != 1 {
+				return fmt.Errorf("vehicle %q door %q has invalid direction", value.ID, door.ID)
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return fmt.Errorf("at least one vehicle is required")
+	}
+	return nil
+}
+
+func validateDrivers(
+	values []domain.Driver,
+	locations map[domain.LocationID]domain.Location,
+) error {
+	seen := make(map[domain.DriverID]struct{}, len(values))
+	for _, value := range values {
+		if _, exists := seen[value.ID]; exists {
+			return fmt.Errorf("duplicate driver %q", value.ID)
+		}
+		seen[value.ID] = struct{}{}
+		if _, exists := locations[value.StartLocation]; !exists {
+			return fmt.Errorf("driver %q references unknown start location", value.ID)
+		}
+		if err := validRange("driver shift", value.Shift); err != nil {
+			return fmt.Errorf("driver %q: %w", value.ID, err)
+		}
+	}
+	if len(seen) == 0 {
+		return fmt.Errorf("at least one driver is required")
+	}
+	return nil
+}
+
+func validateChargers(
+	values []domain.ChargingStation,
+	locations map[domain.LocationID]domain.Location,
+) error {
+	seen := make(map[domain.ChargerID]struct{}, len(values))
+	for _, value := range values {
+		if _, exists := seen[value.ID]; exists {
+			return fmt.Errorf("duplicate charger %q", value.ID)
+		}
+		seen[value.ID] = struct{}{}
+		if _, exists := locations[value.LocationID]; !exists {
+			return fmt.Errorf("charger %q references unknown location", value.ID)
+		}
+		if value.Capacity == 0 || value.MaxPowerW <= 0 {
+			return fmt.Errorf("charger %q has invalid capacity or power", value.ID)
+		}
+	}
+	return nil
+}
+
+func validateMatrix(
+	name string,
+	nodes []domain.LocationID,
+	locations map[domain.LocationID]domain.Location,
+	matrices ...[]int64,
+) error {
+	size := len(nodes)
+	if size == 0 {
+		return fmt.Errorf("%s has no nodes", name)
+	}
+	seen := make(map[domain.LocationID]struct{}, size)
+	for _, nodeID := range nodes {
+		if _, exists := locations[nodeID]; !exists {
+			return fmt.Errorf("%s references unknown location %q", name, nodeID)
+		}
+		if _, exists := seen[nodeID]; exists {
+			return fmt.Errorf("%s has duplicate node %q", name, nodeID)
+		}
+		seen[nodeID] = struct{}{}
+	}
+	for _, matrix := range matrices {
+		if len(matrix) != size*size {
+			return fmt.Errorf("%s has %d values, want %d", name, len(matrix), size*size)
+		}
+		for _, value := range matrix {
+			if value < 0 {
+				return fmt.Errorf("%s contains a negative value", name)
+			}
+		}
+	}
+	return nil
+}
+
+func validateEnergyMatrix(
+	value domain.EnergyMatrix,
+	locations map[domain.LocationID]domain.Location,
+) error {
+	size := len(value.NodeIDs)
+	if size == 0 {
+		return fmt.Errorf("energy matrix has no nodes")
+	}
+	if err := validateMatrix("energy matrix", value.NodeIDs, locations); err != nil {
+		return err
+	}
+	seen := make(map[string]struct{}, len(value.Profiles))
+	for _, profile := range value.Profiles {
+		if profile.ProfileID == "" {
+			return fmt.Errorf("energy matrix profile id is required")
+		}
+		if _, exists := seen[profile.ProfileID]; exists {
+			return fmt.Errorf("energy matrix has duplicate profile %q", profile.ProfileID)
+		}
+		seen[profile.ProfileID] = struct{}{}
+		if len(profile.BaseWh) != size*size || len(profile.LoadWhPerTonne) != size*size {
+			return fmt.Errorf("energy matrix profile %q has invalid cardinality", profile.ProfileID)
+		}
+	}
+	return nil
+}
+
+func requiredID(name, value string) error {
+	if value == "" || strings.TrimSpace(value) != value {
+		return fmt.Errorf("%s is required and must not contain surrounding whitespace", name)
+	}
+	return nil
+}
+
+func validRange(name string, value domain.TimeRange) error {
+	if value.Start.IsZero() || value.End.IsZero() || !value.Start.Before(value.End) {
+		return fmt.Errorf("%s must have a non-empty increasing interval", name)
+	}
+	return nil
+}
+
+func utcRange(value domain.TimeRange) domain.TimeRange {
+	return domain.TimeRange{Start: value.Start.UTC(), End: value.End.UTC()}
+}
+
+func normalizeRanges(values []domain.TimeRange) []domain.TimeRange {
+	values = ensureSlice(values)
+	for index := range values {
+		values[index] = utcRange(values[index])
+	}
+	slices.SortFunc(values, func(left, right domain.TimeRange) int {
+		return left.Start.Compare(right.Start)
+	})
+	return values
+}
+
+func normalizeStringGroups(values [][]string) [][]string {
+	values = ensureSlice(values)
+	for index := range values {
+		values[index] = normalizeStrings(values[index])
+	}
+	slices.SortFunc(values, func(left, right []string) int {
+		return strings.Compare(strings.Join(left, "\x00"), strings.Join(right, "\x00"))
+	})
+	return values
+}
+
+func normalizeStrings[T ~string](values []T) []T {
+	values = ensureSlice(values)
+	slices.Sort(values)
+	return slices.Compact(values)
+}
+
+func normalizeIDs[T ~string](values []T) []T {
+	return normalizeStrings(values)
+}
+
+func ensureSlice[T any](values []T) []T {
+	if values == nil {
+		return []T{}
+	}
+	return values
+}

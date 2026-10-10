@@ -34,7 +34,13 @@ env -u GOROOT GOBIN="$go_tool_dir" \
   cd "$root_dir"
   GOOS=linux GOARCH=amd64 "$go_tool_dir/go-licenses" report ./...
 ) >"$tmp_dir/go.raw.csv"
-LC_ALL=C sort "$tmp_dir/go.raw.csv" >"$tmp_dir/go.csv"
+
+# go-licenses resolves this nested module to different parent paths by host OS.
+# Canonicalize the URL to the license file that exists at the module tag.
+sed -E \
+  's#(github\.com/aws/aws-sdk-go-v2/blob/internal/endpoints/[^/]+/internal/endpoints)/LICENSE\.txt#\1/v2/LICENSE.txt#' \
+  "$tmp_dir/go.raw.csv" >"$tmp_dir/go.normalized.csv"
+LC_ALL=C sort "$tmp_dir/go.normalized.csv" >"$tmp_dir/go.csv"
 
 (
   cd "$root_dir"

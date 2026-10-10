@@ -6,6 +6,8 @@ import {
   Navigation,
   RotateCcw,
   Siren,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import {
   Component,
@@ -41,12 +43,12 @@ import {
   type FacilityTransportRouteKind,
   type FacilityVehicleState,
 } from "./facilityLayout";
-import {
-  HaloBadge,
-  HaloSegmented,
-  RollingNumber,
-  TextureButton,
-} from "./cult";
+import { AnimatedNumber } from "./ui/animated-number";
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
+import { SegmentedControl } from "./ui/segmented-control";
+import { Select } from "./ui/select";
+import { Tooltip } from "./ui/tooltip";
 
 const HubNetworkScene = lazy(() => import("./HubNetworkScene"));
 
@@ -68,6 +70,12 @@ type SceneFailureBoundaryState = {
   failed: boolean;
 };
 
+const sceneZoomSteps = [1, 1.25, 1.5, 1.75, 2] as const;
+type SceneZoomScale = (typeof sceneZoomSteps)[number];
+type SceneZoomDirection = "in" | "out";
+
+const defaultSceneZoom: SceneZoomScale = 1;
+
 export function HubNetwork({
   hubs,
   routes,
@@ -76,6 +84,8 @@ export function HubNetwork({
   dataMode,
   totals,
 }: HubNetworkProps) {
+  const stageRef = useRef<HTMLDivElement>(null);
+  const lastWheelZoomAt = useRef(0);
   const webGLAvailable = useMemo(supportsWebGL, []);
   const reducedMotion = useReducedMotion();
   const pageVisible = usePageVisibility();
@@ -88,6 +98,8 @@ export function HubNetwork({
     useState<FacilityCameraPreset>("overview");
   const [facilitySelection, setFacilitySelection] =
     useState<FacilitySceneSelection | null>(null);
+  const [sceneZoom, setSceneZoom] =
+    useState<SceneZoomScale>(defaultSceneZoom);
 
   const hubByID = useMemo(
     () => new Map(hubs.map((hub) => [hub.hub_id, hub])),
@@ -123,6 +135,7 @@ export function HubNetwork({
     setSelectedHubID(hubID);
     setCameraPreset("overview");
     setFacilitySelection(null);
+    setSceneZoom(defaultSceneZoom);
   }, []);
 
   const focusTopRisk = useCallback(() => {
@@ -130,12 +143,46 @@ export function HubNetwork({
       setSelectedHubID(topRiskHub.hub_id);
       setCameraPreset("risk");
       setFacilitySelection({ kind: "alert", id: "facility-alert" });
+      setSceneZoom(defaultSceneZoom);
     }
   }, [topRiskHub]);
 
   const resetView = useCallback(() => {
+    if (selectedHubID === null) {
+      setSceneZoom(defaultSceneZoom);
+      return;
+    }
     selectHub(null);
-  }, [selectHub]);
+  }, [selectHub, selectedHubID]);
+
+  const changeZoom = useCallback((direction: SceneZoomDirection) => {
+    setSceneZoom((current) => stepSceneZoom(current, direction));
+  }, []);
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (stage === null) {
+      return;
+    }
+    const zoomWithWheel = (event: WheelEvent) => {
+      const target = event.target;
+      if (
+        !(target instanceof Element) ||
+        target.closest("canvas, svg") === null
+      ) {
+        return;
+      }
+      event.preventDefault();
+      const now = performance.now();
+      if (now - lastWheelZoomAt.current < 120) {
+        return;
+      }
+      lastWheelZoomAt.current = now;
+      changeZoom(event.deltaY < 0 ? "in" : "out");
+    };
+    stage.addEventListener("wheel", zoomWithWheel, { passive: false });
+    return () => stage.removeEventListener("wheel", zoomWithWheel);
+  }, [changeZoom]);
 
   const selectFacilityObject = useCallback(
     (selection: FacilitySceneSelection) => {
@@ -210,12 +257,14 @@ export function HubNetwork({
       setSelectedHubID(topRiskHub.hub_id);
       setCameraPreset("risk");
       setFacilitySelection({ kind: "alert", id: "facility-alert" });
+      setSceneZoom(defaultSceneZoom);
     }
     previousTopRisk.current = nextTopRisk;
   }, [topRisk?.waybill_id, topRiskHub]);
 
   return (
     <div
+      ref={stageRef}
       className={styles.networkStage}
       role="region"
       aria-label={`全国公路港网络，${hubs.length} 个港口，${routes.length} 条线路`}
@@ -249,6 +298,7 @@ export function HubNetwork({
       data-scene-layout-signature={sceneStats?.layoutSignature ?? ""}
       data-scene-selected-hub={selectedHubID ?? ""}
       data-camera-preset={cameraPreset}
+      data-camera-zoom-scale={sceneZoom}
       data-scene-selected-object={
         facilitySelection === null
           ? ""
@@ -264,6 +314,7 @@ export function HubNetwork({
           routes={routes}
           anomalies={anomalies}
           selectedHubID={selectedHubID}
+          zoomScale={sceneZoom}
           reducedMotion={reducedMotion}
           paused={!pageVisible}
           facilitySelection={facilitySelection}
@@ -279,6 +330,7 @@ export function HubNetwork({
               anomalies={anomalies}
               selectedHubID={selectedHubID}
               cameraPreset={cameraPreset}
+              zoomScale={sceneZoom}
               facilitySelection={facilitySelection}
               reducedMotion={reducedMotion}
               paused={!pageVisible}
@@ -305,43 +357,43 @@ export function HubNetwork({
           </div>
           <div className={styles.sceneHudBadges}>
             {selectedHub !== undefined && (
-              <HaloBadge
+              <Badge
                 className={styles.sceneSelectedPill}
                 tone="info"
                 tabularNums
                 data-scene-selection-pill
               >
                 {selectedAnomaly?.waybill_id ?? selectedHub.hub_id}
-              </HaloBadge>
+              </Badge>
             )}
-            <HaloBadge tone="neutral">
+            <Badge tone="neutral">
               {dataModeLabel(dataMode)}
-            </HaloBadge>
+            </Badge>
           </div>
         </div>
         <dl className={styles.sceneMetrics} aria-label="网络运行摘要">
           <div>
             <dt>公路港</dt>
             <dd>
-              <RollingNumber value={hubs.length} label={`${hubs.length} 个公路港`} />
+              <AnimatedNumber value={hubs.length} label={`${hubs.length} 个公路港`} />
             </dd>
           </div>
           <div>
             <dt>在途</dt>
             <dd>
-              <RollingNumber value={totals.in_flight} label={`在途 ${totals.in_flight}`} />
+              <AnimatedNumber value={totals.in_flight} label={`在途 ${totals.in_flight}`} />
             </dd>
           </div>
           <div className={styles.sceneMetricSignal}>
             <dt>异常</dt>
             <dd>
-              <RollingNumber value={totals.anomalies} label={`异常 ${totals.anomalies}`} />
+              <AnimatedNumber value={totals.anomalies} label={`异常 ${totals.anomalies}`} />
             </dd>
           </div>
           <div>
             <dt>处置中</dt>
             <dd>
-              <RollingNumber value={totals.handling} label={`处置中 ${totals.handling}`} />
+              <AnimatedNumber value={totals.handling} label={`处置中 ${totals.handling}`} />
             </dd>
           </div>
         </dl>
@@ -392,7 +444,7 @@ export function HubNetwork({
 
       <div className={styles.sceneControls} data-scene-controls>
         {selectedHub !== undefined && (
-          <HaloSegmented
+          <SegmentedControl
             className={styles.sceneCameraPresets}
             ariaLabel="镜头预设"
             items={[
@@ -431,52 +483,101 @@ export function HubNetwork({
             onValueChange={selectCameraPreset}
           />
         )}
-        <select
-          value={selectedHubID ?? ""}
-          aria-label="选择公路港"
-          onChange={(event) => {
-            selectHub(event.target.value || null);
-          }}
-        >
-          <option value="">
-            {selectedHub === undefined ? "选择港口" : "返回全国港网"}
-          </option>
-          {hubs.map((hub) => (
-            <option key={hub.hub_id} value={hub.hub_id}>
-              {hub.name}
-            </option>
-          ))}
-        </select>
-        <TextureButton
-          className={styles.sceneToolButton}
-          type="button"
-          variant="icon"
-          size="icon"
-          onClick={focusTopRisk}
-          disabled={topRiskHub === undefined}
-          aria-label="聚焦最高风险"
-          title="聚焦最高风险"
-        >
-          <Crosshair aria-hidden="true" size={17} />
-        </TextureButton>
-        <TextureButton
-          className={styles.sceneToolButton}
-          type="button"
-          variant="icon"
-          size="icon"
-          onClick={resetView}
-          disabled={selectedHubID === null}
-          aria-label={
-            selectedHubID === null ? "复位网络视角" : "返回全国视角"
+        <Select
+          className={styles.sceneHubSelect}
+          value={selectedHubID}
+          ariaLabel="选择公路港"
+          placeholder="选择港口"
+          nullOptionLabel={
+            selectedHub === undefined ? "选择港口" : "返回全国港网"
           }
-          title={selectedHubID === null ? "复位视角" : "返回全国视角"}
+          options={hubs.map((hub) => ({
+            value: hub.hub_id,
+            label: hub.name,
+          }))}
+          onValueChange={selectHub}
+        />
+        <Tooltip content="聚焦最高风险" side="bottom">
+          <Button
+            className={styles.sceneToolButton}
+            type="button"
+            variant="icon"
+            size="icon"
+            onClick={focusTopRisk}
+            disabled={topRiskHub === undefined}
+            aria-label="聚焦最高风险"
+          >
+            <Crosshair aria-hidden="true" size={17} />
+          </Button>
+        </Tooltip>
+        <Tooltip
+          content={selectedHubID === null ? "复位视角" : "返回全国视角"}
+          side="bottom"
         >
-          {selectedHubID === null ? (
-            <RotateCcw aria-hidden="true" size={17} />
-          ) : (
-            <ArrowLeft aria-hidden="true" size={17} />
-          )}
-        </TextureButton>
+          <Button
+            className={styles.sceneToolButton}
+            type="button"
+            variant="icon"
+            size="icon"
+            onClick={resetView}
+            disabled={
+              selectedHubID === null && sceneZoom === defaultSceneZoom
+            }
+            aria-label={
+              selectedHubID === null ? "复位网络视角" : "返回全国视角"
+            }
+          >
+            {selectedHubID === null ? (
+              <RotateCcw aria-hidden="true" size={17} />
+            ) : (
+              <ArrowLeft aria-hidden="true" size={17} />
+            )}
+          </Button>
+        </Tooltip>
+      </div>
+      <div
+        className={`${styles.sceneZoomControls} ${
+          selectedHub === undefined
+            ? ""
+            : styles.sceneZoomControlsFacility
+        }`}
+        role="group"
+        aria-label="地图缩放"
+        data-scene-zoom-controls
+      >
+        <Tooltip content="缩小地图" side="left">
+          <Button
+            className={styles.sceneZoomButton}
+            type="button"
+            variant="icon"
+            size="icon"
+            onClick={() => changeZoom("out")}
+            disabled={sceneZoom === sceneZoomSteps[0]}
+            aria-label="缩小地图"
+          >
+            <ZoomOut aria-hidden="true" size={17} />
+          </Button>
+        </Tooltip>
+        <output
+          className={styles.sceneZoomValue}
+          aria-label={`当前缩放 ${Math.round(sceneZoom * 100)}%`}
+          aria-live="polite"
+        >
+          {Math.round(sceneZoom * 100)}%
+        </output>
+        <Tooltip content="放大地图" side="left">
+          <Button
+            className={styles.sceneZoomButton}
+            type="button"
+            variant="icon"
+            size="icon"
+            onClick={() => changeZoom("in")}
+            disabled={sceneZoom === sceneZoomSteps.at(-1)}
+            aria-label="放大地图"
+          >
+            <ZoomIn aria-hidden="true" size={17} />
+          </Button>
+        </Tooltip>
       </div>
       {selectedHub !== undefined && (
         <div
@@ -755,6 +856,18 @@ function dataModeLabel(mode: Overview["data_mode"]): string {
       return exhaustive;
     }
   }
+}
+
+function stepSceneZoom(
+  current: SceneZoomScale,
+  direction: SceneZoomDirection,
+): SceneZoomScale {
+  const currentIndex = sceneZoomSteps.indexOf(current);
+  const nextIndex =
+    direction === "in"
+      ? Math.min(currentIndex + 1, sceneZoomSteps.length - 1)
+      : Math.max(currentIndex - 1, 0);
+  return sceneZoomSteps[nextIndex] ?? current;
 }
 
 function supportsWebGL(): boolean {

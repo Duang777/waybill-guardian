@@ -574,6 +574,7 @@
 
 .sceneHud,
 .sceneControls,
+.sceneZoomControls,
 .sceneLegend,
 .sceneSelection,
 .sceneCaption,
@@ -690,19 +691,54 @@
   flex: 0 1 auto;
 }
 
-.sceneControls select {
-  width: 128px;
-  height: 40px;
-  padding: 0 28px 0 10px;
-  border: 1px solid oklch(0.72 0.01 230);
+.sceneHubSelect {
+  width: 144px;
+}
+
+.sceneHubSelect :global([data-slot="select-trigger"]) {
   border-radius: 2px;
-  color: var(--ink);
-  background: oklch(0.99 0.002 95 / 0.94);
-  font-size: 11px;
-  cursor: pointer;
+  background: oklch(0.99 0.002 95 / 0.96);
 }
 
 .sceneToolButton {
+  flex: 0 0 auto;
+}
+
+.sceneZoomControls {
+  right: 14px;
+  bottom: 54px;
+  display: grid;
+  grid-template-columns: 40px 52px 40px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid oklch(0.76 0.012 230);
+  border-radius: 3px;
+  background: oklch(0.995 0.002 95 / 0.96);
+  pointer-events: auto;
+}
+
+.sceneZoomControls :global([data-slot="button"]) {
+  border: 0;
+  border-radius: 0;
+}
+
+.sceneZoomControls :global([data-slot="button"]):first-child {
+  border-right: 1px solid oklch(0.82 0.01 230);
+}
+
+.sceneZoomControls :global([data-slot="button"]):last-child {
+  border-left: 1px solid oklch(0.82 0.01 230);
+}
+
+.sceneZoomValue {
+  color: var(--ink-muted);
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.sceneZoomButton {
   flex: 0 0 auto;
 }
 
@@ -1069,114 +1105,17 @@
   scrollbar-color: oklch(0.68 0.01 230) transparent;
 }
 
+.queueTableLoading {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-rows: repeat(5, minmax(56px, 1fr));
+  overflow: hidden;
+}
+
 .queueEmptyState {
   min-height: 160px;
   border: 0;
-}
-
-.queueItem {
-  display: grid;
-  grid-template-columns: 40px 28px minmax(0, 1fr) 40px;
-  min-height: 80px;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 8px 10px 12px;
-  border-bottom: 1px solid var(--line);
-}
-
-@media (hover: hover) {
-  .queueItem:hover {
-    background: oklch(0.965 0.004 120);
-  }
-}
-
-.queueCheck {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  place-items: center;
-}
-
-.queueCheck input {
-  width: 17px;
-  height: 17px;
-  margin: 0;
-  accent-color: var(--ink);
-}
-
-.queueRank {
-  color: oklch(0.56 0.014 255);
-  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
-  font-size: 11px;
-}
-
-.queueBody {
-  display: grid;
-  min-width: 0;
-  gap: 6px;
-}
-
-.queueTitle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.queueTitle a {
-  overflow: hidden;
-  color: var(--ink);
-  font-family: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
-  font-size: 14px;
-  font-weight: 600;
-  text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.queueTitle a:hover {
-  text-decoration: underline;
-}
-
-.riskScore {
-  position: relative;
-  display: inline-flex;
-  width: 38px;
-  height: 24px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: flex-end;
-  color: var(--signal);
-  background: transparent;
-  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.riskScore::before {
-  width: 5px;
-  height: 5px;
-  margin-right: 5px;
-  border-radius: 50%;
-  background: var(--signal);
-  content: "";
-}
-
-.queueMeta {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 7px;
-  color: oklch(0.53 0.014 255);
-  font-size: 10px;
-}
-
-.queueMeta > span:first-child {
-  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
-}
-
-.drilldown {
-  flex: 0 0 auto;
 }
 
 .briefSection {
@@ -1665,7 +1604,7 @@
     min-width: 0;
   }
 
-  .headerStatus :global([data-slot="halo-badge"]) {
+  .headerStatus :global([data-slot="badge"]) {
     max-width: 112px;
     overflow: hidden;
     white-space: nowrap;
@@ -1735,6 +1674,16 @@
   .sceneControls {
     top: 108px;
     right: 8px;
+  }
+
+  .sceneZoomControls {
+    top: 158px;
+    right: 8px;
+    bottom: auto;
+  }
+
+  .sceneZoomControlsFacility {
+    top: 204px;
   }
 
   .briefMeta {
@@ -1954,7 +1903,7 @@
     grid-template-columns: minmax(0, 1fr) 40px 40px;
   }
 
-  .sceneControls select {
+  .sceneHubSelect {
     width: 100%;
   }
 
@@ -1967,19 +1916,6 @@
 
   .sceneCameraPresets button {
     min-width: 56px;
-  }
-
-  .queueItem {
-    grid-template-columns: 40px 22px minmax(0, 1fr) 40px;
-    padding-left: 7px;
-  }
-
-  .queueMeta {
-    flex-wrap: wrap;
-  }
-
-  .queueMeta > span:first-child {
-    width: 100%;
   }
 
   .briefItem {

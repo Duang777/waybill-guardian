@@ -1,6 +1,6 @@
 import { RotateCw } from "lucide-react";
 import { Component, type ErrorInfo, type ReactNode } from "react";
-import { TextureButton } from "./cult";
+import { Button } from "./ui/button";
 import { StateFeedback } from "./StateFeedback";
 
 type PanelErrorBoundaryProps = {
@@ -42,7 +42,7 @@ export class PanelErrorBoundary extends Component<
         detail={this.state.detail}
         compact
         action={
-          <TextureButton
+          <Button
             type="button"
             variant="secondary"
             size="sm"
@@ -50,7 +50,7 @@ export class PanelErrorBoundary extends Component<
           >
             <RotateCw aria-hidden="true" size={15} />
             重试
-          </TextureButton>
+          </Button>
         }
       />
     );

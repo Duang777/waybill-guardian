@@ -357,9 +357,38 @@ try {
 
   await page.getByRole("button", { name: "重新处置", exact: true }).click();
   await page.getByText("改派至川行快运", { exact: true }).waitFor();
-  await page.getByRole("button", { name: "驳回方案", exact: true }).click();
+  const rejectButton = page.getByRole("button", {
+    name: "驳回方案",
+    exact: true,
+  });
+  const rejectDialog = page.getByRole("alertdialog");
+  const rejectReason = page.getByLabel("驳回原因");
+  await rejectButton.click();
+  await rejectReason.waitFor();
+  assert(
+    await rejectReason.evaluate((element) => element === document.activeElement),
+    "reject dialog did not focus the reason field",
+  );
+  await page.waitForTimeout(250);
+  await page.screenshot({
+    path: join(artifactDir, "mobile-reject-dialog.png"),
+  });
+  await page.keyboard.press("Escape");
+  await rejectDialog.waitFor({ state: "detached" });
+  assert(
+    await rejectButton.evaluate((element) => element === document.activeElement),
+    "Escape did not return focus to the reject trigger",
+  );
+  await rejectButton.click();
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  await rejectDialog.waitFor({ state: "detached" });
+  assert(
+    await rejectButton.evaluate((element) => element === document.activeElement),
+    "cancel did not return focus to the reject trigger",
+  );
+  await rejectButton.click();
   const rejectionReason = "首选承运商当前无可用车辆";
-  await page.getByLabel("驳回原因").fill(rejectionReason);
+  await rejectReason.fill(rejectionReason);
   const rejectPattern = "**/api/approvals/*/reject";
   await page.route(rejectPattern, (route) =>
     route.fulfill({
@@ -371,11 +400,23 @@ try {
     }),
   );
   await page.getByRole("button", { name: "确认驳回", exact: true }).click();
-  await page.getByText("simulated conflict", { exact: true }).waitFor();
+  const rejectError = rejectDialog.getByRole("alert");
+  await rejectError.getByText("simulated conflict", { exact: true }).waitFor();
   assert(
-    (await page.getByLabel("驳回原因").inputValue()) === rejectionReason,
+    await rejectDialog.isVisible(),
+    "failed rejection closed the reject dialog",
+  );
+  assert(
+    await rejectError.isVisible(),
+    "failed rejection did not show feedback inside the reject dialog",
+  );
+  assert(
+    (await rejectReason.inputValue()) === rejectionReason,
     "failed rejection discarded the operator reason",
   );
+  await page.screenshot({
+    path: join(artifactDir, "mobile-reject-conflict.png"),
+  });
   await page.unroute(rejectPattern);
 
   const pendingResponse = await page.request.get(`${backendURL}/api/approvals?status=pending`);
@@ -459,6 +500,8 @@ try {
       join(artifactDir, "mobile-completed.png"),
       join(artifactDir, "mobile-evidence-ledger-375.png"),
       join(artifactDir, "mobile-decision-dock-320.png"),
+      join(artifactDir, "mobile-reject-dialog.png"),
+      join(artifactDir, "mobile-reject-conflict.png"),
       join(artifactDir, "mobile-alternative.png"),
       join(artifactDir, "mobile-route.png"),
       join(artifactDir, "invalid-route-320.png"),

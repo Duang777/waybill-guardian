@@ -11,174 +11,306 @@
 
 <h1 align="center">waybill-guardian</h1>
 
-<p align="center">异常运单处置 Agent。先取证，再请人确认。</p>
+<p align="center">证据驱动的异常运单处置 Agent。自动调查，人工决策，幂等执行，全程审计。</p>
 
 <p align="center">
   <a href="https://go.dev/dl/"><img alt="Go 1.25.3" src="https://img.shields.io/badge/Go-1.25.3-00ADD8?logo=go&logoColor=white"></a>
   <a href="https://react.dev/"><img alt="React 19.3.0" src="https://img.shields.io/badge/React-19.3.0-087EA4?logo=react&logoColor=white"></a>
   <a href="https://nodejs.org/"><img alt="Node.js 22.12 或更高版本" src="https://img.shields.io/badge/Node.js-%3E%3D22.12-339933?logo=nodedotjs&logoColor=white"></a>
   <a href="https://github.com/Duang777/waybill-guardian/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Duang777/waybill-guardian/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/Duang777/waybill-guardian/issues"><img alt="GitHub issues" src="https://img.shields.io/github/issues/Duang777/waybill-guardian"></a>
   <a href="LICENSE"><img alt="Apache 2.0 license" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
 </p>
 
-传化集团与动势科技的「AI 重构产业架构师大赛」，赛道是 AI+物流。本仓库是参赛项目。标志是原创图形，没有使用主办方商标。
+传化集团与动势科技「AI 重构产业架构师大赛」AI+物流赛道参赛项目。
 
 ## 给评委
 
-延误、破损或丢件发生后，waybill-guardian 自动读取运单、轨迹、司机和天气，整理归因，并提出改派、赔付或通知方案。系统在人工确认前不会执行写操作。确认之后，服务按幂等键回写平台，并把全过程写入可校验、可回放的审计日志。
+延误、破损或丢件发生后，waybill-guardian 自动汇集运单、轨迹、司机和天气证据，计算风险，形成可引用证据的归因结果，并提出改派、理赔或通知方案。所有写操作都先进入人工审批。确认后，服务端生成稳定 effect 身份和幂等键，执行平台写入，并把全过程记录为可校验、可续传、可回放的审计事件。
 
 <p align="center">
   <a href="https://github.com/Duang777/waybill-guardian/releases/download/demo-v1.0.0/waybill-guardian-demo-1920-zh.mp4"><strong>观看 60 秒中文配音演示</strong></a>
   ·
-  <a href="docs/demo-script.md">查看讲稿与镜头清单</a>
+  <a href="docs/demo-script.md">查看三分钟讲稿</a>
+  ·
+  <a href="contract.yaml">查看工具契约</a>
 </p>
 
 <p align="center">
-  <img alt="1920 像素宽的全国公路港经营总览。页面同时显示六项 KPI、72 港网络、异常队列、三张经营图表和经营简报。" src="docs/assets/overview-console.png" width="960">
+  <img alt="全国公路港经营总览。页面显示六项 KPI、72 港网络、异常队列、三张经营图表和经营简报。" src="docs/assets/overview-console.png" width="960">
 </p>
 
-### 处置边界
+### 一条完整的处置闭环
 
-| 环节 | 系统行为 | 人工边界 | 可验证记录 |
+| 阶段 | 系统动作 | 关键约束 | 可核验证据 |
 |---|---|---|---|
-| 调查 | 自动调用四个只读工具 | 不需要逐系统查询 | 工具参数、返回摘要和证据引用 |
-| 提案 | 模型输出结构化归因、候选方案和写工具参数 | 审批人查看影响和备选方案 | 模型模式、时延、token 和提案版本 |
-| 执行 | 服务端生成 `effect_id` 和幂等键 | 确认、驳回或等待审批过期 | 人工决定、平台回执和重试状态 |
-| 复核 | SSE 推送实时事件，审计日志支持游标回放 | 按事件序号复查过程 | `seq`、`prev_hash` 和 `hash` |
+| 发现 | 接收异常事件或由运营人员选择异常运单 | 授权范围先于聚合和处置 | CloudEvents、运单范围、事件哈希 |
+| 调查 | 调用运单、轨迹、司机、天气四个只读工具 | 每次读取必须绑定当前运单、司机和线路 | 工具参数、结果摘要、证据字段 |
+| 归因 | 计算时效、路况和天气风险，生成结构化归因 | 每个归因必须引用已审计的工具字段 | 置信度、JSON Pointer、事件序号和哈希 |
+| 提案 | 生成改派、理赔和通知候选动作 | 候选承运商必须来自本次运单证据 | 方案摘要、备选方案、写操作清单 |
+| 决策 | `pending` 审批进入确认、驳回或过期 | 人工决定先持久化，再恢复同一 Agent thread | 审批人、原因、时间和方案版本 |
+| 执行 | 按稳定 effect 身份调用平台 adapter | 同一业务 effect 并发合并，成功结果直接回放 | effect、attempt、平台回执和响应摘要 |
+| 恢复 | 启动时重建 run、审批和 effect 状态 | 未知外部结果先查询，不盲目重复写入 | lookup 结果、恢复决定和人工复核状态 |
+| 复核 | SSE 推送实时事件，并从游标续传 | 客户端按 run 和 `seq` 去重 | `seq`、`prev_hash`、`hash` |
 
-### 可核验的价值口径
+### 与普通 Agent 的差异
 
-本仓库不把仿真结果写成生产收益。经营总览只显示接口能够证明的当前事实，并按以下公式计算：
+waybill-guardian 把模型放在受约束的业务流程中。模型负责理解证据和组织方案，服务端负责身份、授权、审批、写入、恢复和审计。模型不能自行生成 effect 身份，不能引用不存在的证据，也不能绕过人工审批直接调用写工具。
 
-| 指标 | 假设或事实 | 结果 |
-|---|---|---|
-| 单次完整调查的人力节省估算 | 4 个证据步骤，每步默认按 `EVIDENCE_STEP_MINUTES=8` 分钟计算 | `4 × 8 / 60 = 0.53` 人时 |
-| 72 张异常运单的证据采集量 | 假设 72 个公路港各有 1 张异常运单，且四个步骤全部成功 | `72 × 4 × 8 / 60 = 38.4` 人时 |
-| 已实现时效挽回和成本影响 | 只统计人工确认后执行成功，且有完整 `impact` 记录的最新 run | 数据不完整时返回 `unavailable`，不补默认值 |
+## 核心算法
 
-前两项衡量的是按配置折算的人工证据采集量，不是 Agent 的运行时间，也不是已经取得的生产收益。审批、处置和复核仍需要人工。完整 KPI 公式见[经营总览和 KPI](#经营总览和-kpi)。
+### 1. 多源证据融合与风险评分
 
-## 架构
+服务按固定顺序读取运单、轨迹、司机和天气，并生成三个 0 至 100 的风险分量。确定性评分先完成异常排序，模型再解释证据和组织方案。
+
+```text
+ETA 风险 =
+  clamp(
+    未妥投基础分 20
+    + 异常轨迹点数量 × 15
+    + 异常停留总小时 × 8,
+    0,
+    100
+  )
+
+道路风险 =
+  clamp(
+    连续驾驶小时 × 5
+    + 疲劳预警 30,
+    0,
+    100
+  )
+
+天气风险 =
+  无预警 0
+  蓝色或黄色 30
+  橙色 60
+  红色或严重预警 90
+
+综合风险 = ETA 风险 × 50% + 道路风险 × 30% + 天气风险 × 20%
+```
+
+总览按综合风险降序排列异常运单；同分时按最近记录时间排序。评分实现位于 [`internal/guardian/assessment.go`](internal/guardian/assessment.go) 和 [`internal/guardian/overview.go`](internal/guardian/overview.go)。
+
+### 2. 证据约束的 Agent 推理
+
+Agent 使用 hastekit `agent-sdk-go` v0.0.24。运行时通过中间件收紧模型边界：
+
+- 工具能力过滤器只把当前部署启用的工具暴露给模型。
+- 读取绑定校验器强制运单、司机和线路与当前 run 一致，阻止跨运单取证。
+- 请求预算把一次逻辑模型调用限制在 45 秒内，并把单次输出限制为 4096 token。
+- Agent loop 最多执行 20 轮，provider 请求最多尝试三次。
+- 模型调用记录模式、模型名、时延、token 用量、结果和问题代码。
+- 工具输出只包含白名单字段，并限制文本、数组和历史大小。
+
+这组约束位于 [`internal/agent`](internal/agent)。模型提供商可以使用 Responses 或 Chat Completions 兼容接口。
+
+### 3. 可编译的结构化提案
+
+模型输出先经过 `proposal.v1` 编译器，再进入审批。编译器执行以下检查：
+
+1. JSON 必须通过严格解析，不能包含未知字段、重复键或尾随值。
+2. 每个归因项必须包含置信度和 1 至 8 个证据引用。
+3. 每个引用使用 RFC 6901 JSON Pointer 指向本次 run 的工具结果。
+4. 引用值必须与审计事件中的标量值逐字节一致。
+5. 引用保存来源事件 ID、`seq` 和 `hash`，审批时可以回到原始证据。
+6. 四个只读工具必须全部成功，提案才能通过。
+7. 候选承运商必须存在于最新运单证据中。
+8. 当前工具不能证明的收益字段必须明确标记为 `unavailable`，不能由模型估算。
+
+首版提案未通过时，系统把问题代码和受限长度的失败片段交给模型修复一次。修复后仍不合格，run 进入人工复核。实现位于 [`internal/proposal`](internal/proposal) 和 [`internal/agent/proposal_middleware.go`](internal/agent/proposal_middleware.go)。
+
+### 4. 持久化人工审批状态机
+
+写工具带有 `RequiresApproval`。Agent 到达写调用时暂停，服务端把业务参数、证据、候选方案和到期时间组成审批批次。
+
+```text
+pending ──确认──> confirmed ──全部成功──> executed
+   │                   ├──部分失败──> partially_failed
+   │                   └──结果未知──> reconciliation_required
+   ├──驳回──> rejected
+   └──超时──> expired
+```
+
+确认、驳回和过期争用同一把 run 锁，因此只能落下一种决定。超时按拒绝恢复 Agent，不会默认放行。驳回原因会回到同一个 thread，Agent 可以提交下一版候选方案。
+
+### 5. 稳定 effect 身份与并发幂等
+
+模型只提交业务参数。服务端按业务语义生成写操作身份：
+
+1. 对工具参数做规范化 JSON 编码，并计算 SHA-256。
+2. 用 `run_id`、`incident_id`、`waybill_id` 和 `plan_version` 生成方案 UUID。
+3. 用 action、target 和参数哈希生成方案项摘要。
+4. 用方案 UUID 和方案项摘要生成稳定 `effect_id`。
+5. 从 `effect_id` 派生 256 位幂等键。
+
+同一幂等键的并发调用会等待同一执行结果。成功结果直接回放，键与业务参数冲突时拒绝执行。测试中的 10 个并发调用只进入 platform 一次，见 [`internal/idempotency/idempotency_test.go`](internal/idempotency/idempotency_test.go)。
+
+当外部系统可能已经成功，但本地尚未写入成功事件时，effect 进入 `unknown`。恢复器先按幂等键查询外部结果，再决定完成、重试、等待或转人工复核。
+
+### 6. 追加式审计与哈希链
+
+每个 run 都有一条只追加事件流。事件包含：
+
+- 单调递增的 `seq`
+- 稳定 `event_id`
+- `actor` 和事件类型
+- 脱敏后的 payload
+- `prev_hash`
+- 当前事件 `hash`
+
+新事件的哈希覆盖规范化事件内容和前序哈希。启动时，存储会校验序号、前序哈希和当前哈希。JSONL 写入使用单写者锁、文件 `fsync` 和目录 `fsync`。PostgreSQL 模式把业务投影、审计事件和 outbox 写入同一事务。
+
+SSE 先发送 `Last-Event-ID` 之后的历史事件，再切换到 live 订阅。浏览器断线后可以从最后序号继续，不需要重新执行 Agent。
+
+### 7. CloudEvents 归并与乱序修正
+
+`POST /v1/events` 接收 CloudEvents 1.0 structured JSON。入口执行严格 schema、UTF-8、时间、source URI、subject、版本和 body 大小校验，并对等价 JSON 生成稳定哈希。
+
+事件 reducer 与输入顺序无关。它按 `source_version` 归并检测事件和修正事件，支持 replace 与 retract，并识别以下状态：
+
+- `active`
+- `retracted`
+- `pending_correction`
+- `conflicted`
+
+同版本不同内容、跨 incident 修正、缺失修正目标和非法版本关系不会被静默覆盖。系统保留冲突引用，并把结果送入人工复核。Outbox 使用租约、续租、有界并发和封顶指数退避投递下游 CloudEvents。
+
+### 8. 可核验经营指标
+
+经营总览先按 JWT 授权的运单范围过滤，再计算指标。服务不使用默认均值补齐缺失事实。
+
+| KPI | 计算口径 |
+|---|---|
+| 已实现时效挽回 | 只统计同一审批先由人工确认、再由系统执行成功、且 run 已完成的运单 |
+| 已实现成本影响 | `避免违约金 - 改派差价 - 处置成本`，金额先按整数分求和 |
+| 人力节省 | `成功自动证据采集步数 × EVIDENCE_STEP_MINUTES ÷ 60` |
+| 异常闭环率 | `已完成或已驳回的异常运单数 ÷ 窗口内异常运单数` |
+| 平均处置时长 | `终态时间 - 启动时间` 的窗口均值 |
+| 人工审批通过率 | `人工确认数 ÷ 人工决定数` |
+
+数据不足时，指标返回 `unavailable` 和原因。经营简报只接收不含运单、人员、车辆和线路身份的聚合计数，引用由服务端重建。
+
+## 系统架构
 
 ```mermaid
 flowchart TD
-  browser["经营总览与单运单工作台"]
-  guardian["HTTP + guardian 用例协调"]
-  agent["hastekit Agent"]
-  readtools["四个只读工具"]
-  sources["mock / JSON / CSV / 外部读源"]
-  approval["持久化人工审批"]
-  effects["effect 身份与幂等执行"]
-  writetools["三个写工具"]
-  platform["内存运行时 / TMS adapter"]
+  browser["React 经营总览与单运单工作台"]
+  api["HTTP API + SSE"]
+  guardian["guardian 用例协调与恢复"]
+  agent["hastekit Agent loop"]
+  proposal["proposal.v1 证据编译器"]
+  approval["持久化审批状态机"]
+  identity["effect 身份与幂等执行"]
+  reads["运单 / 轨迹 / 司机 / 天气"]
+  sources["TMS / JSON / CSV / 事件流"]
+  writes["改派 / 理赔 / 通知 adapter"]
   audit["append-only 审计与哈希链"]
+  storage["JSONL 或 PostgreSQL 17"]
+  outbox["CloudEvents outbox"]
 
-  browser -->|启动或决定| guardian
-  guardian -->|启动或恢复| agent
-  agent --> readtools
-  readtools --> sources
-  sources --> readtools
-  readtools --> agent
-  agent -->|暂停并提交方案| approval
-  guardian -->|持久化人工决定| approval
-  approval -->|决定已落盘| guardian
-  agent -->|已批准的写调用| effects
-  effects --> writetools
-  writetools --> platform
+  browser --> api
+  api --> guardian
+  guardian --> agent
+  agent --> reads
+  reads --> sources
+  agent --> proposal
+  proposal --> approval
+  approval --> guardian
+  guardian --> identity
+  identity --> writes
   guardian --> audit
+  proposal --> audit
   approval --> audit
-  effects --> audit
-  audit -->|SSE replay + live| browser
+  identity --> audit
+  audit --> storage
+  storage -->|replay + live| api
+  storage --> outbox
 ```
 
 ```mermaid
 sequenceDiagram
-  participant O as 审批人
+  participant O as 运营人员
   participant W as Web
-  participant G as guardian
+  participant G as Guardian
   participant A as Agent
-  participant P as Platform
+  participant P as Proposal Compiler
+  participant H as Approval
+  participant E as Effect Executor
+  participant T as Platform
   participant D as Audit
 
-  O->>W: 启动处置
+  O->>W: 启动异常处置
   W->>G: POST run
-  G->>A: 调查并生成提案
-  A-->>G: 提案与写工具调用
-  G->>D: 记录审批批次并暂停
-  G-->>W: pending
-  O->>W: 确认或驳回
-  W->>G: 提交人工决定
-  G->>D: 先持久化决定
+  G->>A: 创建 run 与调查上下文
+  A->>T: 查询四类运营证据
+  T-->>A: 返回受限字段
+  A->>P: 提交归因和候选动作
+  P->>D: 解析并绑定证据引用
+  P-->>H: 创建审批批次
+  H-->>W: pending
+  O->>H: 确认或驳回
+  H->>D: 先持久化人工决定
   alt 确认
-    G->>A: 恢复同一 thread
-    A->>G: 执行写工具
-    G->>P: 按 effect 身份幂等写入
-    P-->>G: 返回平台回执
-    G->>D: 记录执行结果
+    H->>A: 恢复同一 thread
+    A->>E: 提交已批准写调用
+    E->>E: 派生 effect_id 与幂等键
+    E->>T: 执行或查询已有结果
+    T-->>E: 平台回执
+    E->>D: 写入执行结果
   else 驳回或过期
-    G->>A: 携带原因恢复
-    A-->>G: 提交备选方案或结束
+    H->>A: 携带原因恢复
+    A->>P: 提交下一版方案或结束
   end
-  D-->>W: SSE 回放和实时事件
+  D-->>W: SSE 续传和实时事件
 ```
 
-`cmd/server` 提供 HTTP 和 SSE。`internal/guardian` 协调 Agent、审批、幂等和恢复。Agent 运行时是 hastekit `agent-sdk-go` v0.0.24。工具契约位于 [`contract.yaml`](contract.yaml)。
+## 产品能力
 
-四个只读工具自动执行。三个写工具在执行前暂停，等待人工决定。审批从 `pending` 开始，之后进入 `confirmed`、`rejected` 或 `expired`。执行结果可以是 `executed`、`partially_failed`、`failed` 或 `reconciliation_required`。
-
-审计默认按 run 写入 append-only JSONL。`STORAGE=postgres` 时，业务投影、审计和 outbox 在同一事务中提交。浏览器使用 `Last-Event-ID` 从断点继续接收 SSE。
-
-### 用官方数据替换仿真数据
-
-1. 按 [`data/templates/waybills-v1.json`](data/templates/waybills-v1.json) 或 [`data/templates/waybills-v1.csv`](data/templates/waybills-v1.csv) 映射运单、轨迹、司机、天气和可选网络实体。
-2. 运行 `go run ./cmd/dataimport validate --data <文件路径>`。校验器在服务启动前检查引用、坐标和时间顺序。
-3. 使用 `PLATFORM=file DATA_FILE=<文件路径> AGENT_MODE=offline ./scripts/demo.sh` 启动只读数据演示。生产写入需要实现 `internal/platform` adapter；当前 `PLATFORM=real` 只提供改派 HTTP 沙箱，不是生产 TMS。
-
-字段说明和错误规则见 [`docs/file-data-source-design.md`](docs/file-data-source-design.md)。真实平台边界见 [`docs/RFC-002.md`](docs/RFC-002.md)。
-
-<p align="center">
-  <img alt="桌面宽度下，内置样例停在人工审批。六阶段运行带位于地图上方，证据账本紧邻地图，全宽人工决策闸展示改派方案和待执行动作，底部审计记录保持折叠。展示分是 ETA 83、路况 75、天气 0。" src="docs/assets/console-approval.png" width="840">
-</p>
-
-<p align="center">
-  <img alt="手机宽度下，同一次脚本演示在确认后显示处置完成，按钮是重新处置。" src="docs/assets/console-completed-mobile.png" width="280">
-</p>
-
-总览截图来自 `AGENT_MODE=offline npm run verify:overview`，工作台截图来自
-`AGENT_MODE=offline npm run verify:e2e`。未配置高德时，页面使用不含行政边界的本地轨迹示意。
-
-## 能力
-
-状态描述本仓库当前代码。
-
-| 状态 | 含义 |
+| 能力域 | 已实现能力 |
 |---|---|
-| 已交付 | 默认分支可以运行，范围写在说明里 |
-| 进行中 | 有一部分代码，issue 的验收标准还没达到 |
-| 计划中 | 默认分支没有这项能力 |
+| 全国经营总览 | 72 港网络、线路热度、车辆状态、六项 KPI、三张经营图表、经营简报 |
+| 异常队列 | 风险排序、状态筛选、批量选择、单次最多启动 20 张运单 |
+| 单运单工作台 | 六阶段运行带、地图轨迹、异常点、证据账本、审批卡片、审计抽屉 |
+| Agent 调查 | 四个只读工具、调用审计、工具绑定、能力过滤、模型预算和重试 |
+| 处置动作 | TMS 改派、破损或丢件理赔、货主或司机通知 |
+| 人工决策 | 确认、驳回、原因回传、到期拒绝、第二候选方案 |
+| 可靠执行 | 服务端 effect 身份、并发合并、结果回放、失败分类和结果核对 |
+| 运行恢复 | 审批恢复、方案 checkpoint 恢复、effect 恢复、历史保留策略 |
+| 审计复核 | 哈希链校验、SSE 游标续传、事件回放、敏感字段脱敏 |
+| 数据接入 | JSON 或 CSV v1、CloudEvents 1.0、TMS 和通知 adapter 边界 |
+| 身份授权 | local 受限访问、JWT RS256、tenant、role 和 waybill scope |
+| 持久化 | JSONL、PostgreSQL 17、AES-256-GCM Agent history、事务 outbox |
+| 可观测性 | 固定标签 Prometheus 指标、模型时延和 token、outbox 状态统计 |
+| 前端体验 | 白色工业控制台、桌面和移动端、自适应图表、高德地图接入 |
 
-| 能力 | 状态 | 说明 |
+<p align="center">
+  <img alt="桌面工作台停在人工审批。页面显示运行阶段、地图、证据账本、候选方案和待执行动作。" src="docs/assets/console-approval.png" width="840">
+</p>
+
+<p align="center">
+  <img alt="移动端工作台显示处置完成。" src="docs/assets/console-completed-mobile.png" width="280">
+</p>
+
+## 可靠性证据
+
+| 场景 | 系统行为 | 自动化证据 |
 |---|---|---|
-| 四个只读工具，三个写工具，人工审批 | 已交付 | 与 [`contract.yaml`](contract.yaml) 对齐。mock 下三个写操作都要审批。 |
-| 服务端幂等键 | 已交付 | 模型不提交 `effect_id` 或幂等键。同一键的 10 个并发调用只会进入 platform 一次，见 [`idempotency_test.go`](internal/idempotency/idempotency_test.go)。 |
-| JSONL 审计、哈希链、SSE 回放 | 已交付 | 前端按 run 和 `seq` 去重。 |
-| PostgreSQL 存储 | 已交付 | 保存 run、审批、effect、审计、outbox，以及 AES-256-GCM 加密的 Agent history。 |
-| 本地身份和 JWT | 已交付 | `AUTH_MODE=local` 默认监听 loopback；容器额外校验 Host 和 TCP 对端。`jwt` 校验 RS256、issuer、audience、时效、租户、角色和运单范围。 |
-| 高德地图或本地轨迹 | 已交付 | 没有 key，或 SDK 加载失败时，页面改用本地坐标。 |
-| 改派 HTTP 沙箱 | 已交付 | 仅 `tms.reassign`。读仍是内置样例。不是生产 TMS。 |
-| 在线模型调用 | 进行中 | 正式演示入口默认在线。两种兼容 API 和三运单 fake 验收已通过；真实国产模型联调仍需要部署方凭据。见 [issue 59](https://github.com/Duang777/waybill-guardian/issues/59)。 |
-| 文件导入 | 已交付 | `PLATFORM=file` 在启动时加载 JSON 或 CSV v1，页面可以选择其中的运单。写操作留在内存 fixture 运行时。见已关闭的 [issue 60](https://github.com/Duang777/waybill-guardian/issues/60) 和 [`docs/file-data-source-design.md`](docs/file-data-source-design.md)。 |
-| 公路港总览 | 已交付 | 首页展示 72 港网络、KPI、三张经营图表、异常队列和经营简报，并支持批量启动后逐单审批。见 [issue 61](https://github.com/Duang777/waybill-guardian/issues/61) 和 [issue 72](https://github.com/Duang777/waybill-guardian/issues/72)。 |
-| Apache-2.0 与依赖许可清单 | 已交付 | 根目录含 `LICENSE`，传递依赖清单位于 [`docs/licenses/`](docs/licenses/)。 |
-| 非 GET 请求的 CSRF 检查 | 已交付 | Go 标准库 `CrossOriginProtection` 校验 `Sec-Fetch-Site` 和 `Origin`，JSON 写接口校验 `Content-Type`。见已关闭的 [issue 64](https://github.com/Duang777/waybill-guardian/issues/64)。 |
-| Docker Compose | 已交付 | 单容器提供前端和 API，可选 PostgreSQL 17 profile。 |
-| GitHub Actions | 已交付 | PR 和 main 运行 Go、Web、PostgreSQL、许可与镜像检查。 |
-| 白色工业沙盘与证据联动 | 已交付 | 初赛范围已完成，覆盖全国港网、证据定位、录屏布局和移动端。见已关闭的 [issue 77](https://github.com/Duang777/waybill-guardian/issues/77)。 |
+| 同一 effect 10 个并发请求 | platform 只执行一次，其余调用等待或回放结果 | `TestConcurrentExecuteRunsEffectOnce` |
+| 两个审批决定并发到达 | run 锁和状态机只接受一个决定 | `TestConcurrentConfirmResumesRunOnce`、`TestDecisionConflict` |
+| 服务在审批后重启 | 重建审批并恢复同一个 Agent thread | `TestRecoverReplaysConfirmedApproval` |
+| 提案已落盘但审批未创建 | 从 proposal checkpoint 物化审批，不再次调用模型 | `TestRecoverUsesPreparedProposalWithoutCallingModelAgain` |
+| 外部写入结果未知 | 查询外部结果，不重复 dispatch | `TestRecoverReconcilesStartedEffectWithoutStoppingService` |
+| 单个 run 审计损坏 | 隔离损坏 run，其余 run 和 outbox 继续恢复 | `TestPrepareRecoveryQuarantinesOnlyDamagedRun` |
+| SSE 断线重连 | 从 `Last-Event-ID` 之后回放，再接 live | `TestHTTPDemoFlowAndSSECursor` |
+| 乱序修正事件 | reducer 与输入顺序无关并最终收敛 | `TestReduceCorrectionBeforeTargetConverges` |
+| 模型引用错误证据 | proposal 编译失败并进入修复或人工复核 | `internal/proposal/proposal_test.go` |
+| Agent history 含敏感字段 | 保存和加载边界直接拒绝 | `internal/agent/history_guard_test.go` |
+
+GitHub Actions 对 pull request 和 `main` 运行 Go、race、Web、PostgreSQL 17、恢复稳定性、许可证和容器检查。
 
 ## 演示
 
-讲稿在 [`docs/demo-script.md`](docs/demo-script.md)。正式演示默认调用在线模型：
+正式演示使用在线模型。配置任一兼容 Responses 或 Chat Completions 的模型服务：
 
 ```bash
 export LLM_API_STYLE=chat_completions
@@ -188,110 +320,198 @@ export LLM_MODEL=deepseek-v4-flash
 ./scripts/demo.sh
 ```
 
-无模型凭据时，显式启动离线回放：
+打开 <http://127.0.0.1:5173>。
 
-```bash
-AGENT_MODE=offline ./scripts/demo.sh
-```
+1. 在经营总览选择异常运单，点击 **交给 Agent**。
+2. Agent 查询运单、轨迹、司机和天气，页面实时显示六阶段进度。
+3. 证据账本展示连续驾驶、异常停留和天气预警。每条归因可以定位到工具结果。
+4. 审批卡片展示候选承运商、排序依据和待执行动作。此时平台写入尚未发生。
+5. 点击 **确认并执行**。服务端恢复同一个 thread，并按 effect 身份执行写操作。
+6. 展开 **完整审计记录**，从第一条事件回放，再点击 **实时** 回到末尾。
+7. 重新处置并驳回首选方案。Agent 读取驳回原因后提交第二候选方案。
 
-打开 <http://127.0.0.1:5173> 查看经营总览。选择异常运单后点击 **交给 Agent**，或下钻到 `/waybills/:id` 处理单张运单。单运单工作台仍可点击 **启动处置**。`POST /api/demo/trigger` 会启动内置运单。
+已发布的 [1920×1080 中文配音演示](https://github.com/Duang777/waybill-guardian/releases/download/demo-v1.0.0/waybill-guardian-demo-1920-zh.mp4)包含中文字幕和系统合成音轨。配音稿见 [`docs/demo-script.md`](docs/demo-script.md#60-秒配音稿)。
 
-1. Agent 查询杭州到成都运单 `YD2026101001`。
-2. 六阶段运行带显示处置进度，证据账本登记可定位的关键事实，底部审计抽屉记下运单、轨迹、司机和天气四次工具调用。
-3. 在线模型根据工具结果输出结构化归因、候选方案和证据引用。内置样例里连续驾驶 9 小时并有疲劳预警，绵阳北服务区停留 6 小时，天气预警是 `none`。这三个写操作此时还没有执行。
-4. 点击 **确认并执行**。审计记录出现平台写入，运单状态变为处置完成。
-5. 展开 **完整审计记录**，用回放控件从第一条事件再看一遍，然后点 **实时** 回到末尾。
-6. 如果驳回首选承运商，Agent 会继续处理人工决定。离线 `ScenarioModel` 会改提蜀道联运，`npm run verify:e2e` 覆盖了确认三次和驳回一次。
-
-已发布的 [1920×1080 中文配音版](https://github.com/Duang777/waybill-guardian/releases/download/demo-v1.0.0/waybill-guardian-demo-1920-zh.mp4)
-带画面内字幕和系统合成音轨。配音稿在 [`docs/demo-script.md`](docs/demo-script.md#60-秒配音稿)，
-没有使用克隆声音。
-
-生成带中文字幕、没有音轨的源录像：
+生成演示录像：
 
 ```bash
 cd web
 npm run record:demo
 ```
 
-录像脚本继承上面的模型配置，并默认使用 `online`。无凭据试录时运行 `AGENT_MODE=offline npm run record:demo`。输出在 `web/artifacts/waybill-guardian-demo.mp4`，默认分辨率为 1600×900。正式高清录制使用：
+生成 1920×1080 版本：
 
 ```bash
 RECORD_RESOLUTION=1920x1080 npm run record:demo
 ```
 
-`RECORD_RESOLUTION` 只接受 `1600x900` 和 `1920x1080`。输出目录被 git 忽略。可用
-`RECORD_OUTPUT`、`RECORD_BACKEND_PORT` 和 `RECORD_WEB_PORT` 改输出路径和端口。
-
 ## 快速开始
 
-### Docker
+### 本地工具链
 
-只需安装 Docker。以下命令构建单个应用镜像，并在
-<http://127.0.0.1:8080> 同时提供前端和 API：
+需要 Go 1.25.3 或更高版本，以及 Node.js 22.12 或更高版本。
 
 ```bash
 git clone https://github.com/Duang777/waybill-guardian.git
 cd waybill-guardian
-AGENT_MODE=offline docker compose up --build
-```
 
-应用端口只发布到宿主机 loopback。审计与 Agent history 保存在 `app-data` 命名卷中。
-停止服务使用 `docker compose down`；需要同时删除演示数据时使用
-`docker compose down --volumes`。
+export LLM_API_STYLE=chat_completions
+export LLM_BASE_URL=https://api.deepseek.com
+export LLM_API_KEY=replace-me
+export LLM_MODEL=deepseek-v4-flash
 
-可选的 PostgreSQL 17 演示使用 `prod` profile：
-
-```bash
-cp .env.example .env
-docker compose up --build
-```
-
-复制后的 `.env` 会通过 `COMPOSE_PROFILES=prod` 持续启用 PostgreSQL，避免后续启动切回
-JSONL。示例中的数据库密码和 checkpoint key 只供本机演示。真实部署必须替换这些值，改用
-`AUTH_MODE=jwt`，并在 HTTPS 入口后运行服务。修改 PostgreSQL 密码时，还要把
-`DATABASE_URL` 中的密码改为对应的 URL 编码值。
-
-### 本地工具链
-
-需要 Go 1.25.3 或更高版本，以及 Node.js 22.12 或更高版本。本次核对使用 Go 1.25.3 和
-Node.js 24.16.0。`./scripts/demo.sh` 能把 API 和前端拉起来，`npm run verify:e2e` 已通过。
-
-```bash
 ./scripts/demo.sh
 ```
 
-脚本在缺少 `web/node_modules/.bin/vite` 时先执行 `npm ci`，然后编译 API 并启动前端。就绪后打印 `Waybill Guardian is ready`。`Ctrl+C` 会停掉两个进程。
+脚本安装前端依赖、编译 Go 服务，并启动 API 与 Web。就绪后会打印访问地址。按 `Ctrl+C` 同时停止两个进程。
 
-换端口和数据目录：
+### Docker
 
 ```bash
-BACKEND_PORT=18080 WEB_PORT=15173 DATA_DIR=/tmp/waybill-demo ./scripts/demo.sh
+git clone https://github.com/Duang777/waybill-guardian.git
+cd waybill-guardian
+
+LLM_API_STYLE=chat_completions \
+LLM_BASE_URL=https://api.deepseek.com \
+LLM_API_KEY=replace-me \
+LLM_MODEL=deepseek-v4-flash \
+docker compose up --build
 ```
 
-检查命令：
+打开 <http://127.0.0.1:8080>。Compose 只把应用端口发布到宿主机 loopback，容器使用只读根文件系统，并删除全部 Linux capabilities。
+
+启用 PostgreSQL 17：
+
+```bash
+COMPOSE_PROFILES=prod \
+STORAGE=postgres \
+DATABASE_URL='postgres://waybill:waybill@postgres:5432/waybill?sslmode=disable' \
+CHECKPOINT_ENCRYPTION_KEY='MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=' \
+LLM_API_STYLE=chat_completions \
+LLM_BASE_URL=https://api.deepseek.com \
+LLM_API_KEY=replace-me \
+LLM_MODEL=deepseek-v4-flash \
+docker compose up --build
+```
+
+示例数据库口令和 checkpoint key 只用于本机启动。部署时必须替换，并在 HTTPS 入口后使用 `AUTH_MODE=jwt`。
+
+## 数据与平台接入
+
+### JSON 和 CSV 数据
+
+数据接口支持 JSON 或 CSV v1。字段模板位于：
+
+- [`data/templates/waybills-v1.json`](data/templates/waybills-v1.json)
+- [`data/templates/waybills-v1.csv`](data/templates/waybills-v1.csv)
+
+服务启动前严格检查引用、坐标、时间顺序和网络拓扑：
+
+```bash
+go run ./cmd/dataimport validate --data ./data/templates/waybills-v1.json
+go run ./cmd/dataimport validate --data ./data/templates/waybills-v1.csv
+```
+
+使用业务数据启动：
+
+```bash
+PLATFORM=file \
+DATA_FILE=/absolute/path/to/waybills-v1.json \
+AGENT_MODE=online \
+LLM_API_STYLE=chat_completions \
+LLM_BASE_URL=https://api.deepseek.com \
+LLM_API_KEY=replace-me \
+LLM_MODEL=deepseek-v4-flash \
+./scripts/demo.sh
+```
+
+数据格式和校验规则见 [`docs/file-data-source-design.md`](docs/file-data-source-design.md)。
+
+### 企业平台 adapter
+
+`internal/platform` 定义读取、写入、结果查询和恢复契约。Agent、审批、幂等和审计只依赖这些接口。企业接入时替换 adapter 和凭据，不需要修改 Agent loop。
+
+仓库提供 HTTP 改派 adapter，并为理赔和通知保留同一 effect 执行协议。平台接入设计见 [`docs/RFC-002.md`](docs/RFC-002.md) 和 [`docs/real-write-adapter-design.md`](docs/real-write-adapter-design.md)。
+
+### CloudEvents
+
+PostgreSQL 模式注册 `POST /v1/events`。启用 outbox 后，服务使用带 Bearer 认证的 HTTPS publisher 发送 structured CloudEvents。
+
+```text
+Content-Type: application/cloudevents+json
+specversion: 1.0
+```
+
+当前事件 profile 支持延误发现和延误修正。事件 schema、规范哈希和 reducer 位于 [`internal/events`](internal/events)。
+
+## 主要配置
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `LLM_API_STYLE` | `responses` | `responses` 或 `chat_completions` |
+| `LLM_BASE_URL` | 空 | 模型 API 根路径 |
+| `LLM_API_KEY` | 空 | 只从运行环境读取 |
+| `LLM_MODEL` | 空 | 提供商当前可用的模型 ID |
+| `LLM_REQUEST_TIMEOUT` | `45s` | 一次逻辑模型调用的总时限 |
+| `LLM_MAX_OUTPUT_TOKENS` | `4096` | 单次 provider 请求的输出上限 |
+| `BRIEF_TIMEOUT` | `8s` | 经营简报调用时限 |
+| `MAX_CONCURRENT_RUNS` | `8` | 同时调查的 run 数量，范围 1 至 64 |
+| `APPROVAL_TTL` | `10m` | 审批有效期 |
+| `HISTORY_RETENTION` | `168h` | 已结束 Agent history 的保留期 |
+| `EVIDENCE_STEP_MINUTES` | `8` | 人工完成一次证据采集的估算分钟数 |
+| `STORAGE` | `jsonl` | `jsonl` 或 `postgres` |
+| `AUTH_MODE` | `local` | `local` 或 `jwt` |
+| `DATA_FILE` | 空 | JSON 或 CSV v1 文件路径 |
+| `OUTBOX_ENABLED` | `false` | 启用 CloudEvents dispatcher |
+| `METRICS_ADDR` | 空 | Prometheus 指标监听地址 |
+
+国产模型兼容配置示例：
+
+| 提供商 | API 风格 | `LLM_BASE_URL` | 模型示例 |
+|---|---|---|---|
+| 阿里云百炼千问 | Chat Completions | `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| DeepSeek | Chat Completions | `https://api.deepseek.com` | `deepseek-v4-flash` |
+| 火山方舟豆包 | Chat Completions | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-1-6-251015` |
+| Kimi | Chat Completions | `https://api.moonshot.cn/v1` | `kimi-k3` |
+| 智谱 GLM | Chat Completions | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.3` |
+
+模型 ID、价格和数据处理规则由提供商维护。部署前请核对对应服务条款。相关入口登记在 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+
+## 安全与合规
+
+- 写工具必须经过人工审批，模型无法关闭该要求。
+- JWT 校验 RS256、issuer、audience、时效、tenant、role 和 waybill scope。
+- 非安全 HTTP 方法使用 Go `CrossOriginProtection` 校验来源。
+- JSON 写接口校验 `Content-Type` 并拒绝未知字段。
+- 读工具不向模型返回电话、车牌和精确坐标。
+- Agent history guard 拒绝电话、车牌、精确坐标和通知供应商参数。
+- 运营接口对电话和车牌做脱敏。
+- PostgreSQL 中的 Agent history 使用 AES-256-GCM 加密。
+- 外部 outbox 地址除 loopback 测试地址外必须使用 HTTPS。
+- 容器使用只读根文件系统、`no-new-privileges` 和空 capability 集合。
+
+模型调用会把受限后的运营证据发送给部署方选择的提供商。部署方需要按企业规则配置模型、数据处理协议、密钥托管和网络出口。
+
+## 验证
+
+后端检查：
 
 ```bash
 go test ./...
 go test -race ./...
 go vet ./...
 go build ./...
-./scripts/check-production-fixture-literals.sh
 ./scripts/check-history-governance.sh
 ./scripts/licenses.sh
 ```
 
-`scripts/licenses.sh` 固定依赖扫描器版本，并核对已提交的 Go 和 Web 生产依赖许可清单。
-依赖变化后运行 `./scripts/licenses.sh --write` 更新清单，再提交生成结果。
-
-`./scripts/test-postgres.sh` 用 Docker 启动临时 PostgreSQL 17，检查迁移、事务、租约、加密
-history 和浏览器完整流程。
+PostgreSQL 17 集成检查：
 
 ```bash
 ./scripts/test-postgres.sh
 ```
 
-前端检查和浏览器流程：
+前端和浏览器流程：
 
 ```bash
 cd web
@@ -303,296 +523,44 @@ npm run verify:file-e2e
 npm run verify:overview
 ```
 
-GitHub Actions 会在 pull request 和 `main` 推送上运行 Go race、恢复稳定性、PostgreSQL
-17、Web、许可证与 Docker 检查。浏览器 E2E 每日定时运行，也可在 Actions 页面手动触发；
-运行结果会上传 `web/artifacts/*.png`。
+浏览器验收覆盖启动、取证、审批、改派、通知、驳回、第二候选方案、审计回放、文件数据、经营总览和响应式布局。
 
-## 配置
+## 仓库地图
 
-`./scripts/demo.sh` 会读取下面四项，并默认从前端地址生成 `ALLOWED_ORIGINS`；其余变量从当前 shell 继承。直接运行 `go run ./cmd/server` 时，监听地址用 `HTTP_ADDR`，默认 `127.0.0.1:8080`。
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `BACKEND_HOST` | `127.0.0.1` | API 监听地址，只给 `demo.sh` 使用 |
-| `BACKEND_PORT` | `8080` | API 端口，只给 `demo.sh` 使用 |
-| `WEB_HOST` | `127.0.0.1` | 前端监听地址，只给 `demo.sh` 使用 |
-| `WEB_PORT` | `5173` | 前端端口，只给 `demo.sh` 使用 |
-| `HTTP_ADDR` | `127.0.0.1:8080` | 服务监听地址。local 模式必须是 loopback IP |
-| `ALLOWED_ORIGINS` | 空 | 逗号分隔的可信浏览器来源，格式为精确的 `scheme://host[:port]`。仅跨来源部署需要配置 |
-| `WEB_STATIC_DIR` | 空 | 由 Go 服务托管的前端构建目录。容器内是 `/app/web` |
-| `ALLOW_NON_LOOPBACK_LOCAL` | `false` | 允许 local 模式监听非 loopback IP，只供端口绑定到宿主机 loopback 的容器使用 |
-| `LOCAL_TRUSTED_REMOTE` | 空 | 上一项为 `true` 时必填。请求 TCP 对端必须匹配该 IP、主机名或 `container-gateway` |
-| `DATA_DIR` | `data` | JSONL 审计和 hastekit history 目录 |
-| `AGENT_MODE` | 入口相关 | `demo.sh`、录像和容器默认 `online`；直接运行服务默认 `offline`。`demo` 是 `offline` 的兼容别名 |
-| `LLM_API_STYLE` | `responses` | `online` 模式使用 `responses` 或 `chat_completions` |
-| `LLM_BASE_URL` | 空 | `online` 模式必填。模型 API 根路径，不能包含具体 endpoint |
-| `LLM_API_KEY` | 空 | `online` 模式必填。只从运行环境读取 |
-| `LLM_MODEL` | 空 | `online` 模式必填。提供商当前可用的模型 ID |
-| `LLM_REQUEST_TIMEOUT` | `45s` | 一次逻辑模型调用的总时限，覆盖首次请求、结构修复和 provider 重试，必须为正 Go duration |
-| `LLM_MAX_OUTPUT_TOKENS` | `4096` | 单次 provider 请求的最大输出 token，范围 1 到 32768 |
-| `PLATFORM` | `mock` | `mock` 使用内置样例。`file` 加载 `DATA_FILE`。`real` 使用改派沙箱，见下文 |
-| `DATA_FILE` | 空 | `PLATFORM=file` 时必填，指向一份 JSON 或 CSV v1 |
-| `MAX_CONCURRENT_RUNS` | `8` | 同时执行调查阶段的 run 数量，范围 1 到 64 |
-| `EVIDENCE_STEP_MINUTES` | `8` | 人工完成一次证据采集的估算分钟数，必须为正数 |
-| `STORAGE` | `jsonl` | `jsonl` 或 `postgres` |
-| `AUTH_MODE` | `local` | `local` 或 `jwt` |
-| `APPROVAL_TTL` | `10m` | 审批有效期，Go duration。非法值会退回默认值 |
-| `HISTORY_RETENTION` | `168h` | 已结束 Agent history 的保留期，必须为正数 |
-| `DEMO_STEP_DELAY` | `220ms` | 脚本模型每一步的等待 |
-| `TENANT_ID` | `local-demo` | JWT 模式必须显式设置 |
-| `INSTANCE_ID` | 随机 UUID | PostgreSQL 租约里的 worker 身份 |
-
-### 文件数据
-
-仓库里的 v1 模板是 [`data/templates/waybills-v1.json`](data/templates/waybills-v1.json) 和 [`data/templates/waybills-v1.csv`](data/templates/waybills-v1.csv)。用与服务端相同的 loader 校验：
-
-```bash
-go run ./cmd/dataimport validate --data ./data/templates/waybills-v1.csv
-go run ./cmd/dataimport validate --data ./data/templates/waybills-v1.json
-```
-
-两条命令分别打印 `valid dataset=template-v1 format=csv waybills=1 anomalies=1` 和 `valid dataset=template-v1 format=json waybills=1 anomalies=1`。把路径换成自己的 v1 文件即可。仓库里没有 `official-v1.csv`。
-
-校验通过后启动文件模式：
-
-```bash
-PLATFORM=file \
-DATA_FILE=./data/templates/waybills-v1.csv \
-DATA_DIR=/tmp/waybill-file-demo \
-AGENT_MODE=offline \
-./scripts/demo.sh
-```
-
-Compose 将仓库的 `data/` 目录只读挂载到 `/app/data`。容器内运行模板数据：
-
-```bash
-COMPOSE_PROFILES= STORAGE=jsonl PLATFORM=file AGENT_MODE=offline \
-DATA_FILE=/app/data/templates/waybills-v1.json \
-docker compose up --build
-```
-
-`PLATFORM=file` 还要求 `STORAGE=jsonl` 和 `AUTH_MODE=local`。服务启动时一次性加载完整文件。语法、引用、坐标或时间顺序错误会在监听端口前失败。运行期间不会热更新，替换文件后需要重启。字段和校验规则见 [`docs/file-data-source-design.md`](docs/file-data-source-design.md)。页面上的运单选择器列出文件中的运单。
-
-仓库还提供固定生成规则的非官方仿真数据，包含 72 个公路港、72 条线路、200 台车辆、200 张运单和 5 类异常：
-
-```bash
-env -u GOROOT go run ./cmd/datagenerate \
-  --output ./data/simulated/waybills-v1.json \
-  --waybills 200
-
-env -u GOROOT go run ./cmd/dataimport validate \
-  --data ./data/simulated/waybills-v1.json
-```
-
-`hubs`、`vehicles`、`routes` 以及运单上的港口、线路、车辆引用是 v1 的可选网络扩展。
-一旦文件提供任一网络实体，校验器会要求三类实体和全部引用同时完整，避免聚合视图读取到
-半套拓扑。仿真数据只用于产品演示和容量验证，不代表真实经营数据。
-
-### 经营总览和 KPI
-
-`GET /api/overview` 返回授权范围内的港口、线路、异常队列和三条经营简报。服务先按
-`waybill_id` 授权范围过滤，再计算所有总数和比例。`AGENT_MODE=offline` 返回确定性简报，
-`demo` 是兼容别名。
-`AGENT_MODE=online` 使用独立的无工具、无历史模型调用生成简报。模型只接收不含运单、线路、
-港口、人员或车辆身份的聚合计数，并只能引用服务端提供的证据 ID。服务端据此重建展示引用。
-服务按授权运单范围、数据时间和模型可见聚合内容缓存结果，相同内容的连续请求只生成一次。
-模型调用、解析、隐私或引用校验失败时，接口仍以 HTTP 200 返回确定性简报，并返回稳定的
-`fallback_reason`。页面显示配置的模型名或“规则模板”。`BRIEF_TIMEOUT` 默认是 `8s`。
-
-页面从同一份总览快照生成异常构成和高异常占比线路图，并用 SSE 投影更新当前处置状态图。
-接口没有历史桶、上期快照或人工基线时，页面不显示趋势、环比或处置漏斗。
-
-`POST /api/runs:batch` 接受最多 20 个 `waybill_id`。服务为每个运单调用一次 `StartRun`，
-并返回逐项成功或失败结果。`MAX_CONCURRENT_RUNS` 限制同时执行的调查任务。每个已接受的
-run 使用独立的 `run_id`、审批记录和 SSE 时间线。
-
-`GET /api/kpis?window=24h` 使用以下口径。窗口结束时间取授权范围内最新异常运单的
-`last_recorded_at`。如果审计事件更新，则使用较新的审计时间。
-
-| KPI | 公式 | 数据不足时的结果 |
-|---|---|---|
-| 已实现时效挽回 | 最新 run 已完成，且同一 approval 先有人工 `confirmed`、再有系统 `approval_executed`，`sum(no_action_eta_hours - post_action_eta_hours)` | 任一入选运单缺少完整影响数据时返回 `unavailable`；没有入选运单时返回 `0` |
-| 已实现成本影响 | 最新 run 已完成，且同一 approval 先有人工 `confirmed`、再有系统 `approval_executed`，`sum(avoided_penalty_cents - reassign_delta_cents - handling_cost_cents) / 100` | 任一入选运单缺少完整影响数据时返回 `unavailable`；没有入选运单时返回 `0` |
-| 人力节省 | `成功自动证据采集步数 * EVIDENCE_STEP_MINUTES / 60` | 没有采集事件时返回 `0` 小时 |
-| 异常闭环率 | `已完成或已驳回处置的异常运单数 / 窗口内异常运单数 * 100%` | 没有异常运单时返回 `0%` |
-| 平均处置时长 | `sum(终态时间 - 启动时间) / 窗口内闭环 run 数` | 没有闭环 run 时返回 `unavailable` |
-| 人工审批通过率 | `人工确认数 / 人工决定数 * 100%` | 没有人工决定时返回 `unavailable` |
-
-JSON 运单可选提供完整 `impact` 对象；CSV 可选提供同名的五列扩展。五个值必须整组出现。
-ETA 使用小时，金额使用整数分，服务先以整数分求和，最后统一换算为元。仿真数据为已执行
-运单提供可复现的执行后估算；正式 adapter 必须提供同一口径的基线、结果和成本事实，服务
-不会用均值或默认值补齐缺失记录。没有符合执行条件的运单时，两项指标均为可用的零值。
-
-### 在线模型
-
-以下示例使用 DeepSeek 的 Chat Completions 接口：
-
-```bash
-AGENT_MODE=online \
-LLM_API_STYLE=chat_completions \
-LLM_BASE_URL=https://api.deepseek.com \
-LLM_API_KEY=replace-me \
-LLM_MODEL=deepseek-v4-flash \
-./scripts/demo.sh
-```
-
-可选国产模型的 Chat Completions 配置如下。模型 ID、接口能力和价格会调整，运行前查看对应官方文档。
-
-| 提供商 | `LLM_API_STYLE` | `LLM_BASE_URL` | `LLM_MODEL` 示例 | 官方资料 |
-|---|---|---|---|---|
-| 阿里云百炼千问 | `chat_completions` | `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | [接入](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions) · [计费](https://help.aliyun.com/zh/model-studio/model-pricing) |
-| DeepSeek | `chat_completions` | `https://api.deepseek.com` | `deepseek-v4-flash` | [接入](https://api-docs.deepseek.com/zh-cn/) · [计费](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) |
-| 火山方舟豆包 | `chat_completions` | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-1-6-251015` | [接入](https://www.volcengine.com/docs/82379/1399008) · [计费](https://www.volcengine.com/docs/82379/1544106) |
-| Kimi | `chat_completions` | `https://api.moonshot.cn/v1` | `kimi-k3` | [接入](https://platform.kimi.com/docs/get-api-key) · [计费](https://platform.kimi.com/docs/pricing/chat) |
-| 智谱 GLM | `chat_completions` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.3` | [接入](https://docs.bigmodel.cn/cn/guide/develop/openai/introduction) · [计费](https://docs.bigmodel.cn/cn/guide/start/pricing) |
-
-`LLM_API_STYLE` 默认是 `responses`。`LLM_BASE_URL` 必须是 API 根路径，不能以 `/` 结尾，也不能带上 `/responses` 或 `/chat/completions`。在线模式只配置一个 provider，没有 provider fallback。每次 provider 请求最多输出 4096 token；一次处置 Agent 逻辑调用最多持续 45 秒，期间首次请求和一次结构修复各自最多尝试三次。经营简报使用独立的 `BRIEF_TIMEOUT`，默认 `8s`，每次 provider 尝试分别计时。服务还把 assistant 提案文本限制为 32 KiB，修复请求最多回灌 4 KiB 失败文本。读工具只返回白名单字段，并限制文本和数组大小；模型必须把其中的文字视为不可信业务数据，不能当作指令执行。服务会把每次逻辑调用的 token 用量和时延写入审计事件。
-
-调用模型会产生费用，并把脱敏后的运单证据发送给所选提供商。部署方必须在调用前核对当前模型名、价格、数据处理规则和服务条款。各家的条款入口登记在 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。仓库的自动测试只验证兼容协议，不替代真实服务验收。
-
-在线经营简报不复用处置 Agent，也不改变 issue 59 的处置推理范围。
-
-### 平台
-
-`PLATFORM=mock` 不访问外部系统。
-
-`PLATFORM=real` 还要求：
-
-| 变量 | 要求 |
+| 路径 | 职责 |
 |---|---|
-| `STORAGE` | `postgres` |
-| `AUTH_MODE` | `jwt` |
-| `REAL_PLATFORM_PROFILE` | `tms-reassign-sandbox-v1` |
-| `REAL_READ_SOURCE` | `fixture-v1` |
-| `TMS_SANDBOX_BASE_URL` | 沙箱根地址 |
-| `TMS_SANDBOX_TOKEN` | Bearer token |
-| `TMS_SANDBOX_ACCOUNT` | 必须等于 `TENANT_ID` |
-
-相关超时有 `PLATFORM_REQUEST_TIMEOUT`（默认 `3s`）、`PLATFORM_STARTUP_TIMEOUT`（默认 `5s`）、`EFFECT_RECONCILE_HORIZON`（默认 `24h`）、`EFFECT_RECONCILE_POLL_INTERVAL`（默认 `1s`）和 `PLATFORM_MAX_LOOKUP_CONSISTENCY_WINDOW`（默认 `30s`）。
-
-### 存储、认证和 outbox
-
-`STORAGE=postgres` 时必须提供 `DATABASE_URL` 和 `CHECKPOINT_ENCRYPTION_KEY`。后者是 Base64 编码的 32 字节 AES-256 key。`CHECKPOINT_KEY_ID` 默认 `local-v1`。
-
-连接池：`PG_MAX_CONNS` 默认 8，`PG_MIN_CONNS` 默认 0，`PG_STARTUP_TIMEOUT` 默认 `30s`。`RUN_LEASE_TTL` 默认 `30s`，`EFFECT_LEASE_TTL` 默认 `15s`。
-
-`AUTH_MODE=jwt` 还要 `AUTH_JWT_ISSUER`、`AUTH_JWT_AUDIENCE` 和 `AUTH_JWT_PUBLIC_KEY_FILE`。公钥是 PEM 编码的 RSA 公钥。JWT 需要 `sub`、`tenant_id`、`roles`，以及 `waybill_all=true` 或非空 `waybill_ids`。角色可以是 `viewer`、`dispatcher`、`operator`、`event_producer`。服务不终止 TLS。非 loopback 部署要放在 HTTPS 入口后面。
-
-`POST /v1/events` 只在 PostgreSQL 模式注册。outbox dispatcher 默认关闭。`OUTBOX_ENABLED=true` 时必须提供 `OUTBOX_URL` 和 `OUTBOX_TOKEN`。除 loopback 测试地址外，`OUTBOX_URL` 必须是 HTTPS。`METRICS_ADDR` 例如 `127.0.0.1:9090`，在独立端口的 `/metrics` 暴露 Prometheus 指标。这两项都要求 PostgreSQL。
-
-| 变量 | 默认值 |
-|---|---|
-| `OUTBOX_BATCH_SIZE` | `10`，最大 100 |
-| `OUTBOX_CONCURRENCY` | `4`，最大 100 |
-| `OUTBOX_POLL_INTERVAL` | `250ms` |
-| `OUTBOX_LEASE_TTL` | `30s` |
-| `OUTBOX_STATS_INTERVAL` | `15s` |
-| `OUTBOX_HTTP_TIMEOUT` | `10s` |
-
-### 前端
-
-把高德配置写进 `web/.env.local`。该文件已被 git 忽略。
-
-```dotenv
-VITE_AMAP_KEY=replace-me
-VITE_AMAP_SECURITY_JS_CODE=replace-me
-```
-
-未配置高德时，工作台默认使用本地轨迹示意，不请求外部底图。仅本地开发需要
-OpenFreeMap 时，可设置 `VITE_VECTOR_MAP=openfreemap`。公开演示不要使用该选项。
-
-`VITE_API_TARGET` 是 Vite 开发代理的 API 地址，默认 `http://127.0.0.1:8080`。`demo.sh`
-会把它设成当前 API。
-
-### 删除 Agent history
-
-先停掉服务。删除本地 history：
-
-```bash
-rm -rf "${DATA_DIR:-data}/hastekit"
-```
-
-PostgreSQL 按租户删除 history，并清掉已结束 run 的 checkpoint 指针：
-
-```sql
-BEGIN;
-DELETE FROM waybill.agent_summaries WHERE tenant_id = :'tenant_id';
-DELETE FROM waybill.agent_checkpoints WHERE tenant_id = :'tenant_id';
-UPDATE waybill.runs
-SET sdk_run_id = NULL, checkpoint_version = 0
-WHERE tenant_id = :'tenant_id'
-  AND status IN ('completed', 'rejected', 'failed', 'manual_review');
-COMMIT;
-```
-
-不要清理仍在运行的 run。删除 history 不会删除 `waybill.audit_events`。
-
-## 安全与合规
-
-写工具带有 `RequiresApproval`。hastekit 在工具执行前把 run 停在 `await_approval`。人工决定先写入审计，服务再用同一个 thread 恢复。确认、驳回和超时争用同一把 run 锁，所以只会落下一种决定。超时按驳回恢复 Agent。默认有效期是 10 分钟。
-
-模型只提交业务参数。服务端生成 `effect_id` 和幂等键。middleware 在恢复执行时核对 `call_id`、参数哈希和 `effect_id`。同一幂等键的并发调用会合并。测试里 10 个并发调用只进入 platform 一次。已经失败的调用可以按新的 attempt 重试。如果外部系统已经成功，但本地成功事件还没写上，状态是 indeterminate，服务不会自动重试。真实 adapter 必须能按同一个键重试，或按键查询结果。
-
-审计事件追加写入。`seq`、`prev_hash` 和 `hash` 用来检查这条链有没有被改过。SSE 先按游标回放，再推 live 事件。
-
-读工具返回给模型的字段不包括电话、车牌和精确坐标。短信工具只接收运单、接收方角色和承运商。电话和模板在审批之后由服务端解析。history guard 拒绝把电话、车牌、精确坐标和短信供应商参数写进模型 history。运营接口里的电话和车牌会打码。地图接口仍会返回轨迹坐标，供控制台画线。
-
-`AUTH_MODE=local` 默认只监听 loopback IP，并拒绝 Host 不是 loopback IP 的请求。容器通过
-`ALLOW_NON_LOOPBACK_LOCAL=true` 监听通配地址，同时用
-`LOCAL_TRUSTED_REMOTE=container-gateway` 校验 TCP 对端。Compose 只把端口发布到宿主机
-loopback。审批主体固定为 `local-demo-reviewer`。客户端送来的 `Authorization` 和
-`X-Actor` 不决定身份。
-
-API 的非安全方法由 Go 标准库 `CrossOriginProtection` 校验 `Sec-Fetch-Site` 和 `Origin`。
-同源请求、`ALLOWED_ORIGINS` 中精确匹配的来源，以及不带浏览器来源头的 CLI/服务调用会
-放行；其他跨站浏览器请求返回 403。审批确认、驳回和演示触发还要求
-`Content-Type: application/json`；无参数请求发送 `{}`。
+| `cmd/server` | HTTP、SSE、认证、事件入口和进程生命周期 |
+| `internal/guardian` | run 协调、风险评分、批量启动、恢复和 KPI |
+| `internal/agent` | hastekit 组装、工具边界、模型预算和提案修复 |
+| `internal/proposal` | `proposal.v1` 严格解析、证据引用和摘要 |
+| `internal/approval` | 审批状态机和授权 |
+| `internal/idempotency` | effect 身份、并发合并、重试和结果核对 |
+| `internal/audit` | 追加式事件、哈希链、回放和订阅 |
+| `internal/events` | CloudEvents profile、规范哈希和 incident reducer |
+| `internal/outbox` | 有界 dispatcher、租约续期和重试 |
+| `internal/storage/postgres` | 事务存储、run 租约、effect 租约和加密 history |
+| `internal/platform` | 企业 TMS、天气、理赔和通知 adapter 边界 |
+| `internal/tools` | 七个 typed tools 和字段白名单 |
+| `web` | React 经营总览、工作台、地图、图表和审计时间线 |
 
 ## 开源声明
 
-直接依赖、npm 包和参考项目写在 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+项目使用 [Apache License 2.0](LICENSE)。直接依赖、传递依赖和参考项目写在 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)，Go 和 Web 许可清单位于 [`docs/licenses/`](docs/licenses/)。
 
-hastekit `agent-sdk-go` v0.0.24 以 Go module 引入，许可证是 Apache-2.0。本仓库没有复制它的源码。
+hastekit `agent-sdk-go` v0.0.24 以 Go module 引入。本仓库没有复制其源码。
 
-下面三个项目只用来比较交互和领域划分，没有源文件进入本仓库：
+以下项目用于比较交互和领域划分，没有源文件进入本仓库：
 
 - [jattiphrswan/logistics-tracker](https://github.com/jattiphrswan/logistics-tracker)
 - [09karankr/port-logistics-intelligence](https://github.com/09karankr/port-logistics-intelligence)
 - [dominicfinn/open_tms](https://github.com/dominicfinn/open_tms)
 
-## 路线图
-
-| 议题 | 内容 |
-|---|---|
-| [59](https://github.com/Duang777/waybill-guardian/issues/59) | 演示改为真实模型推理，补结构化证据引用 |
-| [60](https://github.com/Duang777/waybill-guardian/issues/60) | 已关闭。启动时加载 JSON 或 CSV v1，并在页面上选择运单 |
-| [61](https://github.com/Duang777/waybill-guardian/issues/61) | 已完成。多公路港总览、价值 KPI、只读模型简报和批量启动 |
-| [62](https://github.com/Duang777/waybill-guardian/issues/62) | 已完成。Apache-2.0、传递依赖清单和 `.mailmap` |
-| [64](https://github.com/Duang777/waybill-guardian/issues/64) | 已完成。非 GET 请求的跨站检查和 JSON `Content-Type` 校验 |
-| [65](https://github.com/Duang777/waybill-guardian/issues/65) | 已完成。单容器镜像和 Docker Compose |
-| [67](https://github.com/Duang777/waybill-guardian/issues/67) | 已完成。GitHub Actions |
-| [68](https://github.com/Duang777/waybill-guardian/issues/68) | 已完成仓库侧内容。README 包含评审入口、架构闭环、价值口径、数据替换步骤和 60 秒中文配音演示 |
-| [77](https://github.com/Duang777/waybill-guardian/issues/77) | 已完成初赛范围。全国港网、证据联动、录屏布局和移动端已交付。Issue 70、72、74、76 保持独立 P2 |
-
-生产化处置链路见 [issue 44](https://github.com/Duang777/waybill-guardian/issues/44)。
-
-社交预览图在 [`docs/assets/social-preview.png`](docs/assets/social-preview.png)，尺寸 1280×640。GitHub 仓库设置里的 Social preview 需要单独上传，这个文件不会自动变成那张图。
-
-## 许可证
-
-项目使用 [Apache License 2.0](LICENSE)。Go 和 Web 传递依赖的许可清单位于
-[`docs/licenses/`](docs/licenses/)，外部模型与地图服务条款记录在
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
-
-仓库不重写已有 Git 历史。`.mailmap` 仅让 `git shortlog` 等本地 Git 命令把已有公司邮箱
-统一显示为维护者的个人身份，原始 commit 对象和 SHA 不变。后续提交使用个人邮箱或 GitHub
-noreply 邮箱，避免继续把公司邮箱写入公开历史。
-
 ## 延伸阅读
 
-- 架构和恢复：[docs/RFC-001.md](docs/RFC-001.md)
-- 真实平台接入：[docs/RFC-002.md](docs/RFC-002.md)
-- 改派沙箱：[docs/real-write-adapter-design.md](docs/real-write-adapter-design.md)
-- 文件数据源：[docs/file-data-source-design.md](docs/file-data-source-design.md)
-- Agent history：[docs/history-governance.md](docs/history-governance.md)
-- 模块索引：[AGENTS.md](AGENTS.md)
+- [架构和恢复](docs/RFC-001.md)
+- [企业平台接入](docs/RFC-002.md)
+- [HTTP 写 adapter](docs/real-write-adapter-design.md)
+- [文件数据源](docs/file-data-source-design.md)
+- [Agent history 治理](docs/history-governance.md)
+- [演示脚本](docs/demo-script.md)
+- [模块索引](AGENTS.md)

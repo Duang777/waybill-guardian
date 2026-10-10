@@ -18,7 +18,8 @@ import {
   connectionLabel,
   type WorkbenchConnectionState,
 } from "../workbench-connection";
-import { HaloBadge, RollingNumber } from "./cult";
+import { AnimatedNumber } from "./ui/animated-number";
+import { Badge } from "./ui/badge";
 
 type RunStageBarProps = {
   timeline: TimelineState;
@@ -47,13 +48,13 @@ export function RunStageBar({
           <span className={styles.eyebrow}>
             {replaying ? "Run stage / replay" : "Run stage / live"}
           </span>
-          <HaloBadge
+          <Badge
             tone={connectionTone(connection, replaying)}
             live={!replaying && connection === "online"}
           >
             <Radio aria-hidden="true" size={12} />
             {runConnectionLabel(connection, replaying)}
-          </HaloBadge>
+          </Badge>
         </div>
         <div
           className={styles.agentTaskLead}
@@ -124,7 +125,7 @@ export function EvidenceLedger({
         </div>
         <span className={styles.evidenceCount}>
           <strong>
-            <RollingNumber
+            <AnimatedNumber
               value={groups.length}
               format={twoDigits}
               label={`${groups.length} 条证据结论`}
@@ -149,9 +150,9 @@ export function EvidenceLedger({
                   {(index + 1).toString().padStart(2, "0")}
                 </span>
                 <h3>{evidenceGroupTitle(group)}</h3>
-                <HaloBadge tone="neutral" tabularNums>
+                <Badge tone="neutral" tabularNums>
                   {groupSourceLabel(group)}
-                </HaloBadge>
+                </Badge>
               </div>
               <ul className={styles.evidenceFactList}>
                 {group.items.map((item) => (

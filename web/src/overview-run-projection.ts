@@ -21,22 +21,23 @@ export function mergeRunProjections(
   current: ReadonlyMap<WaybillID, RunProjection>,
   runs: readonly ProjectableRun[],
 ): ReadonlyMap<WaybillID, RunProjection> {
-  const next = new Map(current);
+  let next: Map<WaybillID, RunProjection> | undefined;
   for (const run of runs) {
-    const existing = next.get(run.waybill_id);
+    const existing = (next ?? current).get(run.waybill_id);
     if (
       existing?.runID === run.run_id &&
       existing.lastSeq >= run.last_seq
     ) {
       continue;
     }
+    next ??= new Map(current);
     next.set(run.waybill_id, {
       runID: run.run_id,
       status: run.status,
       lastSeq: run.last_seq,
     });
   }
-  return next;
+  return next ?? current;
 }
 
 export function advanceRunProjection(

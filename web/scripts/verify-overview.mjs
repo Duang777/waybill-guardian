@@ -246,6 +246,56 @@ try {
       ) === sceneCounts.hubs,
     `3D facility archetypes are incomplete: ${JSON.stringify(archetypeCounts)}`,
   );
+  const initialCameraZoom = Number(
+    await networkCanvas.getAttribute("data-camera-zoom"),
+  );
+  await networkCanvas.dispatchEvent("wheel", { deltaY: -120 });
+  await page.waitForFunction(() => {
+    const stage = document.querySelector('[data-network-renderer="webgl"]');
+    return stage?.getAttribute("data-camera-zoom-scale") === "1.25";
+  });
+  const wheelCameraZoom = Number(
+    await networkCanvas.getAttribute("data-camera-zoom"),
+  );
+  assert(
+    Number.isFinite(initialCameraZoom) &&
+      Number.isFinite(wheelCameraZoom) &&
+      wheelCameraZoom > initialCameraZoom,
+    `wheel zoom did not increase camera zoom: ${initialCameraZoom} -> ${wheelCameraZoom}`,
+  );
+  await page
+    .getByRole("button", { name: "复位网络视角", exact: true })
+    .click();
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('[data-network-renderer="webgl"]')
+        ?.getAttribute("data-camera-zoom-scale") === "1",
+  );
+  const zoomInButton = page.getByRole("button", {
+    name: "放大地图",
+    exact: true,
+  });
+  for (let step = 0; step < 4; step += 1) {
+    await zoomInButton.click();
+  }
+  await page.getByLabel("当前缩放 200%", { exact: true }).waitFor();
+  assert(
+    await zoomInButton.isDisabled(),
+    "zoom-in control stayed enabled at the maximum zoom",
+  );
+  const zoomOutButton = page.getByRole("button", {
+    name: "缩小地图",
+    exact: true,
+  });
+  for (let step = 0; step < 4; step += 1) {
+    await zoomOutButton.click();
+  }
+  await page.getByLabel("当前缩放 100%", { exact: true }).waitFor();
+  assert(
+    await zoomOutButton.isDisabled(),
+    "zoom-out control stayed enabled at the minimum zoom",
+  );
   const firstHub = overviewBody.hubs[0];
   const hubPicker = page.getByLabel("选择公路港", { exact: true });
   await hubPicker.selectOption(firstHub.hub_id);
@@ -516,7 +566,7 @@ try {
     "desktop risk queue stretched the workspace below the 3D scene",
   );
   const riskQueue = page.locator('[aria-labelledby="queue-heading"]');
-  const queueItems = riskQueue.locator("article");
+  const queueItems = riskQueue.locator("[data-queue-row]");
   const initialQueueSize = await queueItems.count();
   assert(initialQueueSize > 5, "risk queue did not render enough anomalies");
   await riskQueue.getByRole("radio", { name: "处置中", exact: true }).check();
@@ -588,7 +638,7 @@ try {
 
   await page.getByRole("button", { name: "选择前 5", exact: true }).click();
   assert(
-    (await page.locator('input[type="checkbox"]:checked').count()) === 5,
+    (await queueItems.locator('input[type="checkbox"]:checked').count()) === 5,
     "top-five selection did not select five anomalies",
   );
   const batchResponsePromise = page.waitForResponse(
@@ -633,8 +683,8 @@ try {
     "batch response did not preserve the five requested waybills",
   );
   for (const run of acceptedRuns) {
-    const row = page
-      .locator("article")
+    const row = riskQueue
+      .locator("[data-queue-row]")
       .filter({ hasText: run.waybill_id });
     await row.getByText("待审批", { exact: true }).waitFor();
     const rowHref = await row
@@ -669,7 +719,7 @@ try {
     "active queue view allowed selecting runs already in progress",
   );
   assert(
-    (await riskQueue.locator('input[type="checkbox"]:not(:disabled)').count()) === 0,
+    (await queueItems.locator('input[type="checkbox"]:not(:disabled)').count()) === 0,
     "active queue view allowed restarting an in-progress waybill",
   );
   await riskQueue.getByRole("radio", { name: "全部", exact: true }).check();
@@ -712,8 +762,8 @@ try {
     sameApprovalSet(stillPending, remainingApprovals),
     "confirming one approval changed one of the other four approvals",
   );
-  await page
-    .locator("article")
+  await riskQueue
+    .locator("[data-queue-row]")
     .filter({ hasText: confirmedApproval.waybill_id })
     .getByText("已闭环", { exact: true })
     .waitFor();
@@ -882,6 +932,7 @@ try {
         sampled_canvas_colors: pixelProbe.colors,
         measured_fps: Math.round(measuredFPS),
         minimum_fps: minimumSceneFPS,
+        zoom_levels: ["100%", "125%", "150%", "175%", "200%"],
         reduced_motion: "static",
         webgl_fallback: "svg",
         queue_views: 3,
@@ -927,9 +978,9 @@ async function verifyOverviewCanvasFit(page, width, height) {
       viewportHeight: window.innerHeight,
       documentHeight: document.documentElement.scrollHeight,
       operations: bounds(
-        document.querySelector('[class*="_operationsGrid_"]'),
+        document.querySelector("[data-overview-layout]"),
       ),
-      map: bounds(document.querySelector('[class*="_mapPanel_"]')),
+      map: bounds(document.querySelector("[data-overview-map-panel]")),
       charts: bounds(document.querySelector("[data-overview-charts]")),
       brief: bounds(document.querySelector('[aria-labelledby="brief-heading"]')),
     };
@@ -1233,6 +1284,23 @@ async function verifyWebGLFallback(webURL) {
       (await networkMap.locator("line").count()) === 72,
       "SVG fallback did not render all routes",
     );
+    const initialViewBox = await networkMap.getAttribute("viewBox");
+    await page
+      .getByRole("button", { name: "放大地图", exact: true })
+      .click();
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[data-network-renderer="svg"]')
+          ?.getAttribute("data-camera-zoom-scale") === "1.25",
+    );
+    assert(
+      (await networkMap.getAttribute("viewBox")) !== initialViewBox,
+      "SVG fallback zoom did not update the network viewBox",
+    );
+    await page
+      .getByRole("button", { name: "缩小地图", exact: true })
+      .click();
     await page
       .getByLabel("选择公路港", { exact: true })
       .selectOption({ index: 1 });
@@ -1375,7 +1443,11 @@ async function undersizedControls(page) {
               ? control.closest("label") ?? control
               : control;
           const bounds = target.getBoundingClientRect();
-          return bounds.width < 40 || bounds.height < 40;
+          return (
+            bounds.width > 0 &&
+            bounds.height > 0 &&
+            (bounds.width < 40 || bounds.height < 40)
+          );
         })
         .map(
           (control) =>
@@ -1464,7 +1536,7 @@ async function startExternalRun(page, backendURL, waybillID) {
 
 async function assertProjectedRun(page, run, statusLabel) {
   const row = page
-    .locator('[aria-labelledby="queue-heading"] article')
+    .locator('[aria-labelledby="queue-heading"] [data-queue-row]')
     .filter({ hasText: run.waybill_id });
   await row
     .getByText(statusLabel, { exact: true })

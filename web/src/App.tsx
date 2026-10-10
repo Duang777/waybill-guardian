@@ -8,6 +8,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { toast } from "sonner";
 import styles from "./app.module.css";
 import {
   confirmApproval,
@@ -38,12 +39,10 @@ import {
   ApprovalPanel,
   type ApprovalDecisionState,
 } from "./components/ApprovalPanel";
-import {
-  HaloBadge,
-  TextureButton,
-  TextureLink,
-  type HaloBadgeTone,
-} from "./components/cult";
+import { Badge, type BadgeTone } from "./components/ui/badge";
+import { Button, ButtonLink } from "./components/ui/button";
+import { Select } from "./components/ui/select";
+import { Tooltip } from "./components/ui/tooltip";
 import { PanelErrorBoundary } from "./components/PanelErrorBoundary";
 import {
   SkeletonBlock,
@@ -105,6 +104,11 @@ type DecisionFeedback = {
   action: "confirm" | "reject";
 };
 
+type RejectFailure = {
+  approvalID: string;
+  issue: RequestIssue;
+};
+
 type SelectionRequest = {
   generation: number;
   controller: AbortController;
@@ -147,10 +151,10 @@ export function InvalidRoutePage() {
           <span className={styles.eyebrow}>Invalid route</span>
           <h1>无法打开运单工作台</h1>
           <p>URL 中的运单或任务标识无效。</p>
-          <TextureLink href="/" variant="primary">
+          <ButtonLink href="/" variant="primary">
             <ArrowLeft aria-hidden="true" size={16} />
             返回全国经营总览
-          </TextureLink>
+          </ButtonLink>
         </main>
       </div>
     </>
@@ -176,6 +180,7 @@ function WaybillWorkbench({
   const [pendingAction, setPendingAction] = useState<PendingAction>("bootstrap");
   const [decisionFeedback, setDecisionFeedback] =
     useState<DecisionFeedback | null>(null);
+  const [rejectFailure, setRejectFailure] = useState<RejectFailure | null>(null);
   const [message, setMessage] = useState<RequestIssue | null>(null);
   const [recoveryError, setRecoveryError] = useState<RequestIssue | null>(null);
   const [routePointFocus, setRoutePointFocus] =
@@ -451,6 +456,7 @@ function WaybillWorkbench({
     () => latestApproval(workbenchEvents),
     [workbenchEvents],
   );
+  const currentApprovalID = currentApproval?.id ?? null;
   const currentProposal = useMemo(
     () => proposalForApproval(workbenchEvents, currentApproval),
     [currentApproval, workbenchEvents],
@@ -525,6 +531,19 @@ function WaybillWorkbench({
       ? catalog.issue
       : null);
   const bannerCopy = bannerIssue === null ? null : requestIssueCopy(bannerIssue);
+  const rejectError =
+    rejectFailure !== null &&
+    rejectFailure.approvalID === currentApprovalID
+      ? requestIssueCopy(rejectFailure.issue)
+      : null;
+
+  useEffect(() => {
+    setRejectFailure((current) =>
+      current !== null && current.approvalID !== currentApprovalID
+        ? null
+        : current,
+    );
+  }, [currentApprovalID]);
 
   const selectEvidence = (selection: EvidenceSelection) => {
     const target = evidenceFocusTarget(
@@ -639,6 +658,7 @@ function WaybillWorkbench({
       approvalID: currentApproval.id,
       action: "confirm",
     });
+    setRejectFailure(null);
     setPendingAction("confirm");
     setMessage(null);
     try {
@@ -646,6 +666,9 @@ function WaybillWorkbench({
       await selectRun({
         runID: decided.run_id,
         waybillID: decided.waybill_id,
+      });
+      toast.success("审批已通过", {
+        description: "写操作已恢复执行，结果会继续写入审计时间线。",
       });
     } catch (error) {
       setDecisionFeedback((current) =>
@@ -665,6 +688,7 @@ function WaybillWorkbench({
       approvalID: currentApproval.id,
       action: "reject",
     });
+    setRejectFailure(null);
     setPendingAction("reject");
     setMessage(null);
     try {
@@ -673,11 +697,19 @@ function WaybillWorkbench({
         runID: decided.run_id,
         waybillID: decided.waybill_id,
       });
+      toast.success("驳回决定已提交", {
+        description: "驳回原因已记录，Agent 将继续处理。",
+      });
     } catch (error) {
+      const issue = toRequestIssue(error);
       setDecisionFeedback((current) =>
         current?.approvalID === currentApproval.id ? null : current,
       );
-      setMessage(toRequestIssue(error));
+      setRejectFailure({
+        approvalID: currentApproval.id,
+        issue,
+      });
+      setMessage(issue);
       throw error;
     } finally {
       setPendingAction(null);
@@ -692,16 +724,17 @@ function WaybillWorkbench({
       <div className={styles.appShell}>
         <header className={styles.topbar}>
           <div className={styles.brand}>
-            <TextureLink
-              className={styles.backButton}
-              href="/"
-              variant="icon"
-              size="icon"
-              aria-label="返回全国经营总览"
-              title="返回总览"
-            >
-              <ArrowLeft aria-hidden="true" size={17} />
-            </TextureLink>
+            <Tooltip content="返回经营总览" side="right">
+              <ButtonLink
+                className={styles.backButton}
+                href="/"
+                variant="icon"
+                size="icon"
+                aria-label="返回全国经营总览"
+              >
+                <ArrowLeft aria-hidden="true" size={17} />
+              </ButtonLink>
+            </Tooltip>
             <span className={styles.brandMark} aria-hidden="true">
               WG
             </span>
@@ -712,26 +745,30 @@ function WaybillWorkbench({
           </div>
           <label className={styles.waybillPicker}>
             <span>运单</span>
-            <select
-              value={selectedWaybillID ?? ""}
+            <Select
+              className={styles.waybillSelect}
+              value={selectedWaybillID}
               disabled={
                 catalog.kind !== "ready" ||
                 pendingAction !== null ||
                 recoveryError !== null
               }
-              aria-label="选择异常运单"
-              onChange={(event) => selectWaybill(event.currentTarget.value)}
-            >
-              {catalog.kind === "loading" && <option value="">正在读取运单目录</option>}
-              {catalog.kind === "empty" && <option value="">暂无可处置运单</option>}
-              {catalog.kind === "error" && <option value="">运单目录不可用</option>}
-              {catalog.kind === "ready" &&
-                catalog.data.map((item) => (
-                  <option value={item.waybill_id} key={item.waybill_id}>
-                    {item.origin} → {item.destination} · {item.waybill_id}
-                  </option>
-                ))}
-            </select>
+              ariaLabel="选择异常运单"
+              placeholder={catalogSelectPlaceholder(catalog)}
+              options={
+                catalog.kind === "ready"
+                  ? catalog.data.map((item) => ({
+                      value: item.waybill_id,
+                      label: `${item.origin} → ${item.destination} · ${item.waybill_id}`,
+                    }))
+                  : []
+              }
+              onValueChange={(value) => {
+                if (value !== null) {
+                  selectWaybill(value);
+                }
+              }}
+            />
           </label>
           <div className={styles.runContext}>
             <div>
@@ -741,7 +778,7 @@ function WaybillWorkbench({
               </span>
             </div>
             <div className={styles.runSignals}>
-              <HaloBadge
+              <Badge
                 tone={connectionTone(connection)}
                 live={connection === "online"}
               >
@@ -751,15 +788,15 @@ function WaybillWorkbench({
                   <Radio aria-hidden="true" size={12} />
                 )}
                 {connectionLabel(connection)}
-              </HaloBadge>
+              </Badge>
               {run !== null && (
-                <HaloBadge tone={inferenceTone(currentInferenceMode)}>
+                <Badge tone={inferenceTone(currentInferenceMode)}>
                   {inferenceLabel(currentInferenceMode)}
-                </HaloBadge>
+                </Badge>
               )}
             </div>
           </div>
-          <TextureButton
+          <Button
             className={styles.triggerButton}
             type="button"
             variant="primary"
@@ -782,7 +819,7 @@ function WaybillWorkbench({
               : run === null
                 ? "启动处置"
                 : "重新处置"}
-          </TextureButton>
+          </Button>
         </header>
 
         <main id="main-content" className={styles.main}>
@@ -801,7 +838,7 @@ function WaybillWorkbench({
               </span>
               <div className={styles.errorActions}>
                 {catalog.kind === "error" && message === null && (
-                  <TextureButton
+                  <Button
                     type="button"
                     variant="secondary"
                     size="sm"
@@ -809,19 +846,20 @@ function WaybillWorkbench({
                   >
                     <RotateCw aria-hidden="true" size={15} />
                     重试
-                  </TextureButton>
+                  </Button>
                 )}
                 {message !== null && (
-                  <TextureButton
-                    type="button"
-                    variant="icon"
-                    size="icon"
-                    aria-label="关闭错误提示"
-                    title="关闭"
-                    onClick={() => setMessage(null)}
-                  >
-                    <X aria-hidden="true" size={16} />
-                  </TextureButton>
+                  <Tooltip content="关闭提示" side="left">
+                    <Button
+                      type="button"
+                      variant="icon"
+                      size="icon"
+                      aria-label="关闭错误提示"
+                      onClick={() => setMessage(null)}
+                    >
+                      <X aria-hidden="true" size={16} />
+                    </Button>
+                  </Tooltip>
                 )}
               </div>
             </div>
@@ -845,14 +883,14 @@ function WaybillWorkbench({
               title={requestIssueCopy(blockingIssue).title}
               detail={requestIssueCopy(blockingIssue).detail}
               action={
-                <TextureButton
+                <Button
                   type="button"
                   variant="secondary"
                   onClick={() => void retryResource()}
                 >
                   <RotateCw aria-hidden="true" size={16} />
                   重试
-                </TextureButton>
+                </Button>
               }
             />
           ) : waybillResource.kind === "loading" ? (
@@ -865,10 +903,10 @@ function WaybillWorkbench({
               title="当前没有异常运单"
               detail="运单目录已加载完成，没有可进入处置工作台的异常记录。"
               action={
-                <TextureLink href="/" variant="primary">
+                <ButtonLink href="/" variant="primary">
                   <ArrowLeft aria-hidden="true" size={16} />
                   返回经营总览
-                </TextureLink>
+                </ButtonLink>
               }
             />
           ) : waybillResource.kind === "ready" ? (
@@ -930,6 +968,7 @@ function WaybillWorkbench({
                     runStatus={currentStatus}
                     view={waybillResource.view}
                     decisionState={approvalDecisionState}
+                    rejectError={rejectError}
                     transitionIntent={
                       decisionFeedback !== null &&
                       decisionFeedback.approvalID === currentApproval?.id
@@ -1033,9 +1072,26 @@ function shouldShowConnectionNotice(
   return connection === "reconnecting" || connection === "offline";
 }
 
+function catalogSelectPlaceholder(catalog: CatalogResource): string {
+  switch (catalog.kind) {
+    case "loading":
+      return "正在读取运单目录";
+    case "empty":
+      return "暂无可处置运单";
+    case "error":
+      return "运单目录不可用";
+    case "ready":
+      return "选择异常运单";
+    default: {
+      const exhaustive: never = catalog;
+      return exhaustive;
+    }
+  }
+}
+
 function connectionTone(
   connection: WorkbenchConnectionState,
-): HaloBadgeTone {
+): BadgeTone {
   switch (connection) {
     case "online":
       return "success";
@@ -1071,7 +1127,7 @@ function inferenceLabel(mode: ReturnType<typeof inferenceMode>): string {
 
 function inferenceTone(
   mode: ReturnType<typeof inferenceMode>,
-): HaloBadgeTone {
+): BadgeTone {
   switch (mode.kind) {
     case "online":
       return "info";

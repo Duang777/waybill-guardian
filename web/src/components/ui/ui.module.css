@@ -1,0 +1,860 @@
+.button {
+  --button-border: oklch(0.22 0.01 255);
+  --button-surface: oklch(0.2 0.012 255);
+  --button-surface-hover: oklch(0.27 0.014 255);
+  --button-text: oklch(0.985 0.003 95);
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--button-border);
+  border-radius: 4px;
+  color: var(--button-text);
+  background: var(--button-surface);
+  box-shadow: 0 1px 2px oklch(0.1 0.01 255 / 0.1);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background-color 140ms ease-out,
+    border-color 140ms ease-out,
+    box-shadow 140ms ease-out,
+    opacity 140ms ease-out,
+    transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.button:focus-visible {
+  outline: 2px solid oklch(0.58 0.19 32);
+  outline-offset: 3px;
+}
+
+.button:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.buttonPrimary {
+  --button-border: oklch(0.16 0.012 255);
+  --button-surface: oklch(0.2 0.012 255);
+  --button-surface-hover: oklch(0.27 0.014 255);
+}
+
+.buttonSecondary {
+  --button-border: oklch(0.74 0.012 255);
+  --button-surface: oklch(0.985 0.003 95);
+  --button-surface-hover: oklch(0.955 0.006 95);
+  --button-text: oklch(0.28 0.018 255);
+  box-shadow: none;
+}
+
+.buttonDestructive {
+  --button-border: oklch(0.45 0.15 28);
+  --button-surface: oklch(0.56 0.18 28);
+  --button-surface-hover: oklch(0.51 0.18 28);
+}
+
+.buttonGhost {
+  --button-border: transparent;
+  --button-surface: transparent;
+  --button-surface-hover: oklch(0.94 0.008 95);
+  --button-text: oklch(0.3 0.02 255);
+  box-shadow: none;
+}
+
+.buttonIconVariant {
+  --button-border: oklch(0.76 0.012 255);
+  --button-surface: oklch(0.99 0.002 95);
+  --button-surface-hover: oklch(0.94 0.008 95);
+  --button-text: oklch(0.3 0.02 255);
+  box-shadow: none;
+}
+
+.buttonSmall {
+  min-height: 40px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
+.buttonDefault {
+  min-height: 40px;
+  padding: 0 14px;
+  font-size: 12px;
+}
+
+.buttonLarge {
+  min-height: 44px;
+  padding: 0 17px;
+  font-size: 13px;
+}
+
+.buttonIconSize {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  padding: 0;
+}
+
+@media (hover: hover) {
+  .button:hover:not(:disabled) {
+    border-color: oklch(0.56 0.016 255);
+    background: var(--button-surface-hover);
+    box-shadow: 0 3px 9px oklch(0.1 0.01 255 / 0.12);
+  }
+
+  .buttonGhost:hover:not(:disabled),
+  .buttonSecondary:hover:not(:disabled),
+  .buttonIconVariant:hover:not(:disabled) {
+    box-shadow: none;
+  }
+}
+
+.badge {
+  --badge-accent: oklch(0.5 0.025 255);
+  --badge-surface: oklch(0.94 0.008 95);
+  --badge-text: oklch(0.34 0.025 255);
+  position: relative;
+  display: inline-flex;
+  min-height: 22px;
+  max-width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 1px 7px;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--badge-accent) 35%, oklch(0.82 0.01 95));
+  border-radius: 3px;
+  color: var(--badge-text);
+  background: var(--badge-surface);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.badge > span:last-child {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+}
+
+.badgeNeutral {
+  --badge-accent: oklch(0.52 0.018 255);
+  --badge-surface: oklch(0.94 0.006 95);
+  --badge-text: oklch(0.38 0.02 255);
+}
+
+.badgeInfo {
+  --badge-accent: oklch(0.49 0.1 245);
+  --badge-surface: oklch(0.93 0.025 245);
+  --badge-text: oklch(0.36 0.09 245);
+}
+
+.badgeSuccess {
+  --badge-accent: oklch(0.5 0.12 155);
+  --badge-surface: oklch(0.93 0.035 155);
+  --badge-text: oklch(0.34 0.1 155);
+}
+
+.badgeWarning {
+  --badge-accent: oklch(0.58 0.12 78);
+  --badge-surface: oklch(0.95 0.045 82);
+  --badge-text: oklch(0.42 0.1 58);
+}
+
+.badgeDanger {
+  --badge-accent: oklch(0.55 0.19 28);
+  --badge-surface: oklch(0.95 0.035 28);
+  --badge-text: oklch(0.42 0.14 28);
+}
+
+.badgeTabular {
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.badgeLiveDot {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+  animation: statusPulse 1.15s ease-in-out infinite;
+}
+
+.progress {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 7px;
+}
+
+.progressLabel {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: oklch(0.49 0.018 255);
+  font-size: 11px;
+}
+
+.progressValue {
+  color: oklch(0.215 0.018 255);
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.progressRim {
+  position: relative;
+  height: 7px;
+  padding: 1px;
+  overflow: hidden;
+  border: 1px solid oklch(0.8 0.01 95);
+  border-radius: 2px;
+  background: oklch(0.91 0.007 95);
+  box-shadow: inset 0 1px 1px oklch(0.1 0.01 255 / 0.07);
+}
+
+.progressTrack {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 1px;
+  background: oklch(0.87 0.009 95);
+}
+
+.progressIndicator {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  border-radius: inherit;
+  background: var(--progress-color, oklch(0.49 0.1 245));
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.2);
+  transform: translateX(var(--progress-offset));
+  transform-origin: left center;
+  transition: transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.progressHigh {
+  --progress-color: oklch(0.58 0.2 28);
+}
+
+.progressMedium {
+  --progress-color: oklch(0.56 0.1 82);
+}
+
+.progressLow {
+  --progress-color: oklch(0.52 0.12 155);
+}
+
+.progressInfo {
+  --progress-color: oklch(0.49 0.1 245);
+}
+
+.animatedNumber {
+  display: inline-block;
+  font-variant-numeric: tabular-nums;
+}
+
+.timerRoot {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 7px;
+  border: 1px solid oklch(0.79 0.025 78);
+  border-radius: 3px;
+  color: oklch(0.42 0.1 55);
+  background: oklch(0.96 0.035 82);
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.55);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.timerIcon {
+  display: grid;
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  place-items: center;
+}
+
+.timerIcon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.timerDisplay {
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.segmentedControl {
+  --segment-count: 1;
+  --segment-index: 0;
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: repeat(var(--segment-count), minmax(0, 1fr));
+  min-height: 40px;
+  padding: 1px;
+  border: 1px solid oklch(0.75 0.012 255);
+  border-radius: 4px;
+  background: oklch(0.955 0.004 120 / 0.92);
+  isolation: isolate;
+}
+
+.segmentThumb {
+  position: absolute;
+  z-index: -1;
+  top: 1px;
+  bottom: 1px;
+  left: 1px;
+  width: calc((100% - 2px) / var(--segment-count));
+  border: 0;
+  border-radius: 2px;
+  background: oklch(0.2 0.012 255);
+  box-shadow: 0 1px 3px oklch(0.1 0.01 255 / 0.16);
+  transform: translateX(calc(var(--segment-index) * 100%));
+  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.segmentItem {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 2px;
+  color: oklch(0.46 0.02 255);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  transition: color 140ms ease-out;
+  white-space: nowrap;
+}
+
+.segmentItem[aria-pressed="true"],
+.segmentItem[data-selected="true"] {
+  color: oklch(0.985 0.003 95);
+  font-weight: 700;
+}
+
+.segmentItem:focus-visible,
+.segmentItem:has(.segmentRadio:focus-visible) {
+  outline: 2px solid oklch(0.48 0.11 183);
+  outline-offset: 1px;
+}
+
+.segmentItem:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.segmentRadio {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.segmentRadio:disabled {
+  cursor: not-allowed;
+}
+
+.segmentContent {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  border: 1px solid oklch(0.73 0.014 255);
+  border-radius: 3px;
+  color: oklch(0.22 0.018 255);
+  background: oklch(0.99 0.002 95);
+  box-shadow: inset 0 1px 2px oklch(0.1 0.01 255 / 0.06);
+  padding: 10px 11px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.textarea::placeholder {
+  color: oklch(0.61 0.014 255);
+}
+
+.textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.textarea[aria-invalid="true"] {
+  border-color: oklch(0.55 0.19 28);
+}
+
+.checkboxRoot {
+  position: relative;
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 4px;
+}
+
+.checkboxInput {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+  opacity: 0;
+  touch-action: manipulation;
+}
+
+.checkboxVisual {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 1px solid oklch(0.62 0.014 255);
+  border-radius: 3px;
+  color: oklch(0.985 0.003 95);
+  background: oklch(0.995 0.002 95);
+  box-shadow: inset 0 1px 1px oklch(0.1 0.01 255 / 0.06);
+  transition:
+    background-color 120ms ease-out,
+    border-color 120ms ease-out,
+    transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.checkboxVisual svg {
+  opacity: 0;
+  transform: scale(0.7);
+  transition:
+    opacity 100ms ease-out,
+    transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.checkboxRoot[data-state="checked"] .checkboxVisual {
+  border-color: oklch(0.2 0.012 255);
+  background: oklch(0.2 0.012 255);
+  box-shadow: none;
+}
+
+.checkboxRoot[data-state="checked"] .checkboxVisual svg {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.checkboxRoot:focus-within {
+  outline: 2px solid oklch(0.58 0.19 32);
+  outline-offset: 3px;
+}
+
+.checkboxInput:active:not(:disabled) + .checkboxVisual {
+  transform: scale(0.96);
+}
+
+.checkboxRoot[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.checkboxRoot[data-disabled] .checkboxInput {
+  cursor: not-allowed;
+}
+
+.selectRoot {
+  position: relative;
+  display: inline-grid;
+  min-width: 0;
+  min-height: 40px;
+  align-items: center;
+}
+
+.selectTrigger {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  appearance: none;
+  padding: 0 34px 0 11px;
+  border: 1px solid oklch(0.72 0.012 255);
+  border-radius: 4px;
+  color: oklch(0.24 0.018 255);
+  background: oklch(0.995 0.002 95);
+  box-shadow: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  touch-action: manipulation;
+  transition:
+    background-color 140ms ease-out,
+    border-color 140ms ease-out;
+}
+
+.selectTrigger:focus-visible {
+  outline: 2px solid oklch(0.58 0.19 32);
+  outline-offset: 3px;
+}
+
+.selectTrigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.selectIcon {
+  position: absolute;
+  right: 10px;
+  color: oklch(0.48 0.018 255);
+  pointer-events: none;
+}
+
+.tooltipRoot {
+  position: relative;
+  display: inline-flex;
+}
+
+.tooltipContent {
+  position: absolute;
+  z-index: 100;
+  max-width: 240px;
+  padding: 6px 8px;
+  border-radius: 3px;
+  color: oklch(0.97 0.003 95);
+  background: oklch(0.2 0.012 255);
+  box-shadow: 0 6px 18px oklch(0.08 0.01 255 / 0.2);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.35;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 90ms ease-in,
+    transform 90ms ease-in,
+    visibility 0s linear 90ms;
+  user-select: none;
+  visibility: hidden;
+  white-space: nowrap;
+}
+
+.tooltipContent[data-side="top"] {
+  bottom: calc(100% + 7px);
+  left: 50%;
+  transform: translate(-50%, 2px) scale(0.97);
+}
+
+.tooltipContent[data-side="right"] {
+  top: 50%;
+  left: calc(100% + 7px);
+  transform: translate(-2px, -50%) scale(0.97);
+}
+
+.tooltipContent[data-side="bottom"] {
+  top: calc(100% + 7px);
+  left: 50%;
+  transform: translate(-50%, -2px) scale(0.97);
+}
+
+.tooltipContent[data-side="left"] {
+  top: 50%;
+  right: calc(100% + 7px);
+  transform: translate(2px, -50%) scale(0.97);
+}
+
+.tooltipRoot:focus-within .tooltipContent {
+  opacity: 1;
+  transition:
+    opacity 140ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 140ms cubic-bezier(0.16, 1, 0.3, 1);
+  visibility: visible;
+}
+
+.tooltipRoot:focus-within .tooltipContent[data-side="top"],
+.tooltipRoot:focus-within .tooltipContent[data-side="bottom"] {
+  transform: translate(-50%, 0) scale(1);
+}
+
+.tooltipRoot:focus-within .tooltipContent[data-side="right"],
+.tooltipRoot:focus-within .tooltipContent[data-side="left"] {
+  transform: translate(0, -50%) scale(1);
+}
+
+.tooltipArrow {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  background: oklch(0.2 0.012 255);
+  transform: rotate(45deg);
+}
+
+.tooltipContent[data-side="top"] .tooltipArrow {
+  right: calc(50% - 3px);
+  bottom: -3px;
+}
+
+.tooltipContent[data-side="right"] .tooltipArrow {
+  top: calc(50% - 3px);
+  left: -3px;
+}
+
+.tooltipContent[data-side="bottom"] .tooltipArrow {
+  top: -3px;
+  right: calc(50% - 3px);
+}
+
+.tooltipContent[data-side="left"] .tooltipArrow {
+  top: calc(50% - 3px);
+  right: -3px;
+}
+
+@media (hover: hover) {
+  .tooltipRoot:hover .tooltipContent {
+    opacity: 1;
+    transition:
+      opacity 140ms cubic-bezier(0.16, 1, 0.3, 1) 320ms,
+      transform 140ms cubic-bezier(0.16, 1, 0.3, 1) 320ms;
+    visibility: visible;
+  }
+
+  .tooltipRoot:hover .tooltipContent[data-side="top"],
+  .tooltipRoot:hover .tooltipContent[data-side="bottom"] {
+    transform: translate(-50%, 0) scale(1);
+  }
+
+  .tooltipRoot:hover .tooltipContent[data-side="right"],
+  .tooltipRoot:hover .tooltipContent[data-side="left"] {
+    transform: translate(0, -50%) scale(1);
+  }
+}
+
+.dialogOverlay {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  background: oklch(0.12 0.01 255 / 0.48);
+}
+
+.dialogOverlay[data-state="open"] {
+  animation: overlayIn 160ms ease-out;
+}
+
+.dialogOverlay[data-state="closed"] {
+  animation: overlayOut 120ms ease-in;
+}
+
+.dialogContent {
+  position: fixed;
+  z-index: 81;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: min(480px, calc(100vw - 24px));
+  max-height: min(640px, calc(100vh - 24px));
+  gap: 18px;
+  padding: 20px;
+  overflow-y: auto;
+  border: 1px solid oklch(0.22 0.012 255);
+  border-radius: 4px;
+  color: oklch(0.2 0.018 255);
+  background: oklch(0.985 0.003 95);
+  box-shadow:
+    0 24px 70px oklch(0.08 0.01 255 / 0.32),
+    inset 0 1px 0 oklch(1 0 0 / 0.7);
+  transform: translate(-50%, -50%);
+}
+
+.dialogContent[data-state="open"] {
+  animation: dialogIn 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.dialogContent[data-state="closed"] {
+  animation: dialogOut 120ms ease-in;
+}
+
+.dialogHeader {
+  display: grid;
+  gap: 7px;
+}
+
+.dialogTitle {
+  margin: 0;
+  font-family: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+  font-size: 22px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.dialogDescription {
+  margin: 0;
+  color: oklch(0.47 0.018 255);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.dialogFooter {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.toast {
+  position: relative;
+  display: flex;
+  width: min(356px, calc(100vw - 24px));
+  min-height: 64px;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px 52px 13px 14px;
+  border: 1px solid oklch(0.7 0.014 255);
+  border-radius: 4px;
+  color: oklch(0.22 0.018 255);
+  background: oklch(0.985 0.003 95);
+  box-shadow: 0 12px 30px oklch(0.08 0.01 255 / 0.18);
+  font-size: 12px;
+}
+
+.toastContent {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.toastTitle {
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.toastDescription {
+  color: oklch(0.48 0.018 255);
+  line-height: 1.45;
+}
+
+.toastIcon {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--toast-accent, oklch(0.5 0.02 255));
+}
+
+.toastClose {
+  position: absolute;
+  top: 8px;
+  right: 2px;
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 0;
+  color: oklch(0.42 0.018 255);
+  background: transparent;
+  cursor: pointer;
+}
+
+.toastSuccess {
+  --toast-accent: oklch(0.5 0.12 155);
+}
+
+.toastWarning {
+  --toast-accent: oklch(0.58 0.12 78);
+}
+
+.toastError {
+  --toast-accent: oklch(0.55 0.19 28);
+}
+
+.toastInfo {
+  --toast-accent: oklch(0.49 0.1 245);
+}
+
+@keyframes statusPulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes overlayIn {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes overlayOut {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes dialogIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 8px));
+  }
+}
+
+@keyframes dialogOut {
+  to {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 4px));
+  }
+}
+
+@media (max-width: 480px) {
+  .dialogContent {
+    padding: 17px 14px;
+  }
+
+  .dialogFooter {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button,
+  .progressIndicator,
+  .segmentThumb {
+    transition-duration: 0.01ms;
+  }
+
+  .badgeLiveDot,
+  .dialogOverlay,
+  .dialogContent {
+    animation: none;
+  }
+}
