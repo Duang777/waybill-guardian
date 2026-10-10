@@ -42,6 +42,7 @@ type HubNetworkSceneProps = {
   anomalies: readonly AnomalyOverview[];
   selectedHubID: string | null;
   cameraPreset: FacilityCameraPreset;
+  zoomScale: number;
   facilitySelection: FacilitySceneSelection | null;
   reducedMotion: boolean;
   paused: boolean;
@@ -184,7 +185,7 @@ const sceneDepth = 12;
 const maxFlowMarkersPerRoute = 4;
 const networkCameraOffset: [number, number, number] = [2.4, 22, 9.5];
 const networkFacilityScale = 0.68;
-const networkZoomMultiplier = 1.22;
+const networkZoomMultiplier = 1.24;
 const criticalRouteRiskThreshold = 50;
 const maxEmphasizedRiskHubs = 6;
 const transform = new Object3D();
@@ -383,6 +384,7 @@ export default function HubNetworkScene({
   anomalies,
   selectedHubID,
   cameraPreset,
+  zoomScale,
   facilitySelection,
   reducedMotion,
   paused,
@@ -497,6 +499,7 @@ export default function HubNetworkScene({
         selectedHub={view.selectedHub}
         detail={view.detail}
         preset={cameraPreset}
+        zoomScale={zoomScale}
         selection={facilitySelection}
         reducedMotion={reducedMotion}
         paused={paused}
@@ -1571,6 +1574,7 @@ function CameraRig({
   selectedHub,
   detail,
   preset,
+  zoomScale,
   selection,
   reducedMotion,
   paused,
@@ -1579,6 +1583,7 @@ function CameraRig({
   selectedHub: SceneHub | undefined;
   detail: FacilityLayout | undefined;
   preset: FacilityCameraPreset;
+  zoomScale: number;
   selection: FacilitySceneSelection | null;
   reducedMotion: boolean;
   paused: boolean;
@@ -1619,7 +1624,8 @@ function CameraRig({
         desiredPosition.current
           .set(...networkCameraOffset)
           .add(networkFocus);
-        desiredZoom.current = baseZoom * networkZoomMultiplier;
+        desiredZoom.current =
+          baseZoom * networkZoomMultiplier * zoomScale;
       } else {
         const target = resolveFacilityCameraTarget(
           detail,
@@ -1639,7 +1645,7 @@ function CameraRig({
               ? followCameraOffset
               : riskCameraOffset;
         desiredPosition.current.copy(desiredFocus.current).add(offset);
-        desiredZoom.current = baseZoom * target.zoom;
+        desiredZoom.current = baseZoom * target.zoom * zoomScale;
       }
       if (import.meta.env.DEV) {
         gl.domElement.dataset.cameraPreset = preset;
@@ -1650,6 +1656,7 @@ function CameraRig({
         ]
           .map((value) => value.toFixed(4))
           .join(",");
+        gl.domElement.dataset.cameraZoom = desiredZoom.current.toFixed(2);
       }
     },
     [
@@ -1661,6 +1668,7 @@ function CameraRig({
       selection,
       size.height,
       size.width,
+      zoomScale,
     ],
   );
 

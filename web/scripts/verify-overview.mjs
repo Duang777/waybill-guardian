@@ -246,6 +246,56 @@ try {
       ) === sceneCounts.hubs,
     `3D facility archetypes are incomplete: ${JSON.stringify(archetypeCounts)}`,
   );
+  const initialCameraZoom = Number(
+    await networkCanvas.getAttribute("data-camera-zoom"),
+  );
+  await networkCanvas.dispatchEvent("wheel", { deltaY: -120 });
+  await page.waitForFunction(() => {
+    const stage = document.querySelector('[data-network-renderer="webgl"]');
+    return stage?.getAttribute("data-camera-zoom-scale") === "1.25";
+  });
+  const wheelCameraZoom = Number(
+    await networkCanvas.getAttribute("data-camera-zoom"),
+  );
+  assert(
+    Number.isFinite(initialCameraZoom) &&
+      Number.isFinite(wheelCameraZoom) &&
+      wheelCameraZoom > initialCameraZoom,
+    `wheel zoom did not increase camera zoom: ${initialCameraZoom} -> ${wheelCameraZoom}`,
+  );
+  await page
+    .getByRole("button", { name: "复位网络视角", exact: true })
+    .click();
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('[data-network-renderer="webgl"]')
+        ?.getAttribute("data-camera-zoom-scale") === "1",
+  );
+  const zoomInButton = page.getByRole("button", {
+    name: "放大地图",
+    exact: true,
+  });
+  for (let step = 0; step < 4; step += 1) {
+    await zoomInButton.click();
+  }
+  await page.getByLabel("当前缩放 200%", { exact: true }).waitFor();
+  assert(
+    await zoomInButton.isDisabled(),
+    "zoom-in control stayed enabled at the maximum zoom",
+  );
+  const zoomOutButton = page.getByRole("button", {
+    name: "缩小地图",
+    exact: true,
+  });
+  for (let step = 0; step < 4; step += 1) {
+    await zoomOutButton.click();
+  }
+  await page.getByLabel("当前缩放 100%", { exact: true }).waitFor();
+  assert(
+    await zoomOutButton.isDisabled(),
+    "zoom-out control stayed enabled at the minimum zoom",
+  );
   const firstHub = overviewBody.hubs[0];
   const hubPicker = page.getByLabel("选择公路港", { exact: true });
   await hubPicker.selectOption(firstHub.hub_id);
@@ -882,6 +932,7 @@ try {
         sampled_canvas_colors: pixelProbe.colors,
         measured_fps: Math.round(measuredFPS),
         minimum_fps: minimumSceneFPS,
+        zoom_levels: ["100%", "125%", "150%", "175%", "200%"],
         reduced_motion: "static",
         webgl_fallback: "svg",
         queue_views: 3,
@@ -1233,6 +1284,23 @@ async function verifyWebGLFallback(webURL) {
       (await networkMap.locator("line").count()) === 72,
       "SVG fallback did not render all routes",
     );
+    const initialViewBox = await networkMap.getAttribute("viewBox");
+    await page
+      .getByRole("button", { name: "放大地图", exact: true })
+      .click();
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[data-network-renderer="svg"]')
+          ?.getAttribute("data-camera-zoom-scale") === "1.25",
+    );
+    assert(
+      (await networkMap.getAttribute("viewBox")) !== initialViewBox,
+      "SVG fallback zoom did not update the network viewBox",
+    );
+    await page
+      .getByRole("button", { name: "缩小地图", exact: true })
+      .click();
     await page
       .getByLabel("选择公路港", { exact: true })
       .selectOption({ index: 1 });

@@ -20,6 +20,7 @@ type NetworkMapProps = {
   routes: readonly RouteOverview[];
   anomalies: readonly AnomalyOverview[];
   selectedHubID: string | null;
+  zoomScale: number;
   facilitySelection: FacilitySceneSelection | null;
   reducedMotion: boolean;
   paused: boolean;
@@ -39,6 +40,7 @@ export function NetworkMap({
   routes,
   anomalies,
   selectedHubID,
+  zoomScale,
   facilitySelection,
   reducedMotion,
   paused,
@@ -60,6 +62,7 @@ export function NetworkMap({
       <FacilityDetailMap
         hub={selectedHub}
         layout={selectedLayout}
+        zoomScale={zoomScale}
         selection={facilitySelection}
         reducedMotion={reducedMotion}
         paused={paused}
@@ -72,7 +75,7 @@ export function NetworkMap({
     <div className={styles.networkMapFrame} data-fallback-mode="network">
       <svg
         className={styles.networkMap}
-        viewBox="0 0 1000 560"
+        viewBox={fallbackViewBox(zoomScale, 500, 280)}
         role="img"
         aria-labelledby="network-map-title network-map-description"
         preserveAspectRatio="xMidYMid meet"
@@ -182,6 +185,7 @@ export function NetworkMap({
 function FacilityDetailMap({
   hub,
   layout,
+  zoomScale,
   selection,
   reducedMotion,
   paused,
@@ -189,6 +193,7 @@ function FacilityDetailMap({
 }: {
   hub: HubOverview;
   layout: FacilityLayout;
+  zoomScale: number;
   selection: FacilitySceneSelection | null;
   reducedMotion: boolean;
   paused: boolean;
@@ -212,7 +217,7 @@ function FacilityDetailMap({
     >
       <svg
         className={styles.networkMap}
-        viewBox="0 0 1000 560"
+        viewBox={fallbackViewBox(zoomScale, centerX, centerY)}
         role="img"
         aria-labelledby="facility-map-title facility-map-description"
         preserveAspectRatio="xMidYMid meet"
@@ -537,4 +542,14 @@ function project(hub: HubOverview): { x: number; y: number } {
       (bounds.maxLatitude - bounds.minLatitude)) *
       450;
   return { x, y };
+}
+
+function fallbackViewBox(
+  zoomScale: number,
+  centerX: number,
+  centerY: number,
+): string {
+  const width = 1000 / zoomScale;
+  const height = 560 / zoomScale;
+  return `${centerX - width / 2} ${centerY - height / 2} ${width} ${height}`;
 }

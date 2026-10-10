@@ -6,6 +6,8 @@ import {
   Navigation,
   RotateCcw,
   Siren,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import {
   Component,
@@ -68,6 +70,12 @@ type SceneFailureBoundaryState = {
   failed: boolean;
 };
 
+const sceneZoomSteps = [1, 1.25, 1.5, 1.75, 2] as const;
+type SceneZoomScale = (typeof sceneZoomSteps)[number];
+type SceneZoomDirection = "in" | "out";
+
+const defaultSceneZoom: SceneZoomScale = 1;
+
 export function HubNetwork({
   hubs,
   routes,
@@ -76,6 +84,8 @@ export function HubNetwork({
   dataMode,
   totals,
 }: HubNetworkProps) {
+  const stageRef = useRef<HTMLDivElement>(null);
+  const lastWheelZoomAt = useRef(0);
   const webGLAvailable = useMemo(supportsWebGL, []);
   const reducedMotion = useReducedMotion();
   const pageVisible = usePageVisibility();
@@ -88,6 +98,8 @@ export function HubNetwork({
     useState<FacilityCameraPreset>("overview");
   const [facilitySelection, setFacilitySelection] =
     useState<FacilitySceneSelection | null>(null);
+  const [sceneZoom, setSceneZoom] =
+    useState<SceneZoomScale>(defaultSceneZoom);
 
   const hubByID = useMemo(
     () => new Map(hubs.map((hub) => [hub.hub_id, hub])),
@@ -123,6 +135,7 @@ export function HubNetwork({
     setSelectedHubID(hubID);
     setCameraPreset("overview");
     setFacilitySelection(null);
+    setSceneZoom(defaultSceneZoom);
   }, []);
 
   const focusTopRisk = useCallback(() => {
@@ -130,12 +143,46 @@ export function HubNetwork({
       setSelectedHubID(topRiskHub.hub_id);
       setCameraPreset("risk");
       setFacilitySelection({ kind: "alert", id: "facility-alert" });
+      setSceneZoom(defaultSceneZoom);
     }
   }, [topRiskHub]);
 
   const resetView = useCallback(() => {
+    if (selectedHubID === null) {
+      setSceneZoom(defaultSceneZoom);
+      return;
+    }
     selectHub(null);
-  }, [selectHub]);
+  }, [selectHub, selectedHubID]);
+
+  const changeZoom = useCallback((direction: SceneZoomDirection) => {
+    setSceneZoom((current) => stepSceneZoom(current, direction));
+  }, []);
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (stage === null) {
+      return;
+    }
+    const zoomWithWheel = (event: WheelEvent) => {
+      const target = event.target;
+      if (
+        !(target instanceof Element) ||
+        target.closest("canvas, svg") === null
+      ) {
+        return;
+      }
+      event.preventDefault();
+      const now = performance.now();
+      if (now - lastWheelZoomAt.current < 120) {
+        return;
+      }
+      lastWheelZoomAt.current = now;
+      changeZoom(event.deltaY < 0 ? "in" : "out");
+    };
+    stage.addEventListener("wheel", zoomWithWheel, { passive: false });
+    return () => stage.removeEventListener("wheel", zoomWithWheel);
+  }, [changeZoom]);
 
   const selectFacilityObject = useCallback(
     (selection: FacilitySceneSelection) => {
@@ -210,12 +257,14 @@ export function HubNetwork({
       setSelectedHubID(topRiskHub.hub_id);
       setCameraPreset("risk");
       setFacilitySelection({ kind: "alert", id: "facility-alert" });
+      setSceneZoom(defaultSceneZoom);
     }
     previousTopRisk.current = nextTopRisk;
   }, [topRisk?.waybill_id, topRiskHub]);
 
   return (
     <div
+      ref={stageRef}
       className={styles.networkStage}
       role="region"
       aria-label={`全国公路港网络，${hubs.length} 个港口，${routes.length} 条线路`}
@@ -249,6 +298,7 @@ export function HubNetwork({
       data-scene-layout-signature={sceneStats?.layoutSignature ?? ""}
       data-scene-selected-hub={selectedHubID ?? ""}
       data-camera-preset={cameraPreset}
+      data-camera-zoom-scale={sceneZoom}
       data-scene-selected-object={
         facilitySelection === null
           ? ""
@@ -264,6 +314,7 @@ export function HubNetwork({
           routes={routes}
           anomalies={anomalies}
           selectedHubID={selectedHubID}
+          zoomScale={sceneZoom}
           reducedMotion={reducedMotion}
           paused={!pageVisible}
           facilitySelection={facilitySelection}
@@ -279,6 +330,7 @@ export function HubNetwork({
               anomalies={anomalies}
               selectedHubID={selectedHubID}
               cameraPreset={cameraPreset}
+              zoomScale={sceneZoom}
               facilitySelection={facilitySelection}
               reducedMotion={reducedMotion}
               paused={!pageVisible}
@@ -468,7 +520,9 @@ export function HubNetwork({
             variant="icon"
             size="icon"
             onClick={resetView}
-            disabled={selectedHubID === null}
+            disabled={
+              selectedHubID === null && sceneZoom === defaultSceneZoom
+            }
             aria-label={
               selectedHubID === null ? "复位网络视角" : "返回全国视角"
             }
@@ -478,6 +532,50 @@ export function HubNetwork({
             ) : (
               <ArrowLeft aria-hidden="true" size={17} />
             )}
+          </Button>
+        </Tooltip>
+      </div>
+      <div
+        className={`${styles.sceneZoomControls} ${
+          selectedHub === undefined
+            ? ""
+            : styles.sceneZoomControlsFacility
+        }`}
+        role="group"
+        aria-label="地图缩放"
+        data-scene-zoom-controls
+      >
+        <Tooltip content="缩小地图" side="left">
+          <Button
+            className={styles.sceneZoomButton}
+            type="button"
+            variant="icon"
+            size="icon"
+            onClick={() => changeZoom("out")}
+            disabled={sceneZoom === sceneZoomSteps[0]}
+            aria-label="缩小地图"
+          >
+            <ZoomOut aria-hidden="true" size={17} />
+          </Button>
+        </Tooltip>
+        <output
+          className={styles.sceneZoomValue}
+          aria-label={`当前缩放 ${Math.round(sceneZoom * 100)}%`}
+          aria-live="polite"
+        >
+          {Math.round(sceneZoom * 100)}%
+        </output>
+        <Tooltip content="放大地图" side="left">
+          <Button
+            className={styles.sceneZoomButton}
+            type="button"
+            variant="icon"
+            size="icon"
+            onClick={() => changeZoom("in")}
+            disabled={sceneZoom === sceneZoomSteps.at(-1)}
+            aria-label="放大地图"
+          >
+            <ZoomIn aria-hidden="true" size={17} />
           </Button>
         </Tooltip>
       </div>
@@ -758,6 +856,18 @@ function dataModeLabel(mode: Overview["data_mode"]): string {
       return exhaustive;
     }
   }
+}
+
+function stepSceneZoom(
+  current: SceneZoomScale,
+  direction: SceneZoomDirection,
+): SceneZoomScale {
+  const currentIndex = sceneZoomSteps.indexOf(current);
+  const nextIndex =
+    direction === "in"
+      ? Math.min(currentIndex + 1, sceneZoomSteps.length - 1)
+      : Math.max(currentIndex - 1, 0);
+  return sceneZoomSteps[nextIndex] ?? current;
 }
 
 function supportsWebGL(): boolean {

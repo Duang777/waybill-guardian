@@ -574,6 +574,7 @@
 
 .sceneHud,
 .sceneControls,
+.sceneZoomControls,
 .sceneLegend,
 .sceneSelection,
 .sceneCaption,
@@ -700,6 +701,44 @@
 }
 
 .sceneToolButton {
+  flex: 0 0 auto;
+}
+
+.sceneZoomControls {
+  right: 14px;
+  bottom: 54px;
+  display: grid;
+  grid-template-columns: 40px 52px 40px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid oklch(0.76 0.012 230);
+  border-radius: 3px;
+  background: oklch(0.995 0.002 95 / 0.96);
+  pointer-events: auto;
+}
+
+.sceneZoomControls :global([data-slot="button"]) {
+  border: 0;
+  border-radius: 0;
+}
+
+.sceneZoomControls :global([data-slot="button"]):first-child {
+  border-right: 1px solid oklch(0.82 0.01 230);
+}
+
+.sceneZoomControls :global([data-slot="button"]):last-child {
+  border-left: 1px solid oklch(0.82 0.01 230);
+}
+
+.sceneZoomValue {
+  color: var(--ink-muted);
+  font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.sceneZoomButton {
   flex: 0 0 auto;
 }
 
@@ -1635,6 +1674,16 @@
   .sceneControls {
     top: 108px;
     right: 8px;
+  }
+
+  .sceneZoomControls {
+    top: 158px;
+    right: 8px;
+    bottom: auto;
+  }
+
+  .sceneZoomControlsFacility {
+    top: 204px;
   }
 
   .briefMeta {
