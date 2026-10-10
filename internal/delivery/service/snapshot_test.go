@@ -123,6 +123,20 @@ func TestBuildProblemSnapshotRejectsBrokenBoundaryData(t *testing.T) {
 			},
 			want: "forbids splitting",
 		},
+		{
+			name: "allowed rehandle without duration",
+			mutate: func(value *domain.ProblemSnapshot) {
+				value.Policy.MaxRehandlesPerStop = 1
+			},
+			want: "rehandle_seconds_per_cargo must be positive",
+		},
+		{
+			name: "negative rehandle cost",
+			mutate: func(value *domain.ProblemSnapshot) {
+				value.Policy.RehandleCostCentsPerCargo = -1
+			},
+			want: "rehandle_cost_cents_per_cargo must be non-negative",
+		},
 	}
 
 	for _, test := range tests {

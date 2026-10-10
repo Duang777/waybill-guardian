@@ -203,6 +203,8 @@ type PlanningPolicy struct {
 	Version                   uint64           `json:"version"`
 	DefaultMinSupportPPM      int64            `json:"default_min_support_ppm"`
 	MaxRehandlesPerStop       uint16           `json:"max_rehandles_per_stop"`
+	RehandleSecondsPerCargo   int64            `json:"rehandle_seconds_per_cargo"`
+	RehandleCostCentsPerCargo int64            `json:"rehandle_cost_cents_per_cargo"`
 	FreezeWindowSeconds       int64            `json:"freeze_window_seconds"`
 	ETAToleranceSeconds       int64            `json:"eta_tolerance_seconds"`
 	RequiredOrderPenaltyCents int64            `json:"required_order_penalty_cents"`

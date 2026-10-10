@@ -231,18 +231,17 @@ func cumulativeSupportedWeight(
 	cargoID domain.CargoID,
 	supports map[domain.CargoID][]domain.CargoID,
 	cargo map[domain.CargoID]domain.CargoItem,
-	visiting map[domain.CargoID]bool,
+	visited map[domain.CargoID]bool,
 ) int64 {
-	if visiting[cargoID] {
-		return 0
-	}
-	visiting[cargoID] = true
 	var result int64
 	for _, supportedID := range supports[cargoID] {
+		if visited[supportedID] {
+			continue
+		}
+		visited[supportedID] = true
 		result += cargo[supportedID].WeightG
-		result += cumulativeSupportedWeight(supportedID, supports, cargo, visiting)
+		result += cumulativeSupportedWeight(supportedID, supports, cargo, visited)
 	}
-	delete(visiting, cargoID)
 	return result
 }
 
@@ -271,10 +270,16 @@ func (state *validationState) validateExtraction() {
 						fmt.Sprintf("%d", stage.AfterStopIndex),
 						atStop(dutyIndex, tripIndex, int(stage.AfterStopIndex)))
 				}
-				if len(stage.RehandledCargo) > int(state.problem.Policy.MaxRehandlesPerStop) {
+				if len(stage.Rehandles) > int(state.problem.Policy.MaxRehandlesPerStop) {
 					state.add("V903", domain.SeverityError, "trip", ref(trip.ID),
 						fmt.Sprintf("at most %d rehandles", state.problem.Policy.MaxRehandlesPerStop),
-						fmt.Sprintf("%d rehandles", len(stage.RehandledCargo)),
+						fmt.Sprintf("%d rehandles", len(stage.Rehandles)),
+						atStop(dutyIndex, tripIndex, int(stage.AfterStopIndex)))
+				}
+				if stage.AfterStopIndex == 0 && len(stage.Rehandles) > 0 {
+					state.add("V905", domain.SeverityError, "trip", ref(trip.ID),
+						"the first load stage has no rehandle operations",
+						fmt.Sprintf("%d rehandles", len(stage.Rehandles)),
 						atStop(dutyIndex, tripIndex, int(stage.AfterStopIndex)))
 				}
 				for _, placement := range stage.Placements {
@@ -334,12 +339,137 @@ func (state *validationState) validateExtraction() {
 						atStop(dutyIndex, tripIndex, stopIndex))
 				}
 				if stopIndex > 0 {
-					state.validateRemovedCargoCorridors(
+					state.validateStageTransition(
 						dutyIndex, tripIndex, stopIndex, doors, previous, stage, removed,
 					)
 				}
 				previous = stage
 			}
+		}
+	}
+}
+
+func (state *validationState) validateStageTransition(
+	dutyIndex int,
+	tripIndex int,
+	stopIndex int,
+	doors map[domain.DoorID]domain.Door,
+	previous domain.LoadStage,
+	current domain.LoadStage,
+	removed map[domain.CargoID]struct{},
+) {
+	before := make(map[domain.CargoID]domain.Placement, len(previous.Placements))
+	for _, placement := range previous.Placements {
+		before[placement.CargoID] = placement
+	}
+	after := make(map[domain.CargoID]domain.Placement, len(current.Placements))
+	for _, placement := range current.Placements {
+		after[placement.CargoID] = placement
+	}
+	operations := make(map[domain.CargoID]domain.RehandleOperation, len(current.Rehandles))
+	for operationIndex, operation := range current.Rehandles {
+		if operation.Sequence != uint16(operationIndex+1) {
+			state.add("V905", domain.SeverityError, "cargo", ref(operation.CargoID),
+				fmt.Sprintf("rehandle sequence %d", operationIndex+1),
+				fmt.Sprintf("%d", operation.Sequence),
+				atStop(dutyIndex, tripIndex, stopIndex))
+		}
+		if _, duplicate := operations[operation.CargoID]; duplicate {
+			state.add("V905", domain.SeverityError, "cargo", ref(operation.CargoID),
+				"one rehandle operation per cargo and stop",
+				"duplicate rehandle operation",
+				atStop(dutyIndex, tripIndex, stopIndex))
+		}
+		operations[operation.CargoID] = operation
+		prior, existed := before[operation.CargoID]
+		next, remains := after[operation.CargoID]
+		if !existed || !remains {
+			state.add("V905", domain.SeverityError, "cargo", ref(operation.CargoID),
+				"rehandled cargo survives the stop",
+				"cargo does not exist on both sides of the stop",
+				atStop(dutyIndex, tripIndex, stopIndex))
+		}
+		if operation.StopIndex != uint32(stopIndex) ||
+			operation.Before.CargoID != operation.CargoID ||
+			operation.After.CargoID != operation.CargoID ||
+			operation.Before != prior ||
+			operation.After != next {
+			state.add("V905", domain.SeverityError, "cargo", ref(operation.CargoID),
+				"operation stop and before/after placements match adjacent stages",
+				"operation does not match the load-stage transition",
+				atStop(dutyIndex, tripIndex, stopIndex))
+		}
+		if operation.DurationSeconds != state.problem.Policy.RehandleSecondsPerCargo ||
+			operation.CostCents != state.problem.Policy.RehandleCostCentsPerCargo {
+			state.add("V905", domain.SeverityError, "cargo", ref(operation.CargoID),
+				fmt.Sprintf(
+					"%d seconds and %d cents",
+					state.problem.Policy.RehandleSecondsPerCargo,
+					state.problem.Policy.RehandleCostCentsPerCargo,
+				),
+				fmt.Sprintf(
+					"%d seconds and %d cents",
+					operation.DurationSeconds,
+					operation.CostCents,
+				),
+				atStop(dutyIndex, tripIndex, stopIndex))
+		}
+	}
+	changed := make(map[domain.CargoID]struct{})
+	blocking := make(map[domain.CargoID]struct{})
+	for cargoID, placement := range after {
+		prior, existed := before[cargoID]
+		if !existed || prior == placement {
+			continue
+		}
+		changed[cargoID] = struct{}{}
+	}
+	for _, placement := range previous.Placements {
+		if _, shouldRemove := removed[placement.CargoID]; !shouldRemove {
+			continue
+		}
+		door, exists := doors[placement.DoorID]
+		if !exists {
+			continue
+		}
+		corridor, corridorExists := extractionCorridor(placement.Cuboid(), door)
+		if !corridorExists {
+			state.add("V902", domain.SeverityError, "cargo", ref(placement.CargoID),
+				"cargo aligns with extraction door", "door is not reachable",
+				atStop(dutyIndex, tripIndex, stopIndex))
+			continue
+		}
+		for cargoID, blocker := range after {
+			if blocker.CompartmentID == placement.CompartmentID &&
+				corridor.IntersectsOpen(blocker.Cuboid()) {
+				blocking[cargoID] = struct{}{}
+			}
+		}
+	}
+	for cargoID := range changed {
+		if _, declared := operations[cargoID]; !declared {
+			state.add("V905", domain.SeverityError, "cargo", ref(cargoID),
+				"an explicit rehandle operation records every changed placement",
+				"placement changed without a rehandle operation",
+				atStop(dutyIndex, tripIndex, stopIndex))
+		}
+	}
+	for cargoID := range blocking {
+		if _, declared := operations[cargoID]; !declared {
+			state.add("V902", domain.SeverityError, "cargo", ref(cargoID),
+				"an explicit rehandle operation clears every extraction blocker",
+				"blocking cargo has no rehandle operation",
+				atStop(dutyIndex, tripIndex, stopIndex))
+		}
+	}
+	for cargoID := range operations {
+		_, placementChanged := changed[cargoID]
+		_, blocksExtraction := blocking[cargoID]
+		if !placementChanged && !blocksExtraction {
+			state.add("V905", domain.SeverityError, "cargo", ref(cargoID),
+				"rehandle is required by a placement change or extraction blocker",
+				"unnecessary rehandle operation",
+				atStop(dutyIndex, tripIndex, stopIndex))
 		}
 	}
 }
@@ -391,53 +521,6 @@ func equalCargoSets(left, right map[domain.CargoID]struct{}) bool {
 		}
 	}
 	return true
-}
-
-func (state *validationState) validateRemovedCargoCorridors(
-	dutyIndex int,
-	tripIndex int,
-	stopIndex int,
-	doors map[domain.DoorID]domain.Door,
-	previous domain.LoadStage,
-	current domain.LoadStage,
-	removed map[domain.CargoID]struct{},
-) {
-	remaining := make(map[domain.CargoID]domain.Placement, len(current.Placements))
-	for _, placement := range current.Placements {
-		remaining[placement.CargoID] = placement
-	}
-	rehandled := make(map[domain.CargoID]struct{}, len(current.RehandledCargo))
-	for _, cargoID := range current.RehandledCargo {
-		rehandled[cargoID] = struct{}{}
-	}
-	for _, placement := range previous.Placements {
-		if _, shouldRemove := removed[placement.CargoID]; !shouldRemove {
-			continue
-		}
-		door, exists := doors[placement.DoorID]
-		if !exists {
-			continue
-		}
-		corridor, corridorExists := extractionCorridor(placement.Cuboid(), door)
-		if !corridorExists {
-			state.add("V902", domain.SeverityError, "cargo", ref(placement.CargoID),
-				"cargo aligns with extraction door", "door is not reachable",
-				atStop(dutyIndex, tripIndex, stopIndex))
-			continue
-		}
-		for cargoID, blocker := range remaining {
-			if _, allowed := rehandled[cargoID]; allowed {
-				continue
-			}
-			if blocker.CompartmentID == placement.CompartmentID &&
-				corridor.IntersectsOpen(blocker.Cuboid()) {
-				state.add("V902", domain.SeverityError, "cargo", ref(placement.CargoID),
-					"unobstructed extraction corridor", string(cargoID),
-					atStop(dutyIndex, tripIndex, stopIndex),
-					domain.ObjectRef{Kind: "cargo", ID: string(cargoID)})
-			}
-		}
-	}
 }
 
 func extractionCorridor(cargo domain.Cuboid, door domain.Door) (domain.Cuboid, bool) {

@@ -1,7 +1,6 @@
 package validate
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"slices"
 	"strings"
@@ -34,7 +33,7 @@ func (state *validationState) validateBindings() {
 		state.plan.PolicyDigest != state.problem.PolicyDigest ||
 		state.plan.CommitmentDigest != state.problem.CommitmentDigest ||
 		state.plan.PlanDigest != planDigest ||
-		!validDigest(state.plan.ConfigDigest) {
+		!domain.ValidArtifactDigest(state.plan.ConfigDigest) {
 		state.add("V001", domain.SeverityError, "plan", ref(state.plan.PlanID),
 			"all schema and digest bindings match canonical content",
 			"one or more bindings differ", noPosition())
@@ -64,18 +63,6 @@ func (state *validationState) validateBindings() {
 			}
 		}
 	}
-}
-
-func validDigest(value domain.ArtifactDigest) bool {
-	if len(value) != sha256.Size*2 || strings.ToLower(string(value)) != string(value) {
-		return false
-	}
-	for _, current := range value {
-		if (current < '0' || current > '9') && (current < 'a' || current > 'f') {
-			return false
-		}
-	}
-	return true
 }
 
 func (state *validationState) validateOrderConservation() {

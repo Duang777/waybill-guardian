@@ -46,6 +46,14 @@ func (state *validationState) validateSchedules() {
 							atStop(dutyIndex, tripIndex, stopIndex))
 					}
 				}
+				for _, stage := range trip.LoadStages {
+					if int(stage.AfterStopIndex) != stopIndex {
+						continue
+					}
+					for _, operation := range stage.Rehandles {
+						requiredService += operation.DurationSeconds
+					}
+				}
 				actualService := durationSeconds(stop.ServiceAt, stop.DepartureAt)
 				if actualService < requiredService {
 					state.add("V502", domain.SeverityError, "trip", ref(trip.ID),
@@ -119,10 +127,148 @@ func (state *validationState) validateSchedules() {
 				segmentsByDriver[segment.DriverID] =
 					append(segmentsByDriver[segment.DriverID], segment)
 			}
+			state.validateDriveSegments(dutyIndex, tripIndex, trip)
+			state.validateRehandleSegments(dutyIndex, tripIndex, trip)
 		}
 	}
 	for driverID, segments := range segmentsByDriver {
 		state.validateDriverRegulation(driverID, segments)
+	}
+}
+
+func (state *validationState) validateRehandleSegments(
+	dutyIndex int,
+	tripIndex int,
+	trip domain.Trip,
+) {
+	type expectedRehandle struct {
+		stopIndex int
+		location  domain.LocationID
+		seconds   int64
+		endAt     time.Time
+	}
+	expected := make([]expectedRehandle, 0)
+	for _, stage := range trip.LoadStages {
+		var seconds int64
+		for _, operation := range stage.Rehandles {
+			seconds += operation.DurationSeconds
+		}
+		if seconds == 0 || int(stage.AfterStopIndex) >= len(trip.Stops) {
+			continue
+		}
+		stopIndex := int(stage.AfterStopIndex)
+		expected = append(expected, expectedRehandle{
+			stopIndex: stopIndex,
+			location:  trip.Stops[stopIndex].LocationID,
+			seconds:   seconds,
+			endAt:     trip.Stops[stopIndex].DepartureAt,
+		})
+	}
+	actual := make([]scheduledDrive, 0, len(expected))
+	for segmentIndex, segment := range trip.Schedule {
+		if segment.Kind == domain.SegmentRehandle {
+			actual = append(actual, scheduledDrive{
+				segmentIndex: segmentIndex,
+				segment:      segment,
+			})
+		}
+	}
+	if len(actual) != len(expected) {
+		state.add("V905", domain.SeverityError, "trip", ref(trip.ID),
+			fmt.Sprintf("%d rehandle schedule segments", len(expected)),
+			fmt.Sprintf("%d rehandle schedule segments", len(actual)),
+			position{duty: dutyIndex, trip: tripIndex, stop: -1, segment: -1})
+		return
+	}
+	for index, wanted := range expected {
+		current := actual[index]
+		seconds := durationSeconds(current.segment.StartAt, current.segment.EndAt)
+		if current.segment.From != wanted.location ||
+			current.segment.To != wanted.location ||
+			seconds != wanted.seconds ||
+			!current.segment.EndAt.Equal(wanted.endAt) ||
+			len(current.segment.TaskIDs) != 0 ||
+			current.segment.ChargerID != "" ||
+			current.segment.ChargedWh != 0 {
+			state.add("V905", domain.SeverityError, "trip", ref(trip.ID),
+				fmt.Sprintf(
+					"stop %d at %s for %d seconds ending %s",
+					wanted.stopIndex,
+					wanted.location,
+					wanted.seconds,
+					wanted.endAt.Format(time.RFC3339Nano),
+				),
+				fmt.Sprintf(
+					"%s -> %s for %d seconds ending %s",
+					current.segment.From,
+					current.segment.To,
+					seconds,
+					current.segment.EndAt.Format(time.RFC3339Nano),
+				),
+				atSegment(dutyIndex, tripIndex, current.segmentIndex))
+		}
+	}
+}
+
+type expectedDrive struct {
+	from    domain.LocationID
+	to      domain.LocationID
+	seconds int64
+}
+
+type scheduledDrive struct {
+	segmentIndex int
+	segment      domain.DutySegment
+}
+
+func (state *validationState) validateDriveSegments(
+	dutyIndex int,
+	tripIndex int,
+	trip domain.Trip,
+) {
+	expected := make([]expectedDrive, 0, len(trip.Stops))
+	for stopIndex := 1; stopIndex < len(trip.Stops); stopIndex++ {
+		previous := trip.Stops[stopIndex-1]
+		current := trip.Stops[stopIndex]
+		seconds, exists := state.matrixValue(
+			state.problem.Travel.TravelSeconds,
+			previous.LocationID,
+			current.LocationID,
+		)
+		if exists && seconds > 0 {
+			expected = append(expected, expectedDrive{
+				from: previous.LocationID, to: current.LocationID, seconds: seconds,
+			})
+		}
+	}
+	actual := make([]scheduledDrive, 0, len(expected))
+	for segmentIndex, segment := range trip.Schedule {
+		if segment.Kind == domain.SegmentDrive {
+			actual = append(actual, scheduledDrive{
+				segmentIndex: segmentIndex,
+				segment:      segment,
+			})
+		}
+	}
+	if len(actual) != len(expected) {
+		state.add("V503", domain.SeverityError, "trip", ref(trip.ID),
+			fmt.Sprintf("%d matrix-bound drive segments", len(expected)),
+			fmt.Sprintf("%d drive segments", len(actual)),
+			position{duty: dutyIndex, trip: tripIndex, stop: -1, segment: -1})
+		return
+	}
+	for index, wanted := range expected {
+		current := actual[index]
+		seconds := durationSeconds(current.segment.StartAt, current.segment.EndAt)
+		if current.segment.From != wanted.from ||
+			current.segment.To != wanted.to ||
+			seconds != wanted.seconds {
+			state.add("V503", domain.SeverityError, "trip", ref(trip.ID),
+				fmt.Sprintf("%s -> %s in %d seconds", wanted.from, wanted.to, wanted.seconds),
+				fmt.Sprintf("%s -> %s in %d seconds",
+					current.segment.From, current.segment.To, seconds),
+				atSegment(dutyIndex, tripIndex, current.segmentIndex))
+		}
 	}
 }
 
@@ -233,6 +379,7 @@ func (state *validationState) validateEnergy() {
 		if !exists {
 			continue
 		}
+		previousEnd := vehicle.Energy.InitialSOCWh
 		for tripIndex, trip := range duty.Trips {
 			var scheduledChargeWh int64
 			for segmentIndex, segment := range trip.Schedule {
@@ -263,7 +410,6 @@ func (state *validationState) validateEnergy() {
 					fmt.Sprintf("%d energy legs", len(trip.Energy)),
 					position{duty: dutyIndex, trip: tripIndex, stop: -1, segment: -1})
 			}
-			previousEnd := vehicle.Energy.InitialSOCWh
 			var legChargeWh int64
 			for legIndex, leg := range trip.Energy {
 				at := atSegment(dutyIndex, tripIndex, legIndex)

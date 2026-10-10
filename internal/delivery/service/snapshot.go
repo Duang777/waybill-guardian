@@ -320,6 +320,18 @@ func validateProblem(value domain.ProblemSnapshot) error {
 		value.Policy.DefaultMinSupportPPM > 1_000_000 {
 		return fmt.Errorf("policy default_min_support_ppm must be between 0 and 1000000")
 	}
+	if value.Policy.RehandleSecondsPerCargo < 0 {
+		return fmt.Errorf("policy rehandle_seconds_per_cargo must be non-negative")
+	}
+	if value.Policy.RehandleCostCentsPerCargo < 0 {
+		return fmt.Errorf("policy rehandle_cost_cents_per_cargo must be non-negative")
+	}
+	if value.Policy.MaxRehandlesPerStop > 0 &&
+		value.Policy.RehandleSecondsPerCargo == 0 {
+		return fmt.Errorf(
+			"policy rehandle_seconds_per_cargo must be positive when rehandles are allowed",
+		)
+	}
 	if len(value.SourceRefs) == 0 {
 		return fmt.Errorf("at least one source_ref is required")
 	}

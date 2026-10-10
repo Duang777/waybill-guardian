@@ -1,5 +1,7 @@
 package domain
 
+import "strings"
+
 func ComputeProblemDigest(problem ProblemSnapshot) (ArtifactDigest, error) {
 	problem.ProblemDigest = ""
 	return Digest(problem)
@@ -24,4 +26,17 @@ func ComputeReportDigest(report ValidationReport) (ArtifactDigest, error) {
 	report.ReportDigest = ""
 	report.CreatedAt = report.CreatedAt.UTC()
 	return Digest(report)
+}
+
+func ValidArtifactDigest(value ArtifactDigest) bool {
+	const sha256HexLength = 64
+	if len(value) != sha256HexLength || strings.ToLower(string(value)) != string(value) {
+		return false
+	}
+	for _, current := range value {
+		if (current < '0' || current > '9') && (current < 'a' || current > 'f') {
+			return false
+		}
+	}
+	return true
 }

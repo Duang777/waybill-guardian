@@ -353,10 +353,22 @@ type LoadStage struct {
 	Placements     []Placement
 	AxleLoadsG     []int64
 	CenterOfMassMM Point3
+	Rehandles      []RehandleOperation
+}
+
+type RehandleOperation struct {
+	Sequence        uint16
+	CargoID         CargoID
+	StopIndex       uint32
+	Before          Placement
+	After           Placement
+	DurationSeconds int64
+	CostCents       int64
 }
 ```
 
-每个取货或卸货后的状态都要独立合法。只校验发车时布局不够。
+每个取货或卸货后的状态都要独立合法。倒货动作必须绑定相邻阶段的前后布局，并进入站点作业
+时长和总成本。只校验发车时布局不够。
 
 ## 6. 独立 Validator
 
@@ -376,7 +388,7 @@ Validator 固定执行以下规则族：
 | `V6xx` | EV 能量、保底电量、充电兼容、时窗和站点容量 |
 | `V7xx` | 车厢边界、障碍物、朝向和不重叠 |
 | `V8xx` | 支撑面积、支撑图、累计承重和易碎 |
-| `V9xx` | 多门提取走廊、逐站卸货和 rehandle |
+| `V9xx` | 多门提取走廊、逐站卸货、显式倒货工序及其调度段 |
 | `V10xx` | 车辆总重、舱室载重、轴载和重心包络 |
 | `V11xx` | 已执行事实、硬承诺、冻结窗口和软稳定性差异 |
 | `V12xx` | 目标值、成本和业务指标重算 |
@@ -403,6 +415,9 @@ type ValidationReport struct {
 只有 `Valid=true` 且硬违规为零的报告可以申请审批。Validator 不修补非法计划。
 
 ## 7. 求解器
+
+局部搜索的状态、算子、预算、证据和验证门禁见
+[`delivery-search-design.md`](./delivery-search-design.md)。
 
 ### 7.1 深接口
 

@@ -53,12 +53,22 @@ func (value Placement) Cuboid() Cuboid {
 	return Cuboid{Origin: value.PositionMM, Size: value.SizeMM}
 }
 
+type RehandleOperation struct {
+	Sequence        uint16    `json:"sequence"`
+	CargoID         CargoID   `json:"cargo_id"`
+	StopIndex       uint32    `json:"stop_index"`
+	Before          Placement `json:"before"`
+	After           Placement `json:"after"`
+	DurationSeconds int64     `json:"duration_seconds"`
+	CostCents       int64     `json:"cost_cents"`
+}
+
 type LoadStage struct {
-	AfterStopIndex uint32      `json:"after_stop_index"`
-	Placements     []Placement `json:"placements"`
-	AxleLoadsG     []int64     `json:"axle_loads_g"`
-	CenterOfMassMM Point3      `json:"center_of_mass_mm"`
-	RehandledCargo []CargoID   `json:"rehandled_cargo"`
+	AfterStopIndex uint32              `json:"after_stop_index"`
+	Placements     []Placement         `json:"placements"`
+	AxleLoadsG     []int64             `json:"axle_loads_g"`
+	CenterOfMassMM Point3              `json:"center_of_mass_mm"`
+	Rehandles      []RehandleOperation `json:"rehandles"`
 }
 
 type Trip struct {
@@ -108,8 +118,10 @@ type PlanMetrics struct {
 	TotalWaitSeconds          int64  `json:"total_wait_seconds"`
 	TotalBreakSeconds         int64  `json:"total_break_seconds"`
 	TotalChargeSeconds        int64  `json:"total_charge_seconds"`
+	TotalRehandleSeconds      int64  `json:"total_rehandle_seconds"`
 	TotalEnergyWh             int64  `json:"total_energy_wh"`
 	TotalCostCents            int64  `json:"total_cost_cents"`
+	TotalRehandleCostCents    int64  `json:"total_rehandle_cost_cents"`
 	StabilityCostCents        int64  `json:"stability_cost_cents"`
 	OnTimeTasks               uint32 `json:"on_time_tasks"`
 	LateTasks                 uint32 `json:"late_tasks"`

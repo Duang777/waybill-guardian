@@ -196,11 +196,17 @@ func (state *validationState) recomputeMetrics() domain.PlanMetrics {
 					metrics.TotalBreakSeconds += seconds
 				case domain.SegmentCharge:
 					metrics.TotalChargeSeconds += seconds
+				case domain.SegmentRehandle:
+					metrics.TotalRehandleSeconds += seconds
 				}
 			}
 			for _, stage := range trip.LoadStages {
 				var volume, payload int64
-				metrics.Rehandles += uint32(len(stage.RehandledCargo))
+				metrics.Rehandles += uint32(len(stage.Rehandles))
+				for _, operation := range stage.Rehandles {
+					metrics.TotalRehandleCostCents += operation.CostCents
+					metrics.TotalCostCents += operation.CostCents
+				}
 				for _, placement := range stage.Placements {
 					cargo, cargoExists := state.cargo[placement.CargoID]
 					if !cargoExists {

@@ -90,11 +90,12 @@ const (
 type SegmentKind string
 
 const (
-	SegmentDrive   SegmentKind = "drive"
-	SegmentService SegmentKind = "service"
-	SegmentWait    SegmentKind = "wait"
-	SegmentBreak   SegmentKind = "break"
-	SegmentCharge  SegmentKind = "charge"
+	SegmentDrive    SegmentKind = "drive"
+	SegmentService  SegmentKind = "service"
+	SegmentWait     SegmentKind = "wait"
+	SegmentBreak    SegmentKind = "break"
+	SegmentCharge   SegmentKind = "charge"
+	SegmentRehandle SegmentKind = "rehandle"
 )
 
 type Orientation string
@@ -127,6 +128,7 @@ const (
 	UnassignedCommitment      UnassignedReason = "commitment"
 	UnassignedNoVehicle       UnassignedReason = "no_vehicle"
 	UnassignedManualExclusion UnassignedReason = "manual_exclusion"
+	UnassignedSearchExhausted UnassignedReason = "search_exhausted"
 )
 
 type Severity string
