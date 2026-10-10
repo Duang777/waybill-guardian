@@ -481,6 +481,23 @@
   height: 100% !important;
 }
 
+.cargoViewToolbar {
+  position: absolute;
+  z-index: 6;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  gap: 4px;
+}
+
+.cargoViewToolbar :global([data-slot="button"]) {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+  background: oklch(0.99 0.002 95 / 0.94);
+}
+
 .cargoEmpty {
   display: grid;
   place-items: center;
@@ -520,6 +537,27 @@
 
 .cargoFallback {
   padding: 18px 18px 54px;
+}
+
+.fallbackViews {
+  display: grid;
+  height: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.fallbackViews figure {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: 20px minmax(0, 1fr);
+  margin: 0;
+}
+
+.fallbackViews figcaption {
+  color: oklch(0.42 0.026 183);
+  font-size: 9px;
+  font-weight: 700;
 }
 
 .cargoFallback svg {

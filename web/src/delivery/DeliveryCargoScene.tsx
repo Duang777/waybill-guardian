@@ -1,5 +1,12 @@
 import { Canvas, useThree, type ThreeEvent } from "@react-three/fiber";
 import {
+  RotateCcw,
+  RotateCw,
+  Scan,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react";
+import {
   BoxGeometry,
   Color,
   EdgesGeometry,
@@ -8,8 +15,11 @@ import {
   LineSegments,
   Matrix4,
   Object3D,
+  OrthographicCamera,
+  Vector3,
   type InstancedMesh,
 } from "three";
+import { OrbitControls as ThreeOrbitControls } from "three/addons/controls/OrbitControls.js";
 import {
   useEffect,
   useLayoutEffect,
@@ -22,6 +32,7 @@ import type {
   DeliveryPlacement,
   DeliveryVehicle,
 } from "./contract";
+import { Button } from "../components/ui/button";
 import styles from "./delivery-console.module.css";
 
 type CargoSceneProps = {
@@ -34,6 +45,11 @@ type CargoSceneProps = {
 
 type CargoColor = {
   fill: string;
+};
+
+type CargoViewCommand = {
+  kind: "rotate_left" | "rotate_right" | "zoom_in" | "zoom_out" | "reset";
+  sequence: number;
 };
 
 const millimetersPerSceneUnit = 1_000;
@@ -58,6 +74,7 @@ export function DeliveryCargoScene({
   const [renderer, setRenderer] = useState<"webgl" | "fallback">(() =>
     !forceFallback && webGLAvailable() ? "webgl" : "fallback",
   );
+  const [viewCommand, setViewCommand] = useState<CargoViewCommand | null>(null);
 
   useEffect(() => {
     setRenderer(!forceFallback && webGLAvailable() ? "webgl" : "fallback");
@@ -120,8 +137,61 @@ export function DeliveryCargoScene({
           stage={stage}
           selectedCargoID={selectedCargoID}
           onSelectCargo={onSelectCargo}
+          viewCommand={viewCommand}
         />
       </Canvas>
+      <div className={styles.cargoViewToolbar} role="toolbar" aria-label="3D 装载视角">
+        <Button
+          type="button"
+          variant="secondary"
+          size="icon"
+          aria-label="向左旋转车厢"
+          title="向左旋转"
+          onClick={() => setViewCommand(nextViewCommand(viewCommand, "rotate_left"))}
+        >
+          <RotateCcw aria-hidden="true" size={16} />
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          size="icon"
+          aria-label="向右旋转车厢"
+          title="向右旋转"
+          onClick={() => setViewCommand(nextViewCommand(viewCommand, "rotate_right"))}
+        >
+          <RotateCw aria-hidden="true" size={16} />
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          size="icon"
+          aria-label="放大车厢"
+          title="放大"
+          onClick={() => setViewCommand(nextViewCommand(viewCommand, "zoom_in"))}
+        >
+          <ZoomIn aria-hidden="true" size={16} />
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          size="icon"
+          aria-label="缩小车厢"
+          title="缩小"
+          onClick={() => setViewCommand(nextViewCommand(viewCommand, "zoom_out"))}
+        >
+          <ZoomOut aria-hidden="true" size={16} />
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          size="icon"
+          aria-label="复位车厢视角"
+          title="复位视角"
+          onClick={() => setViewCommand(nextViewCommand(viewCommand, "reset"))}
+        >
+          <Scan aria-hidden="true" size={16} />
+        </Button>
+      </div>
     </div>
   );
 }
@@ -131,11 +201,13 @@ function CargoSceneContents({
   stage,
   selectedCargoID,
   onSelectCargo,
+  viewCommand,
 }: {
   vehicle: DeliveryVehicle;
   stage: DeliveryLoadStage;
   selectedCargoID: string | null;
   onSelectCargo: (cargoID: string) => void;
+  viewCommand: CargoViewCommand | null;
 }) {
   const compartment = vehicle.compartments[0];
   if (compartment === undefined) {
@@ -154,26 +226,87 @@ function CargoSceneContents({
   };
 
   return (
-    <group position={[-center.x, 0, -center.z]}>
-      <CompartmentFrame center={center} size={sceneSize} />
-      <AxleGuides vehicle={vehicle} compartmentWidth={sceneSize.z} />
-      <CargoPlacements
-        placements={stage.placements}
-        selectedCargoID={selectedCargoID}
-        onSelectCargo={onSelectCargo}
-      />
-      <mesh
-        position={[
-          stage.center_of_mass_mm.x / millimetersPerSceneUnit,
-          Math.max(stage.center_of_mass_mm.z / millimetersPerSceneUnit, 0.08),
-          stage.center_of_mass_mm.y / millimetersPerSceneUnit,
-        ]}
-      >
-        <sphereGeometry args={[0.095, 18, 12]} />
-        <meshStandardMaterial color="#d84c3f" roughness={0.7} />
-      </mesh>
-    </group>
+    <>
+      <CargoCameraController targetY={center.y} command={viewCommand} />
+      <group position={[-center.x, 0, -center.z]}>
+        <CompartmentFrame center={center} size={sceneSize} />
+        <AxleGuides vehicle={vehicle} compartmentWidth={sceneSize.z} />
+        <CargoPlacements
+          placements={stage.placements}
+          selectedCargoID={selectedCargoID}
+          onSelectCargo={onSelectCargo}
+        />
+        <mesh
+          position={[
+            stage.center_of_mass_mm.x / millimetersPerSceneUnit,
+            Math.max(stage.center_of_mass_mm.z / millimetersPerSceneUnit, 0.08),
+            stage.center_of_mass_mm.y / millimetersPerSceneUnit,
+          ]}
+        >
+          <sphereGeometry args={[0.095, 18, 12]} />
+          <meshStandardMaterial color="#d84c3f" roughness={0.7} />
+        </mesh>
+      </group>
+    </>
   );
+}
+
+function CargoCameraController({
+  targetY,
+  command,
+}: {
+  targetY: number;
+  command: CargoViewCommand | null;
+}) {
+  const camera = useThree((state) => state.camera);
+  const canvas = useThree((state) => state.gl.domElement);
+  const invalidate = useThree((state) => state.invalidate);
+  const controls = useRef<ThreeOrbitControls | null>(null);
+  const target = useMemo(() => new Vector3(0, targetY, 0), [targetY]);
+
+  useEffect(() => {
+    const nextControls = new ThreeOrbitControls(camera, canvas);
+    const requestFrame = () => invalidate();
+    nextControls.enableDamping = false;
+    nextControls.enablePan = false;
+    nextControls.minZoom = 42;
+    nextControls.maxZoom = 120;
+    nextControls.target.copy(target);
+    nextControls.addEventListener("change", requestFrame);
+    nextControls.update();
+    controls.current = nextControls;
+    return () => {
+      nextControls.removeEventListener("change", requestFrame);
+      nextControls.dispose();
+      controls.current = null;
+    };
+  }, [camera, canvas, invalidate, target]);
+
+  useEffect(() => {
+    if (command === null || !(camera instanceof OrthographicCamera)) {
+      return;
+    }
+    if (command.kind === "reset") {
+      camera.position.set(8.5, 6.2, 8.8);
+      camera.zoom = 72;
+    } else if (command.kind === "zoom_in") {
+      camera.zoom = Math.min(camera.zoom * 1.16, 120);
+    } else if (command.kind === "zoom_out") {
+      camera.zoom = Math.max(camera.zoom / 1.16, 42);
+    } else {
+      const radians = command.kind === "rotate_left" ? Math.PI / 12 : -Math.PI / 12;
+      const offset = camera.position.clone().sub(target);
+      offset.applyAxisAngle(new Vector3(0, 1, 0), radians);
+      camera.position.copy(target).add(offset);
+    }
+    camera.lookAt(target);
+    camera.updateProjectionMatrix();
+    controls.current?.target.copy(target);
+    controls.current?.update();
+    invalidate();
+  }, [camera, command, invalidate, target]);
+
+  return null;
 }
 
 function CompartmentFrame({
@@ -383,71 +516,145 @@ function CargoFallback({
       data-cargo-count={stage.placements.length}
       data-cargo-mode="svg"
     >
-      <svg
-        viewBox={`0 0 ${bounds.length} ${bounds.width}`}
-        role="img"
-        aria-label={`车厢顶视图，当前装载 ${stage.placements.length} 件货物`}
-        preserveAspectRatio="xMidYMid meet"
-      >
-        <rect
-          x="4"
-          y="4"
-          width={Math.max(bounds.length - 8, 0)}
-          height={Math.max(bounds.width - 8, 0)}
-          className={styles.fallbackCompartment}
-        />
-        {vehicle.axles.map((axle) => (
-          <line
-            key={axle.id}
-            x1={axle.position_x_mm}
-            x2={axle.position_x_mm}
-            y1="0"
-            y2={bounds.width}
-            className={styles.fallbackAxle}
-          />
-        ))}
-        {stage.placements.map((placement) => {
-          const selected = placement.cargo_id === selectedCargoID;
-          return (
-            <g
-              key={placement.cargo_id}
-              role="button"
-              tabIndex={0}
-              aria-label={`选择货物 ${placement.cargo_id}`}
-              onClick={() => onSelectCargo(placement.cargo_id)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  onSelectCargo(placement.cargo_id);
-                }
-              }}
-              className={styles.fallbackCargo}
-            >
-              <rect
-                x={placement.position_mm.x}
-                y={placement.position_mm.y}
-                width={placement.size_mm.length}
-                height={placement.size_mm.width}
-                fill={
-                  selected
-                    ? "#d84c3f"
-                    : cargoColor(placement.cargo_id).fill
-                }
+      <div className={styles.fallbackViews}>
+        <figure>
+          <figcaption>顶视</figcaption>
+          <svg
+            viewBox={`0 0 ${bounds.length} ${bounds.width}`}
+            role="img"
+            aria-label={`车厢顶视图，当前装载 ${stage.placements.length} 件货物`}
+            preserveAspectRatio="xMidYMid meet"
+          >
+            <rect
+              x="4"
+              y="4"
+              width={Math.max(bounds.length - 8, 0)}
+              height={Math.max(bounds.width - 8, 0)}
+              className={styles.fallbackCompartment}
+            />
+            {vehicle.axles.map((axle) => (
+              <line
+                key={axle.id}
+                x1={axle.position_x_mm}
+                x2={axle.position_x_mm}
+                y1="0"
+                y2={bounds.width}
+                className={styles.fallbackAxle}
               />
-              <title>{placement.cargo_id}</title>
-            </g>
-          );
-        })}
-        <circle
-          cx={stage.center_of_mass_mm.x}
-          cy={stage.center_of_mass_mm.y}
-          r="70"
-          className={styles.fallbackCenterOfMass}
-        />
-      </svg>
-      <span className={styles.fallbackLabel}>WebGL 降级视图 · 顶视</span>
+            ))}
+            <FallbackPlacements
+              stage={stage}
+              selectedCargoID={selectedCargoID}
+              onSelectCargo={onSelectCargo}
+              view="top"
+              compartmentHeight={bounds.height}
+            />
+            <circle
+              cx={stage.center_of_mass_mm.x}
+              cy={stage.center_of_mass_mm.y}
+              r="70"
+              className={styles.fallbackCenterOfMass}
+            />
+          </svg>
+        </figure>
+        <figure>
+          <figcaption>侧视</figcaption>
+          <svg
+            viewBox={`0 0 ${bounds.length} ${bounds.height}`}
+            role="img"
+            aria-label={`车厢侧视图，当前装载 ${stage.placements.length} 件货物`}
+            preserveAspectRatio="xMidYMid meet"
+          >
+            <rect
+              x="4"
+              y="4"
+              width={Math.max(bounds.length - 8, 0)}
+              height={Math.max(bounds.height - 8, 0)}
+              className={styles.fallbackCompartment}
+            />
+            {vehicle.axles.map((axle) => (
+              <line
+                key={axle.id}
+                x1={axle.position_x_mm}
+                x2={axle.position_x_mm}
+                y1="0"
+                y2={bounds.height}
+                className={styles.fallbackAxle}
+              />
+            ))}
+            <FallbackPlacements
+              stage={stage}
+              selectedCargoID={selectedCargoID}
+              onSelectCargo={onSelectCargo}
+              view="side"
+              compartmentHeight={bounds.height}
+            />
+            <circle
+              cx={stage.center_of_mass_mm.x}
+              cy={bounds.height - stage.center_of_mass_mm.z}
+              r="70"
+              className={styles.fallbackCenterOfMass}
+            />
+          </svg>
+        </figure>
+      </div>
+      <span className={styles.fallbackLabel}>WebGL 降级视图</span>
     </div>
   );
+}
+
+function FallbackPlacements({
+  stage,
+  selectedCargoID,
+  onSelectCargo,
+  view,
+  compartmentHeight,
+}: {
+  stage: DeliveryLoadStage;
+  selectedCargoID: string | null;
+  onSelectCargo: (cargoID: string) => void;
+  view: "top" | "side";
+  compartmentHeight: number;
+}) {
+  return stage.placements.map((placement) => {
+    const selected = placement.cargo_id === selectedCargoID;
+    const sideView = view === "side";
+    return (
+      <g
+        key={placement.cargo_id}
+        role="button"
+        tabIndex={0}
+        aria-label={`选择货物 ${placement.cargo_id}`}
+        onClick={() => onSelectCargo(placement.cargo_id)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onSelectCargo(placement.cargo_id);
+          }
+        }}
+        className={styles.fallbackCargo}
+      >
+        <rect
+          x={placement.position_mm.x}
+          y={
+            sideView
+              ? compartmentHeight -
+                placement.position_mm.z -
+                placement.size_mm.height
+              : placement.position_mm.y
+          }
+          width={placement.size_mm.length}
+          height={
+            sideView ? placement.size_mm.height : placement.size_mm.width
+          }
+          fill={
+            selected ? "#d84c3f" : cargoColor(placement.cargo_id).fill
+          }
+        />
+        <title>{placement.cargo_id}</title>
+      </g>
+    );
+  });
 }
 
 function placementSceneSize(
@@ -481,6 +688,16 @@ function cargoColor(cargoID: string): CargoColor {
 
 function cargoTopColor(index: number): string {
   return index % 2 === 0 ? "#e7ece8" : "#d8e1dc";
+}
+
+function nextViewCommand(
+  current: CargoViewCommand | null,
+  kind: CargoViewCommand["kind"],
+): CargoViewCommand {
+  return {
+    kind,
+    sequence: (current?.sequence ?? 0) + 1,
+  };
 }
 
 function webGLAvailable(): boolean {

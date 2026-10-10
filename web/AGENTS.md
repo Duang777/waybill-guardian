@@ -37,7 +37,8 @@ React 运营控制台。目标是在三分钟内显示异常、归因、审批�
 - Delivery 路线、司机时间轴、SOC 和装载阶段由同一个离散 stop 游标驱动。浏览器只投影
   artifact，不补算路线、装载坐标、校验结论或收益。
 - Delivery 3D 装载静止时使用 `frameloop="demand"`，超过 100 件货物切换
-  `InstancedMesh`。WebGL 不可用或 context 丢失时显示同一 placement 数据生成的顶视 SVG。
+  `InstancedMesh`。视角支持鼠标旋转缩放和 40 像素键盘工具栏。WebGL 不可用或 context
+  丢失时显示同一 placement 数据生成的顶视、侧视 SVG。
 - API 边界将非法 JSON、契约不符、无权限、超时和服务不可用映射为独立状态；加载态使用
   与最终网格同尺寸的骨架，空目录不显示业务兜底数据。
 - 工作台区分 SSE 连接中、在线、重连中、浏览器离线和审计已固化。待审批 run 只有在
@@ -96,7 +97,7 @@ transform/opacity，动态切换 reduced-motion 后要求无位移，并保存�
 键盘步骤切换、SSE 游标去重与断线审批锁、context 丢失后的 SVG 降级、审批按钮命中区、
 桌面和 375 像素下的 normal/empty/failed/expired/stale/rejected/approved/partial/
 reconciliation/fallback 状态矩阵，以及 300 件 InstancedMesh 容量和重复挂载资源门禁。
-脚本保存桌面、手机和 300 件装载截图。
+容量场景连续旋转、逐站回放，并执行 20 次卸载重挂载。脚本保存桌面、手机和 300 件装载截图。
 
 `npm run record:demo` 默认使用在线模型，启动隔离服务并录制确认、回放和驳回路径，再用
 ffmpeg 生成带中文字幕的 MP4。默认分辨率是 1600×900；正式高清录制可设置

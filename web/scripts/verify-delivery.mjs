@@ -49,6 +49,13 @@ try {
   const page = await browser.newPage({
     viewport: { width: 1440, height: 1000 },
   });
+  const browserErrors = [];
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      browserErrors.push(message.text());
+    }
+  });
   await installDeliveryEventSource(page);
   await page.route("**/api/**", (route) => route.abort("blockedbyclient"));
   await page.goto(webURL, { waitUntil: "domcontentloaded" });
@@ -83,6 +90,7 @@ try {
   await page.route("**/api/delivery/approvals/**", (route) =>
     route.fulfill({ status: 204 }),
   );
+  browserErrors.length = 0;
 
   const loadState = async (state) => {
     currentFixture = fixtures[state];
@@ -173,6 +181,29 @@ try {
       pixelProbe.height > 0 &&
       pixelProbe.colors >= 3,
     `cargo canvas was blank: ${JSON.stringify(pixelProbe)}`,
+  );
+  await page.getByRole("button", { name: "向右旋转车厢" }).click();
+  await page.waitForTimeout(60);
+  const rotatedPixelProbe = await probeCanvasPixels(cargoCanvas);
+  assert(
+    rotatedPixelProbe !== null &&
+      rotatedPixelProbe.signature !== pixelProbe.signature,
+    "camera rotation did not produce a new rendered frame",
+  );
+  const cameraButtonSizes = await page
+    .getByRole("toolbar", { name: "3D 装载视角" })
+    .getByRole("button")
+    .evaluateAll((buttons) =>
+      buttons.map((button) => {
+        const rect = button.getBoundingClientRect();
+        return { width: rect.width, height: rect.height };
+      }),
+    );
+  assert(
+    cameraButtonSizes.every(
+      (size) => size.width >= 40 && size.height >= 40,
+    ),
+    `camera controls missed the 40px target: ${JSON.stringify(cameraButtonSizes)}`,
   );
 
   await page.getByRole("button", { name: "下一个站点" }).click();
@@ -266,9 +297,12 @@ try {
       `${viewport.name} SVG fallback lost cargo placements`,
     );
     assert(
-      (await fallback.locator('g[role="button"]').count()) === 8,
-      `${viewport.name} SVG fallback did not expose every cargo item`,
+      (await fallback.locator('g[role="button"]').count()) === 16,
+      `${viewport.name} SVG fallback did not expose both cargo projections`,
     );
+    await fallback
+      .getByRole("img", { name: /车厢侧视图/ })
+      .waitFor();
     await assertNoHorizontalOverflow(page, `${viewport.name}/fallback`);
     matrix.push(`${viewport.name}/fallback`);
   }
@@ -297,11 +331,35 @@ try {
   await largeCanvas.screenshot({
     path: join(artifactDir, "delivery-cargo-300.png"),
   });
+  for (let rotation = 0; rotation < 18; rotation += 1) {
+    await page.getByRole("button", { name: "向右旋转车厢" }).click();
+  }
+  await page.waitForTimeout(80);
+  const rotatedLargeProbe = await probeCanvasPixels(largeCanvas);
+  assert(
+    rotatedLargeProbe !== null &&
+      rotatedLargeProbe.signature !== largePixelProbe.signature &&
+      rotatedLargeProbe.chromaticPixels >= 3,
+    `continuous 300-placement rotation failed: ${JSON.stringify(rotatedLargeProbe)}`,
+  );
+  await page.getByRole("button", { name: "下一个站点" }).click();
+  await page.getByText("200 件在舱", { exact: true }).waitFor();
+  assert(
+    (await largeStage.getAttribute("data-cargo-mode")) === "instanced",
+    "large route playback left instanced rendering mode",
+  );
+  const playedLargeProbe = await probeCanvasPixels(largeCanvas);
+  assert(
+    playedLargeProbe !== null && playedLargeProbe.chromaticPixels >= 3,
+    `300-placement playback produced a blank frame: ${JSON.stringify(playedLargeProbe)}`,
+  );
+  await page.getByRole("button", { name: "上一个站点" }).click();
+  await page.getByText("300 件在舱", { exact: true }).waitFor();
 
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("HeapProfiler.enable");
   const mountSamples = [await collectDOMCounters(cdp)];
-  for (let cycle = 0; cycle < 3; cycle += 1) {
+  for (let cycle = 0; cycle < 20; cycle += 1) {
     await page.goto(`${webURL}/invalid-delivery-route`, {
       waitUntil: "networkidle",
     });
@@ -340,6 +398,10 @@ try {
   await page
     .getByRole("heading", { name: "响应格式错误", exact: true })
     .waitFor();
+  assert(
+    browserErrors.length === 0,
+    `browser emitted errors: ${JSON.stringify(browserErrors)}`,
+  );
 
   console.log(
     JSON.stringify(
@@ -503,6 +565,7 @@ async function probeCanvasPixels(canvas) {
     await new Promise((resolve) => requestAnimationFrame(resolve));
     const samples = [];
     let chromaticPixels = 0;
+    let signature = 2_166_136_261;
     const pixel = new Uint8Array(4);
     for (let y = 1; y < 8; y += 1) {
       for (let x = 1; x < 8; x += 1) {
@@ -522,6 +585,10 @@ async function probeCanvasPixels(canvas) {
         ) {
           chromaticPixels += 1;
         }
+        for (const channel of pixel) {
+          signature ^= channel;
+          signature = Math.imul(signature, 16_777_619);
+        }
         samples.push([...pixel].join(","));
       }
     }
@@ -530,6 +597,7 @@ async function probeCanvasPixels(canvas) {
       height: gl.drawingBufferHeight,
       colors: new Set(samples).size,
       chromaticPixels,
+      signature: signature >>> 0,
     };
   });
 }
