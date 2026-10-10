@@ -1,0 +1,90 @@
+{
+  "schema_version": "delivery.benchmark.manifest.v1",
+  "generator": {
+    "version": "delivery.synthetic.v1",
+    "base_time": "2026-10-10T08:00:00Z",
+    "coordinate_origin": "Hangzhou synthetic grid; latitude and longitude are integer microdegrees",
+    "distance_rule": "Manhattan distance over generated integer meter coordinates",
+    "travel_time_rule": "ceil(distance_meters / 10), equivalent to 36 km/h",
+    "units": {
+      "coordinate": "microdegree",
+      "distance": "meter",
+      "duration": "second",
+      "energy": "watt_hour",
+      "length": "millimeter",
+      "money": "cent",
+      "ratio": "parts_per_million",
+      "weight": "gram"
+    },
+    "rounding": {
+      "cost": "integer truncation per validator formula",
+      "travel_seconds": "ceiling",
+      "utilization": "integer truncation to parts per million"
+    },
+    "field_sources": {
+      "cargo": "SplitMix64 sequence derived from the dataset seed",
+      "driver": "fixed benchmark regulation profile",
+      "identity": "generator version, dataset id, and one-based record index",
+      "location": "SplitMix64 sequence derived from the dataset seed",
+      "matrix": "generated location coordinates and documented distance and travel-time rules",
+      "time_window": "base_time and fixed 24-hour horizon",
+      "vehicle": "fixed benchmark vehicle profile"
+    }
+  },
+  "datasets": [
+    {
+      "id": "synthetic-s",
+      "seed": 101001,
+      "request_count": 8,
+      "task_count": 16,
+      "cargo_count": 8,
+      "vehicle_count": 8,
+      "driver_count": 8,
+      "location_count": 9,
+      "canonical_bytes": 25931,
+      "canonical_sha256": "a13d90eaf06ee57cd52eae3230037cf0dbdc19a49049e7a96976067f5eae6cd1",
+      "problem_digest": "de23f1f4c93c52714c081b9347189def559771ec6079d21487592cac1b089727",
+      "policy_digest": "335c30686efc11d04473525d201bf1e73c4836690e601ec6d8c55b7a0339dd80",
+      "commitment_digest": "dd539391648cf598eed36f2e156c359f8e8897ac3c83dd14d465673886903389",
+      "reference_plan_digest": "685d0e89c31eac8e8b0222425e9afdb50dabb2cac9f8470407544f5e8b3bf987",
+      "reference_report_digest": "a36f98c0cb0bb6014be725687134e2cddf2ae0d02087881c90dd608aa85261c2",
+      "reference_hard_violations": 0
+    },
+    {
+      "id": "synthetic-m",
+      "seed": 101002,
+      "request_count": 32,
+      "task_count": 64,
+      "cargo_count": 32,
+      "vehicle_count": 32,
+      "driver_count": 32,
+      "location_count": 33,
+      "canonical_bytes": 106782,
+      "canonical_sha256": "9fbd2f3b8aac4ad531aa295fe9b0c4a2b65bc6278e5983616d40b93f225ab5ed",
+      "problem_digest": "807875f530cef022c5e9482524436c841a341291829b54e9d7fcf8fbcef8c870",
+      "policy_digest": "335c30686efc11d04473525d201bf1e73c4836690e601ec6d8c55b7a0339dd80",
+      "commitment_digest": "c36f6e8e434b731fe70cbaebb0576fb98165f5a87a6866f387ac718ef71bd972",
+      "reference_plan_digest": "ac3560440059784664a315ff5dff47231764fcaa36eb453c2614e6e2f642216a",
+      "reference_report_digest": "28d676245d18f22f85e9362c2cf72e25f1d434a4c81a3106810f350c43abbda7",
+      "reference_hard_violations": 0
+    },
+    {
+      "id": "synthetic-l",
+      "seed": 101003,
+      "request_count": 128,
+      "task_count": 256,
+      "cargo_count": 128,
+      "vehicle_count": 128,
+      "driver_count": 128,
+      "location_count": 129,
+      "canonical_bytes": 554864,
+      "canonical_sha256": "e1a9b73857312efa618a2e9bc8be08bca1b6359faeea556dcb80f8ab29d31a65",
+      "problem_digest": "33fc3a0fac36c4bba761ccbb9deed3dc88f809f890b416d7c22b8aada4ed4c0d",
+      "policy_digest": "335c30686efc11d04473525d201bf1e73c4836690e601ec6d8c55b7a0339dd80",
+      "commitment_digest": "03f14356cad091c5e45ee3a3bfcb4d9bc994e9c153cef0254e72a81e6a05923e",
+      "reference_plan_digest": "894a1165f03c165adc2b3b642f267e7ae25b78ab2eb427ba6d2117f1d758cd89",
+      "reference_report_digest": "e45e6bab7327e8124f19d5a3131392081e7e439568db93f1bcf579db369e2a20",
+      "reference_hard_violations": 0
+    }
+  ]
+}

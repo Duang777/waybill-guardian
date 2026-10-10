@@ -12,7 +12,7 @@ describe("DeliveryConsoleReady", () => {
       <DeliveryConsoleReady workspace={deliveryWorkspaceFixture()} />,
     );
 
-    expect(markup).toContain("杭州城市配送计划");
+    expect(markup).toContain("城市配送计划");
     expect(markup).toContain("路线与站序");
     expect(markup).toContain("逐站装卸");
     expect(markup).toContain("司机与能源");

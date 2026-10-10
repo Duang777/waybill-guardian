@@ -16,6 +16,7 @@ matches="$(
 		--exclude='*_test.go' \
 		--exclude='*.test.ts' \
 		--exclude='*.test.tsx' \
+		--exclude='test-fixture.ts' \
 		--exclude-dir='datagenerate' \
 		"$PATTERN" \
 		cmd internal web/src

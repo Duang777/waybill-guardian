@@ -2,7 +2,7 @@
 
 ## 录制前准备
 
-1. 按 [`README.md`](../README.md#在线模型) 配置 `LLM_API_STYLE`、`LLM_BASE_URL`、`LLM_API_KEY` 和 `LLM_MODEL`。
+1. 按 [`README.md`](../README.md#演示) 配置 `LLM_API_STYLE`、`LLM_BASE_URL`、`LLM_API_KEY` 和 `LLM_MODEL`。
 2. 运行 `./scripts/demo.sh`。
 3. 打开 <http://127.0.0.1:5173>。
 4. 保持浏览器缩放为 100%，并确认页面显示运单 `YD2026101001`。

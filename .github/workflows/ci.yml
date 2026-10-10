@@ -31,6 +31,7 @@ jobs:
       - run: go test -race -count=1 ./...
       - run: ./scripts/check-delivery-boundaries.sh
       - run: ./scripts/check-production-fixture-literals.sh
+      - run: ./scripts/delivery-benchmark/check.sh
 
   recovery-stability:
     name: Recovery stability
@@ -113,6 +114,19 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: ./scripts/licenses.sh
+
+  external-links:
+    name: External documentation links
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - run: go run ./scripts/delivery-benchmark docs-check --external
 
   docker:
     name: Docker

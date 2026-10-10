@@ -190,6 +190,33 @@ SSE 先发送 `Last-Event-ID` 之后的历史事件，再切换到 live 订阅�
 
 数据不足时，指标返回 `unavailable` 和原因。经营简报只接收不含运单、人员、车辆和线路身份的聚合计数，引用由服务端重建。
 
+## 城市配送智能配载与调度
+
+仓库新增独立的 `delivery` 业务域，不把多订单规划状态塞入单运单处置聚合。当前已提交的基础能力包括：
+
+- `delivery.problem.v1`、`delivery.plan.v1` 和 `delivery.validation.v1` 强类型契约。
+- 固定事实快照、canonical JSON，以及 problem、policy、commitment、plan 和 report 摘要绑定。
+- 独立 Validator 的 13 个规则族，覆盖订单守恒、取送、资源、路线、时间窗、司机法规、能源、
+  三维边界、支撑、卸货可达性、轴载、重心、承诺和指标重算。
+- 内容寻址 artifact store，读取时重新校验摘要和 canonical envelope。
+- 城市配送调度台，联动路线、司机时间轴、SOC 和逐站三维装卸，并展示审批、effect 和对账状态。
+- 固定 seed 的基准工具，可接入内置 solver、VROOM、OR-Tools 和 PyVRP 命令。
+
+最新权威报告使用 8、32 和 128 个请求的数据集，对应 16、64 和 256 个任务。确定性 reference
+baseline 在每个数据集上重放 20 次，全部计划的硬约束违规为 0，plan digest 和 validation
+report digest 均保持一致。完整运行记录、机器信息、耗时和发布门禁见
+[`delivery-benchmark.v1.json`](docs/reports/delivery-benchmark.v1.json)，可读表格由该 JSON
+生成：[`城市配送基准证据`](docs/reports/delivery-benchmark.md)。
+
+```bash
+./scripts/delivery-benchmark/run.sh
+./scripts/delivery-benchmark/check.sh
+```
+
+reference baseline 用于验证数据、摘要、Validator 和报告链路，不代表生产 solver 质量，不证明
+全局最优，也不构成物理装载安全认证。生产 solver 的证据只有在报告
+`publication_gate.publication_ready=true` 时才可发布。
+
 ## 系统架构
 
 ```mermaid
@@ -282,6 +309,7 @@ sequenceDiagram
 | 持久化 | JSONL、PostgreSQL 17、AES-256-GCM Agent history、事务 outbox |
 | 可观测性 | 固定标签 Prometheus 指标、模型时延和 token、outbox 状态统计 |
 | 前端体验 | 白色工业控制台、桌面和移动端、自适应图表、高德地图接入 |
+| 城市配送基础 | 强类型规划契约、独立 Validator、artifact store、20 次确定性重放和调度台 |
 
 <p align="center">
   <img alt="桌面工作台停在人工审批。页面显示运行阶段、地图、证据账本、候选方案和待执行动作。" src="docs/assets/console-approval.png" width="840">
@@ -502,6 +530,7 @@ go test -race ./...
 go vet ./...
 go build ./...
 ./scripts/check-history-governance.sh
+./scripts/delivery-benchmark/check.sh
 ./scripts/licenses.sh
 ```
 
@@ -541,6 +570,8 @@ npm run verify:overview
 | `internal/storage/postgres` | 事务存储、run 租约、effect 租约和加密 history |
 | `internal/platform` | 企业 TMS、天气、理赔和通知 adapter 边界 |
 | `internal/tools` | 七个 typed tools 和字段白名单 |
+| `internal/delivery` | 城市配送领域契约、快照、独立 Validator 和 artifact store |
+| `scripts/delivery-benchmark` | 固定数据、solver 采集协议、20 次重放和报告生成 |
 | `web` | React 经营总览、工作台、地图、图表和审计时间线 |
 
 ## 开源声明
@@ -562,5 +593,9 @@ hastekit `agent-sdk-go` v0.0.24 以 Go module 引入。本仓库没有复制其�
 - [HTTP 写 adapter](docs/real-write-adapter-design.md)
 - [文件数据源](docs/file-data-source-design.md)
 - [Agent history 治理](docs/history-governance.md)
+- [城市配送架构](docs/delivery-optimization-architecture.md)
+- [城市配送接口参考](docs/delivery-api-reference.md)
+- [城市配送运维手册](docs/delivery-operations.md)
+- [城市配送基准证据](docs/reports/delivery-benchmark.md)
 - [演示脚本](docs/demo-script.md)
 - [模块索引](AGENTS.md)

@@ -96,7 +96,7 @@ try {
     currentFixture = fixtures[state];
     await page.goto(deliveryURL, { waitUntil: "networkidle" });
     await page
-      .getByRole("heading", { name: "杭州城市配送计划", exact: true })
+      .getByRole("heading", { name: "城市配送计划", exact: true })
       .waitFor();
   };
 

@@ -390,7 +390,7 @@ function PlanMasthead({ workspace }: { workspace: DeliveryWorkspace }) {
     <section className={styles.masthead} aria-labelledby="delivery-plan-title">
       <div className={styles.planIdentity}>
         <span className={styles.eyebrow}>Dispatch plan</span>
-        <h1 id="delivery-plan-title">杭州城市配送计划</h1>
+        <h1 id="delivery-plan-title">城市配送计划</h1>
         <div className={styles.planMeta}>
           <span>{workspace.problem.problem_id} / v{workspace.problem.version}</span>
           <span>{workspace.plan.solver.name} {workspace.plan.solver.version}</span>

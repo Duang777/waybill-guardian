@@ -1,0 +1,100 @@
+{
+  "schema_version": "delivery.benchmark.config.v1",
+  "generator": {
+    "version": "delivery.synthetic.v1",
+    "base_time": "2026-10-10T08:00:00Z",
+    "coordinate_origin": "Hangzhou synthetic grid; latitude and longitude are integer microdegrees",
+    "distance_rule": "Manhattan distance over generated integer meter coordinates",
+    "travel_time_rule": "ceil(distance_meters / 10), equivalent to 36 km/h",
+    "units": {
+      "distance": "meter",
+      "duration": "second",
+      "length": "millimeter",
+      "weight": "gram",
+      "money": "cent",
+      "ratio": "parts_per_million",
+      "energy": "watt_hour",
+      "coordinate": "microdegree"
+    },
+    "rounding": {
+      "travel_seconds": "ceiling",
+      "cost": "integer truncation per validator formula",
+      "utilization": "integer truncation to parts per million"
+    },
+    "field_sources": {
+      "identity": "generator version, dataset id, and one-based record index",
+      "location": "SplitMix64 sequence derived from the dataset seed",
+      "cargo": "SplitMix64 sequence derived from the dataset seed",
+      "vehicle": "fixed benchmark vehicle profile",
+      "driver": "fixed benchmark regulation profile",
+      "time_window": "base_time and fixed 24-hour horizon",
+      "matrix": "generated location coordinates and documented distance and travel-time rules"
+    }
+  },
+  "replay_count": 20,
+  "solver_timeout_seconds": 120,
+  "solve_budget_evaluations": 100000,
+  "validator": {
+    "name": "independent",
+    "version": "1.0.0",
+    "build": "delivery-benchmark-v1"
+  },
+  "datasets": [
+    {
+      "id": "synthetic-s",
+      "seed": 101001,
+      "request_count": 8
+    },
+    {
+      "id": "synthetic-m",
+      "seed": 101002,
+      "request_count": 32
+    },
+    {
+      "id": "synthetic-l",
+      "seed": 101003,
+      "request_count": 128
+    }
+  ],
+  "adapters": [
+    {
+      "id": "reference-baseline",
+      "label": "Deterministic reference baseline",
+      "kind": "embedded_reference",
+      "capability_profile": "delivery-common-v1",
+      "required_for_publication": false
+    },
+    {
+      "id": "builtin",
+      "label": "Built-in solver",
+      "kind": "command",
+      "command_env": "DELIVERY_BENCHMARK_BUILTIN_COMMAND",
+      "capability_profile": "delivery-common-v1",
+      "required_for_publication": true
+    },
+    {
+      "id": "vroom",
+      "label": "VROOM route seed adapter",
+      "kind": "command",
+      "command_env": "DELIVERY_BENCHMARK_VROOM_COMMAND",
+      "capability_profile": "delivery-common-v1",
+      "required_for_publication": false
+    },
+    {
+      "id": "or-tools",
+      "label": "OR-Tools route seed adapter",
+      "kind": "command",
+      "command_env": "DELIVERY_BENCHMARK_ORTOOLS_COMMAND",
+      "capability_profile": "delivery-common-v1",
+      "required_for_publication": false
+    },
+    {
+      "id": "pyvrp",
+      "label": "PyVRP quality comparator",
+      "kind": "command",
+      "command_env": "DELIVERY_BENCHMARK_PYVRP_COMMAND",
+      "capability_profile": "delivery-common-v1",
+      "required_for_publication": false
+    }
+  ]
+}

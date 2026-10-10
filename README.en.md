@@ -176,6 +176,39 @@ The overview filters by JWT waybill scope before calculating metrics. Missing fa
 
 Incomplete inputs return `unavailable` with a reason. Executive briefs receive identity-free aggregate counts, and the server reconstructs their citations.
 
+## City delivery planning and loading
+
+The repository has a separate `delivery` domain. Multi-order planning state does not enter the
+single-waybill disposition aggregate. The committed foundation includes:
+
+- Typed `delivery.problem.v1`, `delivery.plan.v1`, and `delivery.validation.v1` contracts.
+- Frozen fact snapshots, canonical JSON, and bound problem, policy, commitment, plan, and report
+  digests.
+- Thirteen independent Validator rule families for order conservation, pickup and delivery,
+  resources, routes, time windows, driver regulations, energy, three-dimensional bounds, support,
+  unloading access, axle loads, center of gravity, commitments, and recomputed metrics.
+- A content-addressed artifact store that verifies the digest and canonical envelope on reads.
+- A delivery console that synchronizes routes, driver timelines, state of charge, and staged
+  three-dimensional loading with approval, effects, and reconciliation.
+- A fixed-seed benchmark command that can invoke the built-in solver, VROOM, OR-Tools, and PyVRP
+  commands.
+
+The authoritative report uses datasets with 8, 32, and 128 requests, which contain 16, 64, and 256
+tasks. The deterministic reference baseline runs 20 replays per dataset. Every plan has zero hard
+violations, and both the plan digest and validation report digest remain stable. The complete run
+records, machine details, timings, and publication gate are in
+[`delivery-benchmark.v1.json`](docs/reports/delivery-benchmark.v1.json). The generated table is in
+the [city delivery benchmark evidence](docs/reports/delivery-benchmark.en.md).
+
+```bash
+./scripts/delivery-benchmark/run.sh
+./scripts/delivery-benchmark/check.sh
+```
+
+The reference baseline verifies the data, digests, Validator, and reporting path. It does not
+measure production solver quality, prove global optimality, or certify physical loading safety.
+Publish production solver evidence only when `publication_gate.publication_ready=true`.
+
 ## Architecture
 
 ```mermaid
@@ -231,6 +264,7 @@ flowchart TD
 | Persistence | JSONL, PostgreSQL 17, AES-256-GCM agent history, and transactional outbox |
 | Observability | Bounded-label Prometheus metrics, model latency and tokens, and outbox statistics |
 | Frontend | White industrial console, responsive layouts, charts, and Amap integration |
+| City delivery foundation | Typed planning contracts, independent Validator, artifact store, 20 deterministic replays, and delivery console |
 
 <p align="center">
   <img alt="Desktop workbench waiting for approval with progress, map, evidence, alternatives, and pending writes." src="docs/assets/console-approval.png" width="840">
@@ -377,6 +411,7 @@ go test -race ./...
 go vet ./...
 go build ./...
 ./scripts/check-history-governance.sh
+./scripts/delivery-benchmark/check.sh
 ./scripts/licenses.sh
 ./scripts/test-postgres.sh
 
@@ -407,6 +442,8 @@ Browser verification covers investigation, approval, reassignment, notifications
 | `internal/storage/postgres` | Transactions, run leases, effect leases, and encrypted history |
 | `internal/platform` | TMS, weather, claim, and notification adapter boundaries |
 | `internal/tools` | Seven typed tools and output allow lists |
+| `internal/delivery` | City delivery contracts, snapshots, independent Validator, and artifact store |
+| `scripts/delivery-benchmark` | Fixed datasets, solver command protocol, 20 replays, and report generation |
 | `web` | React overview, workbench, maps, charts, and audit timeline |
 
 ## Open source
@@ -428,5 +465,9 @@ These repositories were used to compare interaction and domain structure. Their 
 - [HTTP write adapter](docs/real-write-adapter-design.md)
 - [File data source](docs/file-data-source-design.md)
 - [Agent history governance](docs/history-governance.md)
+- [City delivery architecture](docs/delivery-optimization-architecture.md)
+- [City delivery API reference](docs/delivery-api-reference.md)
+- [City delivery operations](docs/delivery-operations.md)
+- [City delivery benchmark evidence](docs/reports/delivery-benchmark.en.md)
 - [Demo script](docs/demo-script.md)
 - [Module index](AGENTS.md)

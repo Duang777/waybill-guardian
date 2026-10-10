@@ -103,6 +103,22 @@ shadcn/ui 均采用 MIT 许可证；许可证原文分别保存在
   来自 [OpenStreetMap](https://www.openstreetmap.org/copyright)。页面显示两者署名；
   在线样式、瓦片和数据不随仓库再分发。
 
+## 城市配送基准数据与求解器
+
+[`scripts/delivery-benchmark`](./scripts/delivery-benchmark) 当前只使用仓库自有的固定 seed
+合成数据。生成器版本、seed、字段来源、单位、舍入规则和 SHA-256 记录在
+[`manifest.json`](./data/simulated/delivery-benchmark-v1/manifest.json)。该数据不包含第三方
+订单、地图、客户或车辆记录。
+
+基准配置为 VROOM、OR-Tools 和 PyVRP 预留外部命令入口，但本仓库没有把这些工具加入
+`go.mod`、`package-lock.json` 或容器镜像。未配置命令时，权威报告把 adapter 标记为
+`blocked`，不生成质量结果。部署方接入外部工具时，需要登记实际版本、分发方式和许可证，
+并重新生成 Go、Web 和容器许可证清单。
+
+Solomon、Gehring-Homberger、OR-Library 和 3L-CVRP 实例目前没有进入仓库、容器或已发布
+基准报告。引入外部实例前，必须记录下载 URL、下载日期、原始文件 SHA-256、适用条款和
+内部转换摘要。未完成这些字段的数据不能进入发布证据。
+
 ## 参考项目
 
 以下项目只用于研究和设计比较，没有源文件或代码片段进入本仓库：
@@ -113,9 +129,9 @@ shadcn/ui 均采用 MIT 许可证；许可证原文分别保存在
   风险评分展示和 append-only audit。
 - [dominicfinn/open_tms](https://github.com/dominicfinn/open_tms)：
   shipment、carrier 和 operational issue 领域划分。
-- [WareTrack 概念视频](https://x.com/threejs/status/2106721710670238104)：
-  只借鉴“等轴测运营沙盘”和“对象即数据”的视觉语言。原作者未发布代码或许可证，
-  本仓库没有使用其代码、模型、纹理或其他素材。
+- WareTrack 概念视频：只借鉴“等轴测运营沙盘”和“对象即数据”的视觉语言。原作者未发布
+  代码或许可证，本仓库没有使用其代码、模型、纹理或其他素材。原状态页不接受自动链接检查，
+  因此第三方声明不保留不可验证的 URL。
 - [BoardUI](https://github.com/BoardUI/boardui)：
   参考其 MIT 许可公开源码中的浅灰分组底、白色内部工作面板、轻量接触阴影和分段控件
   层级。本仓库使用 CSS Modules 独立实现，没有复制 BoardUI 组件、模板或素材。
