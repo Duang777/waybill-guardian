@@ -34,6 +34,18 @@ describe("workbench route", () => {
     });
   });
 
+  it("parses a delivery plan revision target", () => {
+    expect(
+      parseWorkbenchRoute(
+        "/delivery/plans/REV-HZ-1010-07",
+        "",
+      ),
+    ).toEqual({
+      kind: "delivery-plan",
+      revisionID: "REV-HZ-1010-07",
+    });
+  });
+
   it.each([
     ["invalid waybill", "/waybills/not-a-waybill", ""],
     ["empty run", "/waybills/YD2026101042", "?run="],

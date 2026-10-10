@@ -4,6 +4,10 @@ import {
   type RunID,
   type WaybillID,
 } from "./api";
+import {
+  planRevisionIdSchema,
+  type PlanRevisionID,
+} from "./delivery/contract";
 
 export type WorkbenchTarget =
   | { kind: "waybill"; waybillID: WaybillID }
@@ -11,6 +15,7 @@ export type WorkbenchTarget =
 
 export type AppRoute =
   | WorkbenchTarget
+  | { kind: "delivery-plan"; revisionID: PlanRevisionID }
   | { kind: "overview" }
   | { kind: "invalid" };
 
@@ -20,6 +25,19 @@ export function parseWorkbenchRoute(
 ): AppRoute {
   if (pathname === "/") {
     return { kind: "overview" };
+  }
+  const deliveryMatch = /^\/delivery\/plans\/([^/]+)\/?$/.exec(pathname);
+  if (deliveryMatch !== null) {
+    let decodedRevisionID: string;
+    try {
+      decodedRevisionID = decodeURIComponent(deliveryMatch[1] ?? "");
+    } catch {
+      return { kind: "invalid" };
+    }
+    const revision = planRevisionIdSchema.safeParse(decodedRevisionID);
+    return revision.success
+      ? { kind: "delivery-plan", revisionID: revision.data }
+      : { kind: "invalid" };
   }
   const match = /^\/waybills\/([^/]+)\/?$/.exec(pathname);
   if (match === null) {

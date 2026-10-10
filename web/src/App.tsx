@@ -7,7 +7,16 @@ import {
   WifiOff,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import { toast } from "sonner";
 import styles from "./app.module.css";
 import {
@@ -85,6 +94,11 @@ import {
   type WorkbenchConnectionState,
 } from "./workbench-connection";
 
+const DeliveryConsolePage = lazy(async () => {
+  const module = await import("./delivery/DeliveryConsole");
+  return { default: module.DeliveryConsolePage };
+});
+
 type CatalogResource =
   | { kind: "loading" }
   | { kind: "empty" }
@@ -122,10 +136,28 @@ export default function App() {
   if (route.kind === "overview") {
     return <OverviewPage />;
   }
+  if (route.kind === "delivery-plan") {
+    return (
+      <Suspense fallback={<DeliveryRouteLoading />}>
+        <DeliveryConsolePage revisionID={route.revisionID} />
+      </Suspense>
+    );
+  }
   if (route.kind === "invalid") {
     return <InvalidRoutePage />;
   }
   return <WaybillWorkbench initialTarget={route} />;
+}
+
+function DeliveryRouteLoading() {
+  return (
+    <div className={styles.appShell}>
+      <main id="main-content" className={styles.routeError} aria-busy="true">
+        <span className={styles.eyebrow}>Delivery workspace</span>
+        <h1>正在打开城市配送调度台</h1>
+      </main>
+    </div>
+  );
 }
 
 export function InvalidRoutePage() {

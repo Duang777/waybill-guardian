@@ -17,6 +17,11 @@ then the on-demand audit drawer. Vermilion marks only the unresolved incident. T
 point inspector is a light fact strip attached to the map; the darker caption rail remains
 exclusive to selected facilities on the nationwide 3D overview.
 
+The city-delivery console extends that treatment into a three-column planning table. A route
+and stop ledger sits beside an unframed 3D cargo bay, while driver duty, SOC, and Validator
+facts use a quiet teal-tinted rail. One stop cursor controls every view. The approval boundary
+and audit ledger remain full-width bands below the planning workspace.
+
 BoardUI's public dashboard patterns informed the initial hierarchy study. The final
 implementation uses original CSS Modules code, square industrial geometry, divider-led
 structure, and no copied BoardUI source or components.
@@ -113,6 +118,11 @@ moves below it on mobile. A risk hub or queue link opens `/waybills/:id`.
 The risk queue exposes three views: all anomalies, unassigned anomalies, and active Agent
 runs. Selection persists across views and the summary always reports both visible and selected
 counts.
+
+The delivery console uses a route column, a dominant cargo stage, and a compliance rail on
+desktop. Route points, driver segments, SOC legs, load stages, and cargo facts always come
+from the same `delivery.workspace.v1` response. Below 800 px, the route, cargo stage, and
+compliance rail become one column, and only one WebGL view remains mounted.
 
 At viewports at least 1560 px wide and 800 px tall, both desktop pages use the available
 viewport without vertical page scrolling. The overview keeps the network and queue above a

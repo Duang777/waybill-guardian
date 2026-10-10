@@ -10,6 +10,8 @@ React 运营控制台。目标是在三分钟内显示异常、归因、审批�
 1. 经营总览 `/`：显示 6 项经营 KPI、全国港网、风险队列、3 张经营图表和带统计引用的只读经营简报。
 2. 批量处置：从风险队列选择运单后调用 `/api/runs:batch`，再按 run 打开 SSE。
 3. 单运单工作台 `/waybills/:id`：按案件桌案展示运单摘要、运行阶段、空间证据、人工决策和审计回放。
+4. 城市配送调度台 `/delivery/plans/:revisionID`：展示路线、司机时间轴、SOC、逐站 3D
+   装卸、独立校验、审批 effect 和计划审计。
 
 ## 设计决策
 
@@ -24,6 +26,12 @@ React 运营控制台。目标是在三分钟内显示异常、归因、审批�
   推进状态，前端按 `last_seq` 忽略旧摘要和旧事件。
 - 审批操作进行时禁用按钮。驳回必须先填写原因。
 - API 响应通过 Zod 在边界解析。结构不符合契约时，页面显示错误。
+- Delivery 调度台只接受 `delivery.workspace.v1` read model。它复验 revision 和
+  problem/policy/commitment/plan digest 绑定，并拒绝悬空车辆、位置、任务、货物、舱室和门引用。
+- Delivery 路线、司机时间轴、SOC 和装载阶段由同一个离散 stop 游标驱动。浏览器只投影
+  artifact，不补算路线、装载坐标、校验结论或收益。
+- Delivery 3D 装载静止时使用 `frameloop="demand"`，超过 100 件货物切换
+  `InstancedMesh`。WebGL 不可用或 context 丢失时显示同一 placement 数据生成的顶视 SVG。
 - API 边界将非法 JSON、契约不符、无权限、超时和服务不可用映射为独立状态；加载态使用
   与最终网格同尺寸的骨架，空目录不显示业务兜底数据。
 - 工作台区分 SSE 连接中、在线、重连中、浏览器离线和审计已固化。待审批 run 只有在
@@ -77,6 +85,10 @@ React 运营控制台。目标是在三分钟内显示异常、归因、审批�
 `npm run verify:motion` 使用真实 Chrome 采样实时事件、审批终态和快速轨迹选点的
 transform/opacity，动态切换 reduced-motion 后要求无位移，并保存桌面、375/320 和选点帧。
 生产构建同时要求入口 gzip 相对 `187686` 字节基线增长小于 25 KB。
+
+`npm run verify:delivery` 用版本化 API fixture 验证调度台 WebGL 像素、路线与装载联动、
+键盘步骤切换、context 丢失后的 SVG 降级、审批按钮命中区、375 像素无横向溢出和契约错误态。
+脚本保存桌面与手机完整截图。
 
 `npm run record:demo` 默认使用在线模型，启动隔离服务并录制确认、回放和驳回路径，再用
 ffmpeg 生成带中文字幕的 MP4。默认分辨率是 1600×900；正式高清录制可设置
